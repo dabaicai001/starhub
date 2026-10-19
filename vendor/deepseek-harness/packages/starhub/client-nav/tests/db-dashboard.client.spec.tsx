@@ -397,6 +397,20 @@ describe('DbDashboard states', () => {
     }
   })
 
+  it('loads metrics when the connection becomes ready after mount', async () => {
+    const restore = stubInvoke(mysqlInvoke().invoke)
+    try {
+      // 面板在「连接中」就挂载(用户提前点开监控):旧版 effect 只看 connId/dbType,
+      // connected=false→true 不会触发加载,指标永远停初始值。
+      const { rerender } = render(<DbDashboard connId="c1" dbType="mysql" connected={false} />)
+      expect(await screen.findByText(/未连接/)).toBeTruthy()
+      rerender(<DbDashboard connId="c1" dbType="mysql" connected />)
+      expect(await screen.findByText(/8\.0/)).toBeTruthy()
+    } finally {
+      restore()
+    }
+  })
+
   it('refreshes metrics when the refresh button is clicked', async () => {
     let statusCount = 0
     const invoke = (cmd: string, args?: Record<string, unknown>): unknown => {

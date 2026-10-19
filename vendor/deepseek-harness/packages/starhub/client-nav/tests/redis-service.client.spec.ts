@@ -73,11 +73,12 @@ describe('redis service commands', () => {
     const restore = stubInvoke(call)
     try {
       await redisScan('c1', 0, 'user:*', 100)
-      expect(calls[0]).toEqual(['db_redis_scan', { connId: 'c1', cursor: 0, matchPattern: 'user:*', count: 100 }])
+      // 参数名必须是 sidecar handler 的 `match`(matchPattern 会被静默丢弃)。
+      expect(calls[0]).toEqual(['db_redis_scan', { connId: 'c1', cursor: 0, match: 'user:*', count: 100 }])
 
       // cursor 缺省 → 0;match 缺省 → undefined
       await redisScan('c1')
-      expect(calls[1]).toEqual(['db_redis_scan', { connId: 'c1', cursor: 0, matchPattern: undefined, count: undefined }])
+      expect(calls[1]).toEqual(['db_redis_scan', { connId: 'c1', cursor: 0, match: undefined, count: undefined }])
     } finally {
       restore()
     }

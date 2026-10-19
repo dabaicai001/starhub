@@ -38,7 +38,9 @@
 .error { padding: 6px 12px; border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 35%, var(--dsw-alias-border-l2)); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); color: var(--dsw-alias-state-error-primary); font-size: 12px; }
 
 /* ─── 网格 ─── */
-.grid { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.grid { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; position: relative; }
+/* 空态盖在表体上(表头 30px 让开):不占布局,滚动区保持满高。 */
+.gridEmpty { position: absolute; top: 31px; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); font-size: 12px; pointer-events: none; }
 
 /* 表头与表体同宽(max-content),横向滚动由 tbody 驱动、thead 经 JS scrollLeft 同步。 */
 .thead { display: flex; border-bottom: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); flex: none; overflow-x: hidden; scrollbar-width: none; }

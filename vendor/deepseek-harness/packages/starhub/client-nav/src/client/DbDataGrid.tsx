@@ -23,8 +23,12 @@
  * NOT / 左括号后的空白位提示全部列。↑/↓ 选择,Tab/Enter 接受,Esc 先关弹层。
  * 列清单复用 list_columns(与主键列同一次调用,不再单独请求)。
  *
+ * v0.136.6:行号按全局偏移展示(第 2 页从 101 起,不再每页从 1 重数);空页显示
+ * 空态文案并区分「当前页没有数据 / 当前筛选没有匹配的行」。
+ *
  * 命令面复用:db_mysql_get_table_data(PG 同样走它,RPC 按 connId 分派 pgx)、
- * db_mysql_list_columns(取主键列)、db_mysql_update_rows。返回 QueryResult:
+ * db_mysql_list_columns(取主键列)、db_mysql_update_rows(`where` 参数名与
+ * sidecar 契约一致,旧 `whereClause` 会被参数白名单拒绝)。返回 QueryResult:
  * `{ columns:[{name,type,nullable}], rows:unknown[][], totalRows?:number,
  * durationMs?:number, isSelect?:boolean, error?:string }`;`filter`(raw WHERE)/
  * `columnFilters` 由 db_mysql_get_table_data / db_clickhouse_get_table_data
@@ -545,7 +549,11 @@ export function DbDataGrid({
         }
         const sets: Record<string, unknown> = {}
         for (const c of changes) sets[c.col] = c.newValue
-        const args: Record<string, unknown> = { connId, table, sets, whereClause: pkWhere }
+        // 参数名必须与 sidecar 的 ui.db_mysql_update_rows 契约一致(`where`):
+        // 旧 Tauri command 把 whereClause 改名后转发,去 Tauri 化后的 Rust 转发层
+        // 是纯平铺转发,required 白名单只认 `where`;用 whereClause 会被参数校验
+        // 直接拒绝(「缺少 where」),单元格保存永远失败。
+        const args: Record<string, unknown> = { connId, table, sets, where: pkWhere }
         if (database !== undefined && database !== '') args.database = database
         const res = await tauriInvoke<{ rowsAffected?: number; error?: string }>(`${cmdPrefix}_update_rows`, args)
         if (res.error !== undefined && res.error !== '') {
@@ -837,7 +845,8 @@ export function DbDataGrid({
                 style={{ height: ROW_HEIGHT }}
                 onContextMenu={(e) =>{  onRowContextMenu(e, absoluteRow) }}
               >
-                <div className={css.td} style={{ width: 60 }}>{absoluteRow + 1}</div>
+                {/* 行号按全局偏移展示(第 2 页从 101 起),不再每页从 1 重数。 */}
+                <div className={css.td} style={{ width: 60 }}>{page * pageSize + absoluteRow + 1}</div>
                 {row.map((cell, colIndex) => {
                   // v8 ignore next -- 防御:行/列恒等长(服务端按 columns 顺序返回),列缺失属畸形数据
                   const dirtyCell = dirty.get(dirtyKey(absoluteRow, columns[colIndex]?.name ?? ''))
@@ -877,6 +886,11 @@ export function DbDataGrid({
           })}
           <div style={{ height: (rows.length - visibleEnd) * ROW_HEIGHT }} />
         </div>
+        {!loading && rows.length === 0 && (
+          <div className={css.gridEmpty}>
+            {filtering ? '当前筛选没有匹配的行' : '当前页没有数据'}
+          </div>
+        )}
       </div>
       <ContextMenu
         menu={menu}

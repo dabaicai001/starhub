@@ -149,6 +149,11 @@ export function redisDBSize(connId: string): Promise<RedisDbSize> {
 }
 
 /** SCAN 增量遍历(游标分页 + MATCH 过滤)。
+ *
+ * 参数名必须是 `match`:sidecar 的 `db.redis.scan` handler 只解 JSON `match`
+ * (旧 Tauri command 负责把前端 `match_pattern` 改名转发,去 Tauri 化后的
+ * Rust 转发层是纯平铺转发)。发 `matchPattern` 会被静默丢弃,搜索框看似生效、
+ * 实际返回整库 key。
  * @param connId - 连接 id。
  * @param cursor - 游标,缺省从 0 开始。
  * @param match - 可选的 MATCH 过滤模式。
@@ -156,7 +161,7 @@ export function redisDBSize(connId: string): Promise<RedisDbSize> {
  * @returns SCAN 结果(keys + 下一游标)。
  */
 export function redisScan(connId: string, cursor?: number, match?: string, count?: number): Promise<RedisScanResult> {
-  return tauriInvoke('db_redis_scan', { connId, cursor: cursor || 0, matchPattern: match, count })
+  return tauriInvoke('db_redis_scan', { connId, cursor: cursor || 0, match, count })
 }
 
 /** 取一个 key 的值(按类型返回结构化数据)。

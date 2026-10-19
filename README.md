@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.136.5-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.136.6-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,9 +59,13 @@
 
 ## 当前版本
 
-### v0.136.5 (2026-10-15)
-- 🐛 🐛 **Redis「保存即删 key」P0 + 三处数据正确性 bug**:① **根因**——值编辑器保存时若 TTL 输入为 `0`,会下发 `EXPIRE key 0`,而 Redis 的 `EXPIRE key 0` 语义是「立即删除该 key」;校验此前只拦了负数(`expiration < 0`)漏了 0,于是一保存 key 就消失,且 string(走 SET 不带 EX)与结构类型(走 EXPIRE)行为不一致。现在 `0` 与空串一律归一为「持久化」,结构类型显式下发 `PERSIST`,绝不再出现 `EXPIRE key 0`;② **zset 解析完全错位**——sidecar 的 `GetValue` 对 zset 返回 `[{value, score}]` 对象数组(`ZRangeWithScores` 的结构化结果),前端却按 `[[member, score]]` 数组成员解析,导致成员列渲染成 JSON 串、分数列空白、保存时 `ZADD` 出一个垃圾成员(既有单测用 `[['mem','5']]` 假数据把 bug 掩盖了);`rowsFromValue` 现在同时兼容对象与数对两种形状;③ **list 按值删错元素**——删除走 `LREM key 1 <originalValue>`,按**值**删除,list 允许重复值,删索引 0 时若值重复会删到别的实例;改为哨兵值方案:先 `LSET` 把待删索引改写成唯一哨兵,再 `LREM key 0 <哨兵>` 一次清掉,删除精确落在标记的索引上,`LSET` 目标索引按已删行数重算的逻辑不变;④ **`SET k v EX 60` 的 `EX 60` 被静默丢弃**——Go 侧 `Execute` 的 SET 分支只取 `parts[1..2]`,key 被写成永不过期,TTL 语义与用户意图相反;新增纯函数 `parseSetOptions` 支持 `EX/PX/EXAT/PXAT/KEEPTTL/NX/XX`(含参数缺失、零/负/非数字、冲突组合的完整错误路径),`NX`/`XX`/`KEEPTTL` 分别走 `SetNX`/`SetXX`/`SetXX(KeepTTL)`;⑤ **`revertRows` 空串原值还原不干净**——旧版用 `originalValue || value`,`''`(falsy)会回退到编辑中的值。
-- 🔧 🎨 **Redis / Elasticsearch 工作台交互重构**:Redis 侧——键行补 **TTL 徽标**(SCAN 本就带回 ttl,旧版丢弃不用,用户无法分辨哪些 key 即将过期;`-1` 显示 ∞、超 1 小时折算小时)、补**复制 key 名**钮(hover 出现,剪贴板不可用时回退提示而非静默失败)、**CLI 补命令历史**(↑↓ 翻阅,去重连续重复,上限 100 条;`SELECT` 也入历史便于复查切库轨迹)、**值编辑器保存后回调刷新**(`onSaved`,修掉「保存成功但左侧树/头部计数还是旧值」的漂移)、**集合将空的非阻塞警示**(Redis 对空集合会自动移除 key,保存前在 footer 说明,避免静默数据丢失)、空态区分「暂无 key / 搜索无匹配 / 加载失败」、编辑器补 Mod-Enter 保存与快捷键提示、TTL 输入旁补人类可读的剩余时间描述。ES 侧——检索补**每页条数选择**(10/20/50/100,旧版 `searchSize` 硬编码 20,大结果集翻页成本高;条数变化后从第 0 页重查,否则 from 越界会跳过一整页)、**DSL 按索引记忆**(切索引时存回当前、载入目标的,修掉「在两个索引间来回切换时 DSL 被对方覆盖」)、**聚合结果展示**(响应带 aggregations 时在结果工具栏下展示 JSON,旧版完全丢弃)、概览补**索引筛选框 + 总文档数**、索引详情补**递归映射树**(旧版只渲染两层,object/nested 更深层级的字段看不到;按层级缩进全展开)与分片/文档数元信息和刷新入口、**加载态**(概览表格、索引详情在拉取中显示提示,不再是一片空白)、**新建索引支持可选 mappings**(传 JSON 即带映射创建,旧版只建空索引)、DSL 编辑器与 mappings 输入补 aria-label。
+### v0.136.6 (2026-10-19)
+- 🐛 🐛 **数据库页两处 P0 前后端契约错位(在真实 sidecar 上直接失败,单测因沿用旧参数名而漏掉)**:① 单元格编辑保存走 `db_mysql_update_rows` 时前端仍发旧 Tauri 时代的 `whereClause`——去 Tauri 化后的 Rust 转发层是纯平铺转发、参数白名单只认 `where`,于是每次保存都被「缺少 where」拒绝,单元格编辑实际从未保存成功;② Redis key 搜索把 SCAN 的 MATCH 模式发成 `matchPattern`,sidecar 的 `db.redis.scan` 只解 `match`,搜索词被静默丢弃、返回整库 key(搜索框形同虚设)。两处均改为 sidecar 契约参数名,并补回归断言。
+- 🐛 🐛 **数据工作台跨库同名表串数据**:字段树展开态/列详情只按表名缓存,`app.users` 与 `other.users` 共用一份列;删表会把所有库里的同名表一起从树里抹掉。现在缓存键改为「库.表」,删表只作用目标库,并关闭该表的打开标签页。
+- 🐛 🐛 **Redis 值编辑器类型与采样**:① 以服务端 `get_value` 的 type 为准——被删/过期的 key 不再渲染成文本 `null` 且可保存(凭空重建 key),而是明确「Key 不存在」并禁用保存/TTL;缓存类型过期(如 string 实为 hash)时按真实类型渲染。② 大集合只回传前 N 项时提示「仅加载前 N 项(共 M 项)」,不再把这些可见项删完误报「保存后集合为空」。③ key `a` 与同名文件夹 `a`(来自 `a:b`)共存时渲染 key 重复,补节点种类前缀。
+- 🐛 🐛 **DB 工作台交互**:清空当前打开的表后网格不刷新(仍显示旧行);点库行不设为执行库(与库行 title/选择器提示不符);非安全上下文无剪贴板时点 DDL「复制」会对 undefined 取 `.then` 抛错;Redis 连接失败错误条只有「返回」,只能关窗重开——现在可原地重试。
+- 🐛 🐛 **DB 监控面板错过连接就绪**:面板在连接建立前挂载(连接中切「监控」)时,旧 effect 只看 connId/dbType,connected=false→true 不触发加载,指标永远停在初始值。
+- 🔧 🔧 **数据库页细节完善**:结果网格行号改为全局偏移(第 2 页从 101 起),空页显示空态并区分「当前页没有数据 / 当前筛选没有匹配的行」;Redis 连接失败可原地「重试」;删表时自动关闭该表的数据标签。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

@@ -13,6 +13,16 @@
  * (RPC 按 connId 内嵌类型分派 pgx)。连接按资产只建一次,disconnect 在关闭时
  * 调用。
  *
+ * v0.136.6 数据正确性与交互补强:
+ * - **表级缓存按「库.表」隔离**:同一表名可同时存在于多个库,旧版只按表名缓存
+ *   字段树/列详情,展开第二个库的同名表时显示的是第一个库的列。
+ * - **删表只作用于目标库**:旧版会把所有库里的同名表一起从树里抹掉;删掉的表
+ *   若正开着数据标签也一并关闭(避免继续查不存在的表)。
+ * - **清空表后重载当前网格**:旧版清空后网格仍显示清空前的行。
+ * - **点库行即设为执行库**:与库行 title/选择器提示一致,不再只有点表才跟随。
+ * - **DDL 复制兜底**:非安全上下文没有 `navigator.clipboard` 时不再对 undefined
+ *   取 `.then` 抛错。
+ *
  * @module StarHub DB workbench (client)
  */
 
@@ -86,6 +96,20 @@ interface TableTab {
 function makeTableTab(table: string, database?: string): TableTab {
   const key = database !== undefined && database !== '' ? `${database}.${table}` : table
   return { key, table, ...(database !== undefined && database !== '' ? { database } : {}) }
+}
+
+/**
+ * 表级 UI 缓存(字段树展开态 / 列详情 / 加载态)的键。
+ *
+ * 同一张表名可同时存在于多个库(如 app.users 与 sys.users),只按表名缓存会让
+ * 两个库共用同一份列详情:先展开 app.users 后展开 sys.users 不重新请求、显示
+ * 的是 app 的字段。加库名前缀隔离。
+ * @param database - 所属库;缺省(未分库)时退化为表名。
+ * @param table - 表名。
+ * @returns 表级缓存键。
+ */
+function tableStateKey(database: string | undefined, table: string): string {
+  return database !== undefined && database !== '' ? `${database}.${table}` : table
 }
 
 /**
@@ -436,6 +460,8 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
   // 表数据标签,null = 活动项为 activeQueryId 指向的查询标签。
   const [tableTabs, setTableTabs] = useState<TableTab[]>([])
   const [activeTableKey, setActiveTableKey] = useState<string | null>(null)
+  /** 表数据网格的重载序号:清空表等外部数据变更后 +1,强制当前网格重新拉数据。 */
+  const [gridNonce, setGridNonce] = useState(0)
   // tab 条滚动:「新建查询」钮钉在滚动区外(永不裁切),滚动区只做横向细滚动条。
   const tabsScrollRef = useRef<HTMLDivElement>(null)
   const tabNodeRefs = useRef(new Map<string, HTMLDivElement>())
@@ -582,6 +608,14 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
 
   const dbTypeLabel = dbType === 'postgresql' ? 'PostgreSQL' : dbType === 'mssql' ? 'SQL Server' : dbType === 'sqlite' ? 'SQLite' : dbType.toUpperCase()
 
+  /**
+   * 点左侧树的库行即把它设为执行库(库行 title 与选择器提示都承诺了这一点,
+   * 旧版只有点表才会跟随)。SQLite 单文件库不需要也不显示选择器,跳过。
+   */
+  const selectCurrentDb = useCallback((database: string) => {
+    if (requiresCurrentDb(dbType)) setCurrentDb(database)
+  }, [dbType])
+
   const loadDatabases = useCallback(async (id: string) => {
     setDbsLoading(true)
     setConnectError(null)
@@ -594,7 +628,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
     } finally {
       setDbsLoading(false)
     }
-  }, [])
+  }, [cmdPrefix])
 
   // 挂载时建连一次,卸载时断连(连接按资产只建一次)。
   useEffect(() => {
@@ -760,10 +794,11 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
   const toggleTableColumns = useCallback(async (table: string, database?: string) => {
     const id = connRef.current
     if (id === null) return
-    const expanded = expandedTables.has(table)
+    const key = tableStateKey(database, table)
+    const expanded = expandedTables.has(key)
     // 展开:加载列(若未缓存)+ 计数;收起:仅移除展开态。
-    if (!expanded && tableColumns[table] === undefined && !tableColumnsLoading[table]) {
-      setTableColumnsLoading(prev => ({ ...prev, [table]: true }))
+    if (!expanded && tableColumns[key] === undefined && !tableColumnsLoading[key]) {
+      setTableColumnsLoading(prev => ({ ...prev, [key]: true }))
       try {
         const rows = await tauriInvoke<Array<Record<string, unknown>>>(`${cmdPrefix}_list_columns`, {
           connId: id, table, ...(database !== undefined && database !== '' ? { database } : {}),
@@ -775,14 +810,15 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
             ...(typeof r.key === 'string' && r.key !== '' ? { key: r.key } : {}),
           }))
           .filter(c => c.name !== '')
-        setTableColumns(prev => ({ ...prev, [table]: cols }))
+        setTableColumns(prev => ({ ...prev, [key]: cols }))
+        // SQL 补全按未限定表名(与 SQL 方言一致),同名列取后展开者。
         setColumnsByTable(prev => ({ ...prev, [table]: cols.map(c => c.name) }))
       } catch { /* 列加载失败:保留展开态但不显示列 */ }
-      finally { setTableColumnsLoading(prev => ({ ...prev, [table]: false })) }
+      finally { setTableColumnsLoading(prev => ({ ...prev, [key]: false })) }
     }
     setExpandedTables(prev => {
       const next = new Set(prev)
-      if (next.has(table)) { next.delete(table) } else { next.add(table) }
+      if (next.has(key)) { next.delete(key) } else { next.add(key) }
       return next
     })
   }, [expandedTables, tableColumns, tableColumnsLoading, cmdPrefix])
@@ -888,11 +924,31 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
     if (id === null) return
     try {
       await tauriInvoke(`${cmdPrefix}_drop_table`, { connId: id, table, ...(database !== undefined ? { database } : {}) })
+      // 只从目标库里移除:同名表可能存在于别的库,旧版会把所有库里的同名表一起抹掉。
       setDbs(prev => prev.map((d) => {
-        if (d.kind !== 'database' || !d.tables.includes(table)) return d
+        if (d.kind !== 'database') return d
+        if (database !== undefined && database !== '' && d.name !== database) return d
+        if (!d.tables.includes(table)) return d
         return { ...d, tables: d.tables.filter(t => t !== table) }
       }))
-      if (selected !== null && selected.table === table) setSelected(null)
+      // 清掉该表(按库隔离)的字段缓存。
+      const stateKey = tableStateKey(database, table)
+      setTableColumns(prev => {
+        const next = { ...prev }
+        delete next[stateKey]
+        return next
+      })
+      setTableColumnsLoading(prev => {
+        const next = { ...prev }
+        delete next[stateKey]
+        return next
+      })
+      // 被删表若正开着数据标签,一并关掉(否则网格会继续查一张不存在的表)。
+      const tabKey = makeTableTab(table, database).key
+      setTableTabs(prev => prev.filter(t => t.key !== tabKey))
+      setActiveTableKey(cur => (cur === tabKey ? null : cur))
+      if (selected !== null && selected.table === table
+        && (database === undefined || database === '' || selected.database === database)) setSelected(null)
     } catch (e) {
       setOpError(`删除失败: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -905,10 +961,12 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
     if (id === null) return
     try {
       await tauriInvoke(`${cmdPrefix}_truncate_table`, { connId: id, table, ...(database !== undefined ? { database } : {}) })
+      // 清空的是当前打开的表 → 让网格重新拉数据,否则仍显示清空前的行。
+      if (activeTableKey === makeTableTab(table, database).key) setGridNonce(n => n + 1)
     } catch (e) {
       setOpError(`清空失败: ${e instanceof Error ? e.message : String(e)}`)
     }
-  }, [cmdPrefix])
+  }, [cmdPrefix, activeTableKey])
 
   /** 刷新某个库的表列表(库右键 → 刷新表列表)。 */
   const refreshDbTables = useCallback(async (database: string) => {
@@ -930,9 +988,15 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
 
   /** 建表成功:把新表并入该库节点(若已展开)并清掉列缓存。 */
   const onTableCreated = useCallback((database: string, tableName: string) => {
+    const stateKey = tableStateKey(database, tableName)
     setColumnsByTable(prev => {
       const next = { ...prev }
       delete next[tableName]
+      return next
+    })
+    setTableColumns(prev => {
+      const next = { ...prev }
+      delete next[stateKey]
       return next
     })
     setDbs(prev => prev.map(d => (
@@ -999,33 +1063,36 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
           isCurrent={node.name === currentDb}
           {...(node.tables.length > 0 ? { tableCount: node.tables.length } : {})}
           actions={{
-            onToggle: () => void toggleDb(node),
+            onToggle: () =>{  selectCurrentDb(node.name); void toggleDb(node) },
             onNewTable: () =>{  setDialog({ kind: 'new-table', database: node.name }) },
             onRefresh: () => void refreshDbTables(node.name),
           }}
         >
           <ul className={css.treeList}>
-            {visibleTables.map(t => (
-              <TableRow
-                key={t}
-                table={t}
-                database={node.name}
-                supportsAlter={supportsAlter}
-                selected={activeTableKey === makeTableTab(t, node.name).key}
-                expanded={expandedTables.has(t)}
-                columns={tableColumns[t] ?? []}
-                loading={tableColumnsLoading[t] === true}
-                actions={{
-                  onSelect: () =>{  openTableTab(t, node.name) },
-                  onToggleColumns: () => void toggleTableColumns(t, node.name),
-                  onShowDdl: () => void showTableDdl(t, node.name),
-                  onColumns: () =>{  setDialog({ kind: 'columns', database: node.name, table: t }) },
-                  onIndexes: () =>{  setDialog({ kind: 'indexes', database: node.name, table: t }) },
-                  onDrop: () => void dropTable(t, node.name),
-                  onTruncate: () => void truncateTable(t, node.name),
-                }}
-              />
-            ))}
+            {visibleTables.map((t) => {
+              const stateKey = tableStateKey(node.name, t)
+              return (
+                <TableRow
+                  key={t}
+                  table={t}
+                  database={node.name}
+                  supportsAlter={supportsAlter}
+                  selected={activeTableKey === makeTableTab(t, node.name).key}
+                  expanded={expandedTables.has(stateKey)}
+                  columns={tableColumns[stateKey] ?? []}
+                  loading={tableColumnsLoading[stateKey] === true}
+                  actions={{
+                    onSelect: () =>{  openTableTab(t, node.name) },
+                    onToggleColumns: () => void toggleTableColumns(t, node.name),
+                    onShowDdl: () => void showTableDdl(t, node.name),
+                    onColumns: () =>{  setDialog({ kind: 'columns', database: node.name, table: t }) },
+                    onIndexes: () =>{  setDialog({ kind: 'indexes', database: node.name, table: t }) },
+                    onDrop: () => void dropTable(t, node.name),
+                    onTruncate: () => void truncateTable(t, node.name),
+                  }}
+                />
+              )
+            })}
           </ul>
         </DatabaseRow>
       </li>
@@ -1344,7 +1411,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
                   if (activeTable === undefined) return null
                   return (
                     <DbDataGrid
-                      key={activeTable.key}
+                      key={`${activeTable.key}:${gridNonce}`}
                       connId={connId}
                       table={activeTable.table}
                       cmdPrefix={cmdPrefix}
@@ -1394,7 +1461,15 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
                   className={css.ddlCopy}
                   disabled={ddl.loading === true || ddl.content === ''}
                   onClick={() =>{
-                    void navigator.clipboard?.writeText(ddl.content)
+                    // 非安全上下文(内嵌/普通 HTTP)下 navigator.clipboard 不存在:
+                    // 旧版 `navigator.clipboard?.writeText(...).then` 会对 undefined
+                    // 取 .then 直接抛错,点击「复制」无任何反馈。剪贴板不可用时静默
+                    // 保持「复制」标签,用户仍可手动选中 DDL。
+                    if (typeof navigator.clipboard?.writeText !== 'function') {
+                      setDdlCopied(false)
+                      return
+                    }
+                    void navigator.clipboard.writeText(ddl.content)
                       .then(() =>{  setDdlCopied(true); window.setTimeout(() =>{  setDdlCopied(false) }, 1500) })
                       .catch(() =>{  setDdlCopied(false) })
                   }}
@@ -1420,10 +1495,17 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
             database={dialog.database}
             table={dialog.table}
             onClose={() => {
+              const stateKey = tableStateKey(dialog.database, dialog.table)
               setDialog(null)
+              // 列定义可能被改过:补全缓存与字段树缓存都要失效,重新展开时重拉。
               setColumnsByTable(prev => {
                 const next = { ...prev }
                 delete next[dialog.table]
+                return next
+              })
+              setTableColumns(prev => {
+                const next = { ...prev }
+                delete next[stateKey]
                 return next
               })
             }}

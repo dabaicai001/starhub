@@ -567,6 +567,146 @@ describe('DbWorkbench', () => {
     await waitFor(() =>{  expect(screen.queryByText('name')).toBeNull() })
   })
 
+  it('点击库行即把它设为执行库(库行 title/选择器提示承诺的行为)', async () => {
+    stubInvoke({})
+    render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+    await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
+    expect(screen.getByRole('button', { name: '执行 SQL' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(screen.getByTitle('app'))
+    await waitFor(() =>{  expect((screen.getByRole('combobox', { name: '当前数据库' }) as HTMLSelectElement).value).toBe('app') })
+    // 空 SQL 仍禁用执行;库已选,title 不再是「请先选择数据库」。
+    const run = screen.getByRole('button', { name: '执行 SQL' })
+    expect(run.hasAttribute('disabled')).toBe(true)
+    expect(run.getAttribute('title')).toBe('输入 SQL 后可执行')
+  })
+
+  it('同一表名分属不同库时,字段树各用各的列缓存', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = vi.fn((cmd: string, args?: Record<string, unknown>) => {
+      const a = args ?? {}
+      calls.push([cmd, a])
+      switch (cmd) {
+        case 'db_mysql_connect': return Promise.resolve({ connId: 'c1', host: 'h', port: 3306 })
+        case 'db_mysql_list_databases': return Promise.resolve(['app', 'other'])
+        case 'db_mysql_list_tables': return Promise.resolve([{ name: 'users' }])
+        case 'db_mysql_list_columns':
+          return Promise.resolve(a.database === 'app' ? [{ name: 'app_col' }] : [{ name: 'other_col' }])
+        case 'db_mysql_disconnect': return Promise.resolve(null)
+        default: return Promise.reject(new Error(`unexpected ${cmd}`))
+      }
+    })
+    stubHostBridge(invoke)
+    const { container } = render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+    await waitFor(() =>{  expect(screen.getByTitle('other')).toBeTruthy() })
+    fireEvent.click(screen.getByTitle('app'))
+    await waitFor(() =>{  expect(screen.getAllByText('users').length).toBe(1) })
+    fireEvent.click(screen.getByTitle('other'))
+    await waitFor(() =>{  expect(screen.getAllByText('users').length).toBe(2) })
+    const tree = container.querySelector('aside') as HTMLElement
+    // app.users 展开 → app_col;other.users 展开 → other_col(旧版按表名缓存会复用 app 的列)。
+    fireEvent.click(within(tree).getAllByRole('button', { name: '展开 users 字段' })[0]!)
+    await waitFor(() =>{  expect(screen.getByText('app_col')).toBeTruthy() })
+    // app 行已变成「收起 users 字段」,重新定位剩下那个未展开的 users。
+    fireEvent.click(within(tree).getAllByRole('button', { name: '展开 users 字段' })[0]!)
+    await waitFor(() =>{  expect(screen.getByText('other_col')).toBeTruthy() })
+    const columnCalls = calls.filter(([cmd]) => cmd === 'db_mysql_list_columns')
+    expect(columnCalls.some(([, a]) => a.database === 'app' && a.table === 'users')).toBe(true)
+    expect(columnCalls.some(([, a]) => a.database === 'other' && a.table === 'users')).toBe(true)
+  })
+
+  it('删除表只移除目标库里的同名表,并关掉它的数据标签', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = vi.fn((cmd: string, args?: Record<string, unknown>) => {
+      const a = args ?? {}
+      calls.push([cmd, a])
+      switch (cmd) {
+        case 'db_mysql_connect': return Promise.resolve({ connId: 'c1', host: 'h', port: 3306 })
+        case 'db_mysql_list_databases': return Promise.resolve(['app', 'other'])
+        case 'db_mysql_list_tables': return Promise.resolve([{ name: 'users' }])
+        case 'db_mysql_list_columns': return Promise.resolve([{ name: 'id', key: 'PRI' }])
+        case 'db_mysql_get_table_data': return Promise.resolve({ columns: [{ name: 'id', type: 'BIGINT' }], rows: [[1]], totalRows: 1, isSelect: true })
+        case 'db_mysql_get_row_count': return Promise.resolve(1)
+        case 'db_mysql_drop_table': return Promise.resolve(null)
+        case 'db_mysql_disconnect': return Promise.resolve(null)
+        default: return Promise.resolve(null)
+      }
+    })
+    stubHostBridge(invoke)
+    const { container } = render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+    await waitFor(() =>{  expect(screen.getByTitle('other')).toBeTruthy() })
+    fireEvent.click(screen.getByTitle('app'))
+    await waitFor(() =>{  expect(screen.getAllByText('users').length).toBe(1) })
+    fireEvent.click(screen.getByTitle('other'))
+    await waitFor(() =>{  expect(screen.getAllByText('users').length).toBe(2) })
+    const tree = container.querySelector('aside') as HTMLElement
+    // 打开 app.users 的数据标签。
+    fireEvent.click(within(tree).getAllByText('users')[0]!)
+    await waitFor(() =>{  expect(screen.getByRole('tab', { name: 'users' })).toBeTruthy() })
+    // 右键 app.users → 删除表。
+    fireEvent.contextMenu(within(tree).getAllByText('users')[0]!)
+    await waitFor(() =>{  expect(screen.getByText('删除表')).toBeTruthy() })
+    fireEvent.click(screen.getByText('删除表'))
+    await waitFor(() =>{  expect(calls.some(([cmd, a]) => cmd === 'db_mysql_drop_table' && a.database === 'app')).toBe(true) })
+    // other.users 保留;app.users 的数据标签随表删除关闭。
+    await waitFor(() =>{  expect(screen.getAllByText('users').length).toBe(1) })
+    await waitFor(() =>{  expect(screen.queryByRole('tab', { name: 'users' })).toBeNull() })
+  })
+
+  it('reloads the open table grid after truncating that table', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = vi.fn((cmd: string, args?: Record<string, unknown>) => {
+      const a = args ?? {}
+      calls.push([cmd, a])
+      switch (cmd) {
+        case 'db_mysql_connect': return Promise.resolve({ connId: 'c1', host: 'h', port: 3306 })
+        case 'db_mysql_list_databases': return Promise.resolve(['app'])
+        case 'db_mysql_list_tables': return Promise.resolve([{ name: 'users' }])
+        case 'db_mysql_list_columns': return Promise.resolve([{ name: 'id', key: 'PRI' }])
+        case 'db_mysql_get_table_data': return Promise.resolve({ columns: [{ name: 'id', type: 'BIGINT' }], rows: [[1]], totalRows: 1, isSelect: true })
+        case 'db_mysql_get_row_count': return Promise.resolve(1)
+        case 'db_mysql_truncate_table': return Promise.resolve(null)
+        case 'db_mysql_disconnect': return Promise.resolve(null)
+        default: return Promise.resolve(null)
+      }
+    })
+    stubHostBridge(invoke)
+    const { container } = render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+    await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
+    fireEvent.click(screen.getByTitle('app'))
+    await waitFor(() =>{  expect(screen.getByText('users')).toBeTruthy() })
+    fireEvent.click(screen.getByText('users'))
+    await waitFor(() =>{  expect(screen.getAllByText('1').length).toBeGreaterThan(0) })
+    const before = calls.filter(([cmd]) => cmd === 'db_mysql_get_table_data').length
+    const tree = container.querySelector('aside') as HTMLElement
+    fireEvent.contextMenu(within(tree).getByText('users'))
+    await waitFor(() =>{  expect(screen.getByText('清空表')).toBeTruthy() })
+    fireEvent.click(screen.getByText('清空表'))
+    await waitFor(() =>{  expect(calls.some(([cmd]) => cmd === 'db_mysql_truncate_table')).toBe(true) })
+    // 清空成功后网格重新拉一次(旧版保留清空前的行)。
+    await waitFor(() =>{  expect(calls.filter(([cmd]) => cmd === 'db_mysql_get_table_data').length).toBeGreaterThan(before) })
+  })
+
+  it('copies the DDL from the DDL dialog', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    try {
+      stubInvoke({})
+      render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+      await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
+      fireEvent.click(screen.getByTitle('app'))
+      await waitFor(() =>{  expect(screen.getByText('users')).toBeTruthy() })
+      fireEvent.contextMenu(screen.getByText('users'))
+      await waitFor(() =>{  expect(screen.getByText('查看 DDL')).toBeTruthy() })
+      fireEvent.click(screen.getByText('查看 DDL'))
+      await waitFor(() =>{  expect(screen.getByText(/CREATE TABLE users/)).toBeTruthy() })
+      fireEvent.click(screen.getByRole('button', { name: '复制' }))
+      await waitFor(() =>{  expect(writeText).toHaveBeenCalledWith('CREATE TABLE users (id BIGINT)') })
+      await waitFor(() =>{  expect(screen.getByRole('button', { name: '已复制' })).toBeTruthy() })
+    } finally {
+      delete (navigator as { clipboard?: unknown }).clipboard
+    }
+  })
+
   describe('collectStatementResults(多语句保留逐条结果)', () => {
     it('保留每条语句的结果,而不是只留最后一条', async () => {
       const results = await collectStatementResults(['SELECT 1', 'SELECT 2'], (sql) =>

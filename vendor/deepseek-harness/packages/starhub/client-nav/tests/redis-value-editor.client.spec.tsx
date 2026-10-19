@@ -183,6 +183,23 @@ describe('RedisValueEditor load & key switching', () => {
     renderEditor('foo', 'string')
     await waitFor(() =>{  expect(screen.getAllByText('plain get boom').length).toBeGreaterThan(0) })
   })
+
+  it('shows a missing-key state when the key was deleted or expired', async () => {
+    installInvoke({ gone: { key: 'gone', type: 'none', value: null, ttl: -2 } })
+    renderEditor('gone', 'string')
+    // 旧版会把 null 序列化成文本 "null" 并允许保存(凭空重建 key);现在明确提示不存在。
+    await waitFor(() =>{  expect(screen.getByText(/Key 不存在/)).toBeTruthy() })
+    expect((screen.getByText<HTMLButtonElement>('保存')).disabled).toBe(true)
+    expect(screen.getByText('—')).toBeTruthy()
+  })
+
+  it('renders by the server-reported type when the cached key type is stale', async () => {
+    // SCAN 缓存说 string,get_value 实际是 hash:按服务端类型渲染。
+    installInvoke({ k: { key: 'k', type: 'hash', value: { a: '1' }, ttl: -1 } })
+    renderEditor('k', 'string')
+    await waitFor(() =>{  expect(screen.getAllByPlaceholderText('字段').length).toBe(1) })
+    expect(screen.getByText('HASH')).toBeTruthy()
+  })
 })
 
 describe('RedisValueEditor string save & revert', () => {
@@ -435,6 +452,21 @@ describe('RedisValueEditor structural (list/set/zset) rows', () => {
     fireEvent.click(screen.getByText('保存'))
     await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_execute', { connId: 'c1', command: 'HDEL h a' }) })
     await waitFor(() =>{  expect(screen.getByText(/Redis 已自动移除该 key/)).toBeTruthy() })
+  })
+
+  it('labels a sampled collection and does not claim the key will be emptied', async () => {
+    // size 比已加载行多:说明只回传了前 N 项,删完可见项并不会清空 key。
+    const invoke = installInvoke({ h: { key: 'h', type: 'hash', value: { a: '1', b: '2' }, ttl: -1, size: 5 } })
+    renderEditor('h', 'hash')
+    await waitFor(() =>{  expect(screen.getByText('仅加载前 2 项(共 5 项)')).toBeTruthy() })
+    fireEvent.click(screen.getAllByTitle('删除')[0]!)
+    // 第一行变成「撤销删除」后，剩下的删除钮只剩一个。
+    fireEvent.click(screen.getAllByTitle('删除')[0]!)
+    expect(screen.queryByText(/保存后集合为空/)).toBeNull()
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_execute', { connId: 'c1', command: 'HDEL h a b' }) })
+    // 保存后条目数推进:5 - 2 = 3,已加载 0 项。
+    await waitFor(() =>{  expect(screen.getByText('仅加载前 0 项(共 3 项)')).toBeTruthy() })
   })
 
   it('notifies the workbench via onSaved after a successful save', async () => {

@@ -339,9 +339,10 @@ describe('DbDataGrid', () => {
     await waitFor(() =>{  expect(screen.getByText(/保存 1/)).toBeTruthy() })
     fireEvent.click(screen.getByText(/保存 1/))
     await waitFor(() =>{  expect(calls.some(([cmd, a]) => cmd === 'db_mysql_update_rows' && (a.sets as Record<string, unknown>).name === 'alicia')).toBe(true) })
-    // WHERE 用主键定位第一行。
+    // WHERE 用主键定位第一行;参数名必须是 sidecar 契约的 `where`
+    // (whereClause 会被 Rust 参数白名单当成缺参拒绝)。
     const upd = calls.find(([cmd]) => cmd === 'db_mysql_update_rows')
-    expect(upd?.[1].whereClause).toContain('`id` = 1')
+    expect(upd?.[1].where).toContain('`id` = 1')
   })
 
   it('shows an error when saving without primary keys', async () => {
@@ -499,8 +500,30 @@ describe('DbDataGrid', () => {
     expect(next.disabled).toBe(false)
     fireEvent.click(next)
     await waitFor(() =>{  expect(screen.getByText(/2 \/ 3/)).toBeTruthy() })
+    // 行号按全局偏移展示:第 2 页首行 = 101,而不是重新从 1 数。
+    const firstRow = document.querySelector('[role="rowgroup"] [role="row"]') as HTMLElement
+    expect(firstRow.firstElementChild?.textContent).toBe('101')
     fireEvent.click(screen.getByText('上一页'))
     await waitFor(() =>{  expect(screen.getByText(/1 \/ 3/)).toBeTruthy() })
+  })
+
+  it('shows an empty state (and a filter-specific hint) when the page has no rows', async () => {
+    const invoke = vi.fn((cmd: string) => {
+      if (cmd === 'db_mysql_get_table_data') {
+        return Promise.resolve({ columns: [{ name: 'id', type: 'BIGINT' }], rows: [], totalRows: 0, isSelect: true })
+      }
+      if (cmd === 'db_mysql_list_columns') return Promise.resolve([{ name: 'id', key: 'PRI' }])
+      if (cmd === 'db_mysql_get_row_count') return Promise.resolve(0)
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    })
+    stubHostBridge(invoke)
+    render(<DbDataGrid connId="c1" table="users" />)
+    await waitFor(() =>{  expect(screen.getByText('当前页没有数据')).toBeTruthy() })
+    // 加 WHERE 条件后空态文案切换为「没有匹配的行」。
+    const where = screen.getByLabelText('WHERE 条件筛选')
+    fireEvent.change(where, { target: { value: "name = 'nobody'" } })
+    fireEvent.keyDown(where, { key: 'Enter' })
+    await waitFor(() =>{  expect(screen.getByText('当前筛选没有匹配的行')).toBeTruthy() })
   })
 
   it('changes the page size via the select and resets to page 1', async () => {
@@ -685,7 +708,7 @@ describe('DbDataGrid', () => {
     fireEvent.keyDown(editInput, { key: 'Enter' })
     await waitFor(() =>{  expect(screen.getByText(/保存 1/)).toBeTruthy() })
     fireEvent.click(screen.getByText(/保存 1/))
-    await waitFor(() =>{  expect(calls.some(([cmd, a]) => cmd === 'db_mysql_update_rows' && (a.whereClause as string).includes('`org` = 7'))).toBe(true) })
+    await waitFor(() =>{  expect(calls.some(([cmd, a]) => cmd === 'db_mysql_update_rows' && (a.where as string).includes('`org` = 7'))).toBe(true) })
   })
 
   it('tolerates a clipboard write failure', async () => {

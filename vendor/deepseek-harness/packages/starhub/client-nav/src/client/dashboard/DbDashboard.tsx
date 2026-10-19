@@ -223,11 +223,17 @@ export function DbDashboard({ connId, dbType, connected, database }: DbDashboard
     void loadAll()
   }, [loadAll])
 
+  // 指标 tab 只在连接/类型切换时复位。
   useEffect(() => {
-    void loadAll()
-    // 连接切换时重置指标 tab。
     setTab('overview')
   }, [connId, dbType])
+
+  // loadAll 的依赖含 connected:面板在连接建立前挂载(连接中切到「监控」)时,
+  // 旧版只在 connId/dbType 变化时加载、错过 connected=false→true 的转变,指标
+  // 永远停在初始值。
+  useEffect(() => {
+    void loadAll()
+  }, [loadAll])
 
   const tabs = dashboardTabs(dbType)
 

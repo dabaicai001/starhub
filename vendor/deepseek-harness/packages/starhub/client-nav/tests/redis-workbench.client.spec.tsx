@@ -114,6 +114,31 @@ describe('RedisWorkbench connect & DB tree', () => {
     }
   })
 
+  it('retries a failed connection from the error bar', async () => {
+    let attempts = 0
+    const invoke = vi.fn((cmd: string) => {
+      if (cmd === 'db_redis_connect') {
+        attempts += 1
+        return attempts === 1
+          ? Promise.reject(new Error('conn-boom'))
+          : Promise.resolve({ connId: 'c1', host: 'h', port: 6379 })
+      }
+      return Promise.resolve(null)
+    })
+    const restore = stubInvoke(invoke)
+    try {
+      renderWorkbench()
+      await waitFor(() =>{  expect(screen.getByText('conn-boom')).toBeTruthy() })
+      // 旧版错误条只有「返回」,连不上只能关窗重开。
+      fireEvent.click(screen.getByText('重试'))
+      await waitConnected()
+      expect(attempts).toBe(2)
+      expect(screen.queryByText('conn-boom')).toBeNull()
+    } finally {
+      restore()
+    }
+  })
+
   it('uses default host/port when the config fields are missing or wrong-typed', async () => {
     const invoke = installTauri()
     const restore = stubInvoke(invoke)
@@ -400,20 +425,20 @@ describe('RedisWorkbench lazy DB tree interactions', () => {
       const scansBefore = invoke.mock.calls.filter(c => c[0] === 'db_redis_scan').length
       // 含 glob 字符的词原样透传为 MATCH 模式。
       fireEvent.change(searchBox, { target: { value: 'user:*' } })
-      await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_scan', expect.objectContaining({ connId: 'c1', matchPattern: 'user:*' })) })
+      await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_scan', expect.objectContaining({ connId: 'c1', match: 'user:*' })) })
       expect(invoke.mock.calls.filter(c => c[0] === 'db_redis_scan').length).toBeGreaterThan(scansBefore)
       // 搜索态强制文件夹全展开(结果直接可见)。
       await waitFor(() =>{  expect((screen.getByLabelText('文件夹 user')).getAttribute('aria-expanded')).toBe('true') })
       // 不含 glob 字符的词自动包成子串匹配 *词*。
       fireEvent.change(searchBox, { target: { value: 'user' } })
-      await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_scan', expect.objectContaining({ connId: 'c1', matchPattern: '*user*' })) })
+      await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_scan', expect.objectContaining({ connId: 'c1', match: '*user*' })) })
       // 清除按钮清空搜索词 → 触发无 MATCH 的全量重扫。
       const beforeClear = invoke.mock.calls.filter(c => c[0] === 'db_redis_scan').length
       fireEvent.click(screen.getByLabelText('清除搜索'))
       await waitFor(() =>{  expect((searchBox as HTMLInputElement).value).toBe('') })
       await waitFor(() =>{  expect(invoke.mock.calls.filter(c => c[0] === 'db_redis_scan').length).toBeGreaterThan(beforeClear) })
       const lastScan = invoke.mock.calls.filter(c => c[0] === 'db_redis_scan').at(-1)
-      expect((lastScan?.[1] as Record<string, unknown>).matchPattern).toBeUndefined()
+      expect((lastScan?.[1] as Record<string, unknown>).match).toBeUndefined()
       // 刷新按钮按当前(空)搜索重扫。
       const before = invoke.mock.calls.filter(c => c[0] === 'db_redis_scan').length
       fireEvent.click(screen.getByLabelText('刷新'))
@@ -430,7 +455,7 @@ describe('RedisWorkbench lazy DB tree interactions', () => {
       renderWorkbench()
       await expandDb0WithKeys()
       fireEvent.change(screen.getByLabelText('搜索 key'), { target: { value: 'user' } })
-      await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_scan', expect.objectContaining({ matchPattern: '*user*' })) })
+      await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_scan', expect.objectContaining({ match: '*user*' })) })
       // 切到 db3:其搜索词独立(空),不按 db0 的词过滤。
       clickDb(3)
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_select', { connId: 'c1', db: 3 }) })

@@ -37,6 +37,12 @@
  * - **值编辑器保存后回调刷新**:编辑器经 onSaved 通知,工作台重拉该 db 的键与
  *   键数,避免「保存成功但左侧树/头部计数还是旧值」的漂移。
  * - **空态/错误态文案明确化**:区分「暂无 key」「加载失败」「搜索无结果」。
+ *
+ * v0.136.6:
+ * - **连接失败补「重试」**:错误条旧版只有「返回」,连不上只能关窗重开;现在
+ *   原地重建连接。
+ * - **键树 React key 去重**:key `a` 与同名文件夹 `a`(来自 key `a:b`)的 path
+ *   相同,渲染 key 加节点种类前缀,避免重复 key 让协调器复用错行。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -220,7 +226,10 @@ function KeyTreeRow({ node, depth, expanded, onToggle, onOpen, onCopy, onRename,
         </button>
       </div>
       {open && node.children.map(child => (
-        <KeyTreeRow key={child.path} node={child} depth={depth + 1} expanded={expanded}
+        // key 与同名文件夹可共存(key `a` 与 key `a:b` 会同时出现在根层),
+        // 两者的 path 都是 `a`;React key 必须带节点种类前缀,否则重复 key
+        // 会让协调器复用错行。
+        <KeyTreeRow key={`${child.keyInfo === null ? 'f' : 'k'}:${child.path}`} node={child} depth={depth + 1} expanded={expanded}
           onToggle={onToggle} onOpen={onOpen} onCopy={onCopy} onRename={onRename} onDelete={onDelete} />
       ))}
     </>
@@ -243,6 +252,8 @@ function toCliText(v: unknown): string {
 export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () => void }) {
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
+  /** 连接尝试序号:失败后点「重试」自增,触发建连 effect 重跑。 */
+  const [connectAttempt, setConnectAttempt] = useState(0)
   /** 当前展开的 db;null = 全部收起。 */
   const [expandedDb, setExpandedDb] = useState<number | null>(null)
   /** 客户端当前所在 db(展开切换后恒等于展开的 db)。 */
@@ -377,8 +388,15 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
       if (connRef.current !== null) void redisDisconnect(connRef.current).catch(() => {})
       /* v8 ignore stop */
     }
-    // 只随资产 id
-  }, [asset.id])
+    // 资产切换或手动重试时重跑;配置不变的重连不触发(asset.id 稳定)。
+  }, [asset.id, connectAttempt])
+
+  /** 连接失败后重试:清错误、复位连接态并重建连接(旧版错误条只有「返回」)。 */
+  const retryConnect = (): void => {
+    setConnectError(null)
+    setConnected(false)
+    setConnectAttempt(n => n + 1)
+  }
 
   /** 展开/收起某个 db;展开时切客户端(如需)并懒加载该 db 的键。 */
   const toggleDb = async (db: number) => {
@@ -684,7 +702,8 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
         {connectError !== null && (
           <div className={css.errorBar}>
             <span>{connectError}</span>
-            <button type="button" className={css.retryButton} onClick={onClose}>返回</button>
+            <button type="button" className={css.retryButton} onClick={retryConnect}>重试</button>
+            <button type="button" className={css.secondaryButton} onClick={onClose}>返回</button>
           </div>
         )}
 
@@ -758,7 +777,7 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                             <>
                               <div className={css.keyList}>
                                 {keyTree.map(node => (
-                                  <KeyTreeRow key={node.path} node={node} depth={0} expanded={expandedFolders}
+                                  <KeyTreeRow key={`${node.keyInfo === null ? 'f' : 'k'}:${node.path}`} node={node} depth={0} expanded={expandedFolders}
                                     onToggle={path => void toggleKeyFolder(db, path)} onOpen={openKey}
                                     onCopy={key => void copyText(key, 'key 名')}
                                     onRename={(key) => { setRenaming(key); setRenameTo(key) }}

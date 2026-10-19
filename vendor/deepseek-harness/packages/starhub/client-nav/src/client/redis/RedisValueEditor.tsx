@@ -36,6 +36,14 @@
  * 集合被删空时 Redis 会自动移除 key:保存前在 footer 给出非阻塞警示,避免
  * 「保存成功但 key 不见了」的静默数据丢失。
  *
+ * v0.136.6:
+ * - **以服务端 get_value 的 type 为准**(SCAN 缓存类型可能过期):type=none 时
+ *   明确提示「Key 不存在」并禁用保存/TTL,不再把 null 序列化成 "null" 后可保存;
+ *   缓存说是 string 而实际是 hash 时按 hash 渲染。
+ * - **采样提示与空集合警示修正**:sidecar 对大集合只回传前 N 项,现在用 size
+ *   标出「仅加载前 N 项(共 M 项)」;只加载了部分时删完可见项并不会清空 key,
+ *   因此不再误报「保存后集合为空」。
+ *
  * @module Redis value editor (client)
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -60,11 +68,18 @@ interface KeyModel {
   loading: boolean
   saving: boolean
   error: string
+  /**
+   * 服务端实际返回的类型(来自 get_value)。SCAN 缓存的类型可能过期(key 在
+   * 两次操作之间被改类型/删除),渲染与写回都应以服务端为准;空串表示尚未加载。
+   */
+  type: string
+  /** 结构类型集合的总条目数(DBSIZE 语义);string / 未知时为 undefined。 */
+  size?: number
   /** string 类型当前文本。 */
   text: string
   /** string 类型加载时文本(还原目标)。 */
   originalText: string
-  /** 结构类型行。 */
+  /** 结构类型行(可能只是前 N 项采样)。 */
   rows: FieldRow[]
 }
 
@@ -127,7 +142,7 @@ export interface RedisValueEditorProps {
   onSaved?: () => void
 }
 
-const EMPTY_MODEL: KeyModel = { loading: true, saving: false, error: '', text: '', originalText: '', rows: [] }
+const EMPTY_MODEL: KeyModel = { loading: true, saving: false, error: '', type: '', text: '', originalText: '', rows: [] }
 
 /**
  * TTL 数字 → 输入框显示串(负数表示持久化)。
@@ -190,7 +205,21 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
   const [savedNote, setSavedNote] = useState('')
   const saveButtonRef = useRef<HTMLButtonElement>(null)
 
-  const isString = keyType === 'string'
+  /** 生效类型:服务端 get_value 为准;加载中退回 SCAN 传入的 keyType。 */
+  const modelType = model.type === '' ? keyType : model.type
+  const isString = modelType === 'string'
+  /** key 在打开前已被删除/过期(get_value 返回 type=none)。 */
+  const missing = model.type === 'none'
+  /** 已加载的原始条目数(不含新增行)。 */
+  const loadedCount = model.rows.filter(r => r.originalField !== '').length
+  /** 是否已拿到完整集合(size 未知时按完整处理)。 */
+  const completeCollection = model.size === undefined || loadedCount >= model.size
+  /**
+   * 大集合只回传前 N 项:提示用户未加载部分不会被保存覆盖(空串 = 不显示)。
+   */
+  const sampledLabel = !isString && !missing && !completeCollection && model.size !== undefined
+    ? `仅加载前 ${loadedCount} 项(共 ${model.size} 项)`
+    : ''
 
   // key 切换(重挂载或 props 变化)/ 重试 → 重新拉值与 TTL。
   useEffect(() => {
@@ -201,13 +230,17 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
       .then((result) => {
         /* v8 ignore next -- 防御:key 快速切换卸载竞态,取消后丢弃过期响应 */
         if (cancelled) return
-        const str = keyType === 'string'
+        // 以服务端类型为准:SCAN 缓存的 type 可能已过期(key 被删/改类型)。
+        const serverType = typeof result.type === 'string' && result.type !== '' ? result.type : keyType
+        const str = serverType === 'string'
         const textValue = str && typeof result.value === 'string'
           ? result.value
           : (str ? JSON.stringify(result.value, null, 2) : '')
+        const structural = serverType !== 'string' && serverType !== 'none'
         setModel({
-          loading: false, saving: false, error: '', text: textValue, originalText: textValue,
-          rows: rowsFromValue(keyType, result.value),
+          loading: false, saving: false, error: '', type: serverType, text: textValue, originalText: textValue,
+          rows: rowsFromValue(serverType, result.value),
+          ...(structural && typeof result.size === 'number' ? { size: result.size } : {}),
         })
         setTtl({ ttl: result.ttl, ttlInput: ttlToInput(result.ttl) })
       })
@@ -236,10 +269,12 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
    */
   const willEmptyCollection = useMemo(() => {
     if (isString) return false
+    // 只加载了前 N 项的大集合:删完可见项并不会清空 key,不能误报。
+    if (!completeCollection) return false
     const hadOriginal = model.rows.some(r => r.originalField !== '')
     const keepsAny = model.rows.some(r => !r.deleted)
     return hadOriginal && !keepsAny
-  }, [isString, model.rows])
+  }, [isString, model.rows, completeCollection])
 
   const copyKey = async (): Promise<void> => {
     try {
@@ -264,7 +299,7 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
         if (expiration !== null) setTtl({ ttl: expiration, ttlInput: String(expiration) })
         else if (ttl.ttl >= 0) setTtl({ ttl: -1, ttlInput: '' })
       } else {
-        await saveStructural(model.rows, keyType, redisKey, connId)
+        await saveStructural(model.rows, modelType, redisKey, connId)
         // 结构类型的写回不带 TTL 语义:显式下发 EXPIRE(或清空时 PERSIST),
         // 成功后才更新本地 TTL 态(旧版乐观置位,实际从未下发)。
         // 注意:绝不下发 `EXPIRE key 0`——那会立即删除 key。
@@ -276,9 +311,18 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
           setTtl({ ttl: -1, ttlInput: '' })
         }
       }
+      // 保存后条目数按「删除 −1、新增 +1」推进(改名是删旧+建新,净变化 0),
+      // 让「仅加载前 N 项」的提示继续成立。
+      const originalRows = model.rows.filter(r => r.originalField !== '')
+      const deletedCount = originalRows.filter(r => r.deleted).length
+      const addedCount = model.rows.filter(r => !r.deleted && r.originalField === '').length
+      const nextSize = !isString && model.size !== undefined
+        ? Math.max(0, model.size - deletedCount + addedCount)
+        : undefined
       updateModel({
         saving: false, originalText: model.text,
         rows: model.rows.filter(r => !r.deleted).map(r => ({ ...r, originalField: r.field, originalValue: r.value, deleted: false })),
+        ...(nextSize !== undefined ? { size: nextSize } : {}),
       })
       if (willEmptyCollection) {
         setSavedNote('所有成员已删除,Redis 已自动移除该 key')
@@ -293,19 +337,20 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
     <div className={css.editor}>
       <div className={css.infoBar}>
         <div className={css.infoLeft}>
-          <span className={`${css.typeBadge} ${css[`type_${keyType}`] ?? ''}`}>{keyType.toUpperCase()}</span>
+          <span className={`${css.typeBadge} ${css[`type_${modelType}`] ?? ''}`}>{modelType.toUpperCase()}</span>
           <span className={css.infoKey} title={redisKey}>{redisKey}</span>
           <button type="button" className={css.copyKey} title="复制 key 名" aria-label="复制 key 名"
             onClick={() => void copyKey()}><IconCopyOutlineMedium size={12} /></button>
         </div>
         <div className={css.infoRight}>
-          <span className={css.ttlText} title={ttl.ttl < 0 ? '该 key 持久化' : `剩余 ${ttl.ttl} 秒`}>
-            {humanizeTtl(ttl.ttl)}
+          <span className={css.ttlText}
+            title={missing ? 'key 不存在' : ttl.ttl < 0 ? '该 key 持久化' : `剩余 ${ttl.ttl} 秒`}>
+            {missing ? '—' : humanizeTtl(ttl.ttl)}
           </span>
           <label className={css.ttlLabel}>
             TTL
-            <input className={css.ttlInput} value={ttl.ttlInput} placeholder={ttl.ttl < 0 ? '持久化' : String(ttl.ttl)} type="number"
-              disabled={model.loading} aria-label="TTL 秒数"
+            <input className={css.ttlInput} value={ttl.ttlInput} placeholder={missing ? '—' : ttl.ttl < 0 ? '持久化' : String(ttl.ttl)} type="number"
+              disabled={model.loading || missing} aria-label="TTL 秒数"
               onChange={(e) =>{  setTtl(cur => ({ ...cur, ttlInput: e.target.value })) }}
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && dirty && !model.saving) void save() }} />
           </label>
@@ -322,7 +367,15 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
         </div>
       )}
 
-      {!model.loading && model.error === '' && (
+      {!model.loading && model.error === '' && missing && (
+        <div className={css.center}>
+          <div className={css.errorText}>Key 不存在(可能已过期或在别处被删除)</div>
+          <button type="button" className={css.secondaryButton}
+            onClick={() =>{  setGeneration(g => g + 1) }}>重试</button>
+        </div>
+      )}
+
+      {!model.loading && model.error === '' && !missing && (
         isString
           ? (
             <textarea className={css.area} value={model.text} spellCheck={false} placeholder="值…"
@@ -330,12 +383,17 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && dirty && !model.saving) void save() }} />
           )
           : (
-            <StructuralRows rows={model.rows} type={keyType}
+            <StructuralRows rows={model.rows} type={modelType}
               onChange={(rows) =>{  updateModel({ rows }) }} />
           )
       )}
 
       <div className={css.footer}>
+        {sampledLabel !== '' && (
+          <span className={css.hint} title="大集合只加载前若干项;保存只应用本页的增删改,未加载成员保持原样">
+            {sampledLabel}
+          </span>
+        )}
         {willEmptyCollection && dirty && (
           <span className={css.footerWarn}>保存后集合为空,Redis 将自动删除该 key</span>
         )}

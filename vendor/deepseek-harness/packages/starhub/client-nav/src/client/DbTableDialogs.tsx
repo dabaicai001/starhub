@@ -492,9 +492,6 @@ export function ColumnListDialog({ connId, database, table, onClose }: {
           </footer>
         </>
       )}
-      {!loading && (
-        <footer className={css.footer} style={{ display: 'none' }} />
-      )}
     </DialogShell>
   )
 }
