@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.140.0(♻️ **AI SSH 操作连接模型重写:AI 不再自建连接,复用用户终端已连接的会话(主壳 AI 与 SSH 助手同规则)**:旧模型里每个 AI 会话各有一条自有连接(`dsh:<assetId>:ssh`),堡垒机资产首次命令要弹「MFA 验证卡 + 选机器实时终端」、用户在一张 AI 私有的 pty 里亲手选机器再点「执行 AI 命令」——同一台机器用户已经连过、选过,AI 却要再来一遍。现在 `ui.ssh_connect` 下发 `assetId`,sidecar 按资产解析**用户终端页已连接的会话**(同资产多窗口取第一个存活者):普通主机走同一连接的 exec 通道(不打扰用户终端),堡垒机把命令写入用户终端的同一条 pty(输出经新增的 pty 广播 tap 哨兵回采,采集期不持会话锁,用户的 resize/断开/SFTP 不被阻塞)。**未连接时 AI 不擅自建连**,工具返回「请先连接」引导由模型转告;连接级失败不再自动重连(连接归用户,断了由用户在终端里重建)。随之退役:`ai_conn_id`/`ensure_ssh_session`/`exec_via_bastion_pty`/`bastion_shell` 复用通道/`pending_bastion`/`ui.ssh_bastion_response`(方法面 205)、助手面板连接验证卡与 `active-conns` 路由、壳内 `StarHubConnCard`、`AssistantBastionTerminal`。AI 执行遥测改由域工具路径广播 `ssh:exec-done`(sessionId = 终端会话 id),「SSH 执行记录」视图继续工作且不再混入用户的 cwd 探测。) |
+| 当前版本 | v0.140.1(🐛 **SSH 页面里的 AI 复用「那个页面」的连接(多窗口不再连错窗口)**:v0.140.0 的按资产解析在同资产开多个终端窗口时会命中会话 id 序第一个存活者——用户在 A 窗口的助手页里问一句话,命令可能落到 B 窗口的连接上。现在助手打开绑定时把所在终端页的会话 id 一起带给 sidecar(`starhub/bind.asset` 增带 `terminalSessionId`,`bind_asset_context` 落库),域工具优先复用该页连接(`SshManager::alive_session_for` 校验存活 + 归属);该页连接不在(关页/断线)才回落同资产第一个存活会话,都没有则照旧提示去连。`ssh_session_status` 在页面级命中时明说「本终端页的连接」。主壳 AI 无页面上下文,维持按资产解析。端到端验收补三条:页面级复用、死页回落、状态文案。) |
 
 ## 架构一句话
 
@@ -145,4 +145,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-10-21 (v0.140.0)*
+*最后更新: 2026-10-21 (v0.140.1)*
