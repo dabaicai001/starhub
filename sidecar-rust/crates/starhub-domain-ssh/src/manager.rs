@@ -145,6 +145,23 @@ impl SshManager {
         }
         None
     }
+
+    /// 取指定终端页会话(存活且归属该资产时)供 AI 复用(v0.140.1:
+    /// SSH 页面里的 AI 复用那个页面的连接,而不是同资产的任意窗口)。
+    /// @returns 会话 id;会话不存在/已死/归属别的资产时 None(调用方回落
+    /// {@link find_asset_session} 或提示用户去连接)。
+    pub async fn alive_session_for(&self, session_id: &str, asset_id: &str) -> Option<String> {
+        let session_arc = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(session_id).cloned()?
+        };
+        let session = session_arc.lock().await;
+        if session.is_alive() && session.asset_id() == Some(asset_id) {
+            Some(session_id.to_string())
+        } else {
+            None
+        }
+    }
 }
 
 /// 建立 SSH 会话(interactive=true 开 PTY shell,false 为一次性 exec 通道)。

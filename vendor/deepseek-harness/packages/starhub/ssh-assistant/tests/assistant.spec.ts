@@ -57,13 +57,13 @@ function fakeAgent(id: string): FakeAgent {
 function fakeHost(): AssistantHost & {
   agents: Map<string, FakeAgent>
   disposed: string[]
-  bindings: Array<[string, string]>
+  bindings: Array<[string, string, string]>
   created: CreateAgentOptions[]
   renames: Array<[string, string]>
 } {
   const agents = new Map<string, FakeAgent>()
   const disposed: string[] = []
-  const bindings: Array<[string, string]> = []
+  const bindings: Array<[string, string, string]> = []
   const created: CreateAgentOptions[] = []
   const renames: Array<[string, string]> = []
   return {
@@ -93,8 +93,8 @@ function fakeHost(): AssistantHost & {
     renameSession(sessionId: string, title: string): void {
       renames.push([sessionId, title])
     },
-    bindAsset(assetId: string, sessionId: string): Promise<void> {
-      bindings.push([assetId, sessionId])
+    bindAsset(assetId: string, sessionId: string, terminalSessionId: string): Promise<void> {
+      bindings.push([assetId, sessionId, terminalSessionId])
       return Promise.resolve()
     },
     defaultSelection() { return { provider: 'mock', model: 'mock-model' } },
@@ -110,7 +110,7 @@ describe('AssistantRegistry bookkeeping', () => {
     const registry = new AssistantRegistry(host)
     const first = await registry.open({ sshSessionId: 's1', assetId: 'a1', assetName: 'server' })
     expect(first.reused).toBe(false)
-    expect(host.bindings).toEqual([['a1', first.assistantId]])
+    expect(host.bindings).toEqual([['a1', first.assistantId, 's1']])
     const second = await registry.open({ sshSessionId: 's1', assetId: 'a1', assetName: 'server' })
     expect(second).toMatchObject({ reused: true, assistantId: first.assistantId })
     expect(host.agents.size).toBe(1)
@@ -460,7 +460,12 @@ describe('starhub-ssh-assistant composition', () => {
       assetName: 'server',
     })
     const assistantId = (opened as { assistantId: string }).assistantId
-    expect(host.bridgeCalls).toEqual([{ method: 'starhub/bind.asset', params: { assetId: 'ssh-1', sessionId: assistantId } }])
+    // v0.140.1:绑定携带所在终端页的会话 id——sidecar 据此优先复用这个页面
+    // 的连接(同资产多窗口时不会连错窗口)。
+    expect(host.bridgeCalls).toEqual([{
+      method: 'starhub/bind.asset',
+      params: { assetId: 'ssh-1', sessionId: assistantId, terminalSessionId: 'ssh-1__c00000' },
+    }])
     // 会话头打上插件配置的 cwd(无 cwd 会话拼不出 {{cwd}} 段且被列表拒绝)。
     expect(host.ctx.sessions.get(SessionId(assistantId))?.header.cwd).toBe(host.sessionCwd)
     // 显示名钉成纯服务器名。

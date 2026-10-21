@@ -171,12 +171,19 @@ pub fn registry_with_domains(
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| RpcError::invalid_params("bind_asset_context 缺少 sessionId"))?
                     .to_string();
+                // 可选:发起绑定的终端页 SSH 会话 id(v0.140.1)。SSH 终端页里
+                // 的 AI 助手带上它,域工具据此复用**那个页面**的连接。
+                let terminal_session_id = params
+                    .get("terminalSessionId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
                 let asset_type = ssh
                     .assets()
                     .get(&asset_id)
                     .map_err(RpcError::internal)?
                     .asset_type;
-                ssh.bind_session(&session_id, &asset_type, &asset_id);
+                ssh.bind_session(&session_id, &asset_type, &asset_id, terminal_session_id);
                 Ok(json!({ "ok": true, "action": "bound" }))
             });
         }

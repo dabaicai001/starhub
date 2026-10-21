@@ -8,7 +8,7 @@
 use serde_json::{json, Value};
 
 use crate::jsonrpc::RpcError;
-use crate::runtime::{resolve_asset_id, SshRuntime};
+use crate::runtime::{resolve_asset_id, resolve_terminal_session, SshRuntime};
 
 /// 取工具参数:`args` 信封(bridge 的 `starhub/tool.execute` 形态)优先,
 /// 否则参数平铺(工具直调形态)。
@@ -51,12 +51,14 @@ fn check_asset_family(runtime: &SshRuntime, name: &str, asset_id: &str) -> Optio
 async fn ssh_exec(runtime: &SshRuntime, name: &str, params: &Value) -> Result<Value, RpcError> {
     let asset_id =
         resolve_asset_id(runtime.bindings(), params).map_err(RpcError::invalid_params)?;
+    // 页面级复用(v0.140.1):SSH 终端页里的 AI 助手绑定携带所在页面的会话 id
+    let terminal_session = resolve_terminal_session(runtime.bindings(), params);
     if let Some(soft) = check_asset_family(runtime, name, &asset_id) {
         return Ok(soft);
     }
     let args = tool_args(params);
     let text = runtime
-        .execute_ssh(name, &asset_id, &args)
+        .execute_ssh(name, &asset_id, terminal_session.as_deref(), &args)
         .await
         .map_err(domain_error)?;
     Ok(json!({ "text": text }))
@@ -84,11 +86,12 @@ pub async fn ssh_session_status_method(
 ) -> Result<Value, RpcError> {
     let asset_id =
         resolve_asset_id(runtime.bindings(), params).map_err(RpcError::invalid_params)?;
+    let terminal_session = resolve_terminal_session(runtime.bindings(), params);
     if let Some(soft) = check_asset_family(runtime, "ssh_session_status", &asset_id) {
         return Ok(soft);
     }
     let text = runtime
-        .execute_ssh_status(&asset_id)
+        .execute_ssh_status(&asset_id, terminal_session.as_deref())
         .await
         .map_err(domain_error)?;
     Ok(json!({ "text": text }))
@@ -98,12 +101,13 @@ pub async fn ssh_session_status_method(
 async fn sftp(runtime: &SshRuntime, name: &str, params: &Value) -> Result<Value, RpcError> {
     let asset_id =
         resolve_asset_id(runtime.bindings(), params).map_err(RpcError::invalid_params)?;
+    let terminal_session = resolve_terminal_session(runtime.bindings(), params);
     if let Some(soft) = check_asset_family(runtime, name, &asset_id) {
         return Ok(soft);
     }
     let args = tool_args(params);
     let text = runtime
-        .execute_sftp(name, &asset_id, &args)
+        .execute_sftp(name, &asset_id, terminal_session.as_deref(), &args)
         .await
         .map_err(domain_error)?;
     Ok(json!({ "text": text }))
@@ -218,7 +222,7 @@ mod tests {
         let (runtime, dir) = runtime_in_temp("sftp");
         for name in ["sftp_list", "sftp_stat", "sftp_upload", "sftp_download"] {
             let error = runtime
-                .execute_sftp(name, "ghost", &json!({ "path": "/tmp" }))
+                .execute_sftp(name, "ghost", None, &json!({ "path": "/tmp" }))
                 .await
                 .expect_err("资产不存在");
             assert_eq!(error, "资产不存在: ghost", "{name}");

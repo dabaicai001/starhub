@@ -121,12 +121,16 @@ export function apply(ctx: Context, config: AssistantConfig = {}): void {
         )
       }
     },
-    bindAsset: async (assetId, sessionId) => {
+    bindAsset: async (assetId, sessionId, terminalSessionId) => {
       const transport = ctx.get(SDK_TRANSPORT_SERVICE) as JsonRpcTransportPeer | undefined
       if (transport === undefined) {
         throw new Error('starhub-ssh-assistant 需要 starhub-bridge(sdk-transport 服务)')
       }
-      const result: unknown = await transport.request(BIND_ASSET_METHOD, { assetId, sessionId })
+      // terminalSessionId = 助手所在的终端页会话 id(v0.140.1):sidecar 的域
+      // 工具据此优先复用**那个页面**的连接,而不是同资产的任意窗口。
+      const result: unknown = await transport.request(BIND_ASSET_METHOD, {
+        assetId, sessionId, terminalSessionId,
+      })
       const record = typeof result === 'object' && result !== null
         ? result as Record<string, unknown>
         : undefined

@@ -166,12 +166,11 @@ fn record_tool_audit(
     outcome: &Result<serde_json::Value, starhub_sidecar::jsonrpc::RpcError>,
     elapsed: std::time::Duration,
 ) {
-    let (asset_type, asset_id) = params
+    let binding = params
         .get("sessionId")
         .and_then(serde_json::Value::as_str)
-        .and_then(|session_id| ctx.ssh.resolve_bound_asset(session_id))
-        .unzip();
-    let _ = asset_type;
+        .and_then(|session_id| ctx.ssh.resolve_bound_asset(session_id));
+    let asset_id = binding.as_ref().map(|binding| binding.asset_id.clone());
     let asset_name = asset_id
         .as_deref()
         .and_then(|asset_id| ctx.ssh.assets().get(asset_id).ok())

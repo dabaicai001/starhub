@@ -96,8 +96,13 @@ export interface AssistantHost {
    * missing title service degrades to a warn — the assistant still works.
    */
   renameSession(sessionId: string, title: string): void
-  /** Bind the assistant session to an asset (bridge `starhub/bind.asset`). */
-  bindAsset(assetId: string, sessionId: string): Promise<void>
+  /**
+   * Bind the assistant session to an asset (bridge `starhub/bind.asset`).
+   * `terminalSessionId` is the terminal page this assistant serves: the
+   * sidecar reuses that page's connection for the assistant's commands
+   * (v0.140.1), not an arbitrary window on the same asset.
+   */
+  bindAsset(assetId: string, sessionId: string, terminalSessionId: string): Promise<void>
   /** Deployment default model route, or undefined when unconfigured. */
   defaultSelection(): { provider: string; model: string } | undefined
   /** Whether a provider route currently lists this model. */
@@ -171,7 +176,9 @@ export class AssistantRegistry {
     })
     // 钉住显示名:会话列表里显示纯服务器名(user 来源同时压住自动标题)。
     this.host.renameSession(assistantId, request.assetName)
-    await this.host.bindAsset(request.assetId, assistantId)
+    // 绑定时带上**所在终端页的会话 id**(v0.140.1):sidecar 的域工具据此优先
+    // 复用这个页面的连接,而不是同资产的任意一个窗口。
+    await this.host.bindAsset(request.assetId, assistantId, request.sshSessionId)
     const entry: AssistantEntry = {
       assistantId,
       sshSessionId: request.sshSessionId,

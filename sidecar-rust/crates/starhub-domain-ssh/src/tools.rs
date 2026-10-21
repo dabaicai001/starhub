@@ -216,18 +216,34 @@ pub async fn drop_ssh_session(ctx: &ToolContext<'_>, conn_id: &str) {
     ctx.manager.drop_session(conn_id).await;
 }
 
-/// 解析 AI 命令复用的用户终端会话(新模型 v0.140.0:AI 不自建连接)。
+/// 解析 AI 命令复用的用户终端会话(新模型 v0.140.0:AI 不自建连接;
+/// v0.140.1 加页面级复用)。
 ///
-/// - `Ok(Some(会话 id))`:终端页已连接该资产(同资产多窗口取第一个存活者);
+/// 优先级:
+/// 1. `terminal_session`——调用方(SSH 终端页里的 AI 助手)绑定携带的**所在
+///    页面**会话 id:存活且归属该资产时,复用那个页面的连接;
+/// 2. 回落 [`SshManager::find_asset_session`]:同资产第一个存活会话(主壳
+///    AI 等无页面上下文的场景)。
+///
+/// - `Ok(Some(会话 id))`:找到复用目标;
 /// - `Ok(None)`:尚未连接——调用方把 {@link not_connected_hint} 作为工具
 ///   结果返回给模型,由模型提示用户去连接;
 /// - `Err`:资产不存在等硬错误。
 pub async fn resolve_user_session(
     ctx: &ToolContext<'_>,
     asset_id: &str,
+    terminal_session: Option<&str>,
 ) -> Result<Option<String>, String> {
     // 资产存在性校验(资产不存在是硬错误,文案与旧路径一致)
     ctx.assets.asset_ssh_config(asset_id).await?;
+    if let Some(terminal) = terminal_session
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(id) = ctx.manager.alive_session_for(terminal, asset_id).await {
+            return Ok(Some(id));
+        }
+    }
     Ok(ctx.manager.find_asset_session(asset_id).await)
 }
 
@@ -286,18 +302,20 @@ async fn exec_ssh_command(
 
 /// 执行 ssh_exec / ssh_exec_background / ssh_wait_task。
 ///
-/// 命令在**用户终端已连接的会话**上执行(同资产多窗口取第一个);未连接时
-/// 返回引导文案,不擅自建连。连接级失败附人工重连引导,不自动重试。
+/// 命令在**用户终端已连接的会话**上执行(`terminal_session` 优先——SSH 页面
+/// 里的 AI 复用那个页面的连接;无页面上下文时同资产取第一个);未连接时返回
+/// 引导文案,不擅自建连。连接级失败附人工重连引导,不自动重试。
 pub async fn execute_ssh(
     ctx: &ToolContext<'_>,
     name: &str,
     asset_id: &str,
+    terminal_session: Option<&str>,
     args: &Value,
 ) -> Result<String, String> {
     if asset_id.is_empty() {
         return Err("缺少 assetId,无法执行 SSH 工具".to_string());
     }
-    let conn_id = match resolve_user_session(ctx, asset_id).await? {
+    let conn_id = match resolve_user_session(ctx, asset_id, terminal_session).await? {
         Some(id) => id,
         None => return Ok(not_connected_hint(asset_id)),
     };
@@ -370,8 +388,13 @@ pub async fn execute_ssh(
 ///
 /// **不触发连接**:只读 `SshManager.sessions`(经 {@link resolve_user_session}
 /// 解析用户终端会话),让模型在发命令前判断是否要先提示用户连接。
-pub async fn execute_ssh_status(ctx: &ToolContext<'_>, asset_id: &str) -> Result<String, String> {
-    let conn_id = match resolve_user_session(ctx, asset_id).await? {
+/// `terminal_session` 非空时状态描述指明「本终端页的连接」。
+pub async fn execute_ssh_status(
+    ctx: &ToolContext<'_>,
+    asset_id: &str,
+    terminal_session: Option<&str>,
+) -> Result<String, String> {
+    let conn_id = match resolve_user_session(ctx, asset_id, terminal_session).await? {
         Some(id) => id,
         None => {
             return Ok(format!(
@@ -394,28 +417,37 @@ pub async fn execute_ssh_status(ctx: &ToolContext<'_>, asset_id: &str) -> Result
             "SSH 终端连接已断开(资产 {asset_id}):请在终端页重新连接后重试,AI 不会自动重连。"
         ));
     }
+    // 页面级复用命中时讲清楚「就是本页这条连接」,避免多窗口时用户猜命令落在哪
+    let page_scoped = terminal_session
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|terminal| terminal == conn_id);
+    let scope = if page_scoped { "本终端页的连接" } else { "该资产的一条终端连接" };
     if session.is_bastion() {
         Ok(format!(
-            "SSH 终端已连接(资产 {asset_id},堡垒机):命令将写入你的终端 shell 执行(你可在终端里看到);若仍停在选机器菜单,请先完成选择。"
+            "SSH 终端已连接(资产 {asset_id},堡垒机):命令将写入{scope}执行(你可在终端里看到);若仍停在选机器菜单,请先完成选择。"
         ))
     } else {
         Ok(format!(
-            "SSH 终端已连接(资产 {asset_id}):命令经同一连接的执行通道运行,不会打扰你的终端。"
+            "SSH 终端已连接(资产 {asset_id}):命令经{scope}的执行通道运行,不会打扰你的终端。"
         ))
     }
 }
 
 /// 执行 sftp_list / sftp_stat / sftp_upload / sftp_download(复用用户终端会话)。
+/// 执行 sftp_list / sftp_stat / sftp_upload / sftp_download(复用用户终端会话;
+/// `terminal_session` 优先——SSH 页面里的 AI 复用那个页面的连接)。
 pub async fn execute_sftp(
     ctx: &ToolContext<'_>,
     name: &str,
     asset_id: &str,
+    terminal_session: Option<&str>,
     args: &Value,
 ) -> Result<String, String> {
     if asset_id.is_empty() {
         return Err("缺少 assetId,无法执行 SFTP 工具".to_string());
     }
-    let conn_id = match resolve_user_session(ctx, asset_id).await? {
+    let conn_id = match resolve_user_session(ctx, asset_id, terminal_session).await? {
         Some(id) => id,
         None => return Ok(not_connected_hint(asset_id)),
     };

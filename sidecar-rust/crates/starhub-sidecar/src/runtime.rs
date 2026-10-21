@@ -90,8 +90,17 @@ impl SshRuntime {
     }
 
     /// 记录 会话→资产 绑定(`bind_asset_context`)。
-    pub fn bind_session(&self, session_id: &str, asset_type: &str, asset_id: &str) {
-        self.bindings.bind(session_id, asset_type, asset_id);
+    /// `terminal_session_id` 为该会话所在终端页的 SSH 会话 id(可选):
+    /// SSH 页面里的 AI 助手据此复用**那个页面**的连接(v0.140.1)。
+    pub fn bind_session(
+        &self,
+        session_id: &str,
+        asset_type: &str,
+        asset_id: &str,
+        terminal_session_id: Option<&str>,
+    ) {
+        self.bindings
+            .bind(session_id, asset_type, asset_id, terminal_session_id);
     }
 
     /// 记录 subagent 子→父会话映射(子代理继承父会话绑定)。
@@ -101,7 +110,7 @@ impl SshRuntime {
     }
 
     /// 沿父链解析会话绑定(方法面在参数缺 assetId 时用)。
-    pub fn resolve_bound_asset(&self, session_id: &str) -> Option<(String, String)> {
+    pub fn resolve_bound_asset(&self, session_id: &str) -> Option<crate::bindings::SessionBinding> {
         self.bindings.resolve(session_id)
     }
 
@@ -143,20 +152,39 @@ impl SshRuntime {
 
     /// 执行 ssh_exec / ssh_exec_background / ssh_wait_task。
     ///
-    /// 命令在用户终端已连接的会话上执行(同资产多窗口取第一个存活者);
-    /// 未连接时返回引导文案,AI 不擅自建连(v0.140.0 新模型)。
+    /// 命令在用户终端已连接的会话上执行:`terminal_session`(调用方绑定携带的
+    /// 终端页会话 id)优先——SSH 页面里的 AI 复用那个页面的连接;无页面上下文
+    /// 时按资产取第一个存活者。未连接时返回引导文案,AI 不擅自建连
+    /// (v0.140.0 新模型,v0.140.1 加页面级复用)。
     pub async fn execute_ssh(
         &self,
         name: &str,
         asset_id: &str,
+        terminal_session: Option<&str>,
         args: &serde_json::Value,
     ) -> Result<String, String> {
-        starhub_domain_ssh::tools::execute_ssh(&self.context(), name, asset_id, args).await
+        starhub_domain_ssh::tools::execute_ssh(
+            &self.context(),
+            name,
+            asset_id,
+            terminal_session,
+            args,
+        )
+        .await
     }
 
     /// 查询当前绑定资产 SSH 会话状态(不触发连接)。
-    pub async fn execute_ssh_status(&self, asset_id: &str) -> Result<String, String> {
-        starhub_domain_ssh::tools::execute_ssh_status(&self.context(), asset_id).await
+    pub async fn execute_ssh_status(
+        &self,
+        asset_id: &str,
+        terminal_session: Option<&str>,
+    ) -> Result<String, String> {
+        starhub_domain_ssh::tools::execute_ssh_status(
+            &self.context(),
+            asset_id,
+            terminal_session,
+        )
+        .await
     }
 
     /// 执行 sftp_list / sftp_stat / sftp_upload / sftp_download。
@@ -164,9 +192,17 @@ impl SshRuntime {
         &self,
         name: &str,
         asset_id: &str,
+        terminal_session: Option<&str>,
         args: &serde_json::Value,
     ) -> Result<String, String> {
-        starhub_domain_ssh::tools::execute_sftp(&self.context(), name, asset_id, args).await
+        starhub_domain_ssh::tools::execute_sftp(
+            &self.context(),
+            name,
+            asset_id,
+            terminal_session,
+            args,
+        )
+        .await
     }
 
     /// 中断一条在途 exec(停止生成);exec_id 未知(已结束)按未中断返回。
@@ -223,8 +259,8 @@ pub fn resolve_asset_id(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if let Some((_asset_type, asset_id)) = bindings.resolve(session_id) {
-            return Ok(asset_id);
+        if let Some(binding) = bindings.resolve(session_id) {
+            return Ok(binding.asset_id);
         }
     }
     Err(
@@ -233,6 +269,23 @@ pub fn resolve_asset_id(
          focus_terminal 打开目标资产后重试"
             .to_string(),
     )
+}
+
+/// 解析发起调用的会话绑定的**终端页会话 id**(v0.140.1)。
+///
+/// SSH 终端页里的 AI 助手在 `bind_asset_context` 时带上所在页面的会话 id,
+/// 域工具据此优先复用那个页面的连接;主壳 AI 等无页面上下文的调用返回 None
+/// (回落按资产取第一个存活会话)。
+pub fn resolve_terminal_session(
+    bindings: &crate::bindings::SessionBindings,
+    params: &serde_json::Value,
+) -> Option<String> {
+    let session_id = params
+        .get("sessionId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    bindings.resolve_terminal_session(session_id)
 }
 
 #[cfg(test)]
@@ -272,12 +325,12 @@ mod tests {
         let (runtime, dir) = runtime_in_temp("empty");
         // 未知资产:resolve_user_session 在解析资产配置处失败,文案与 Tauri 版一致
         let err = runtime
-            .execute_ssh("ssh_exec", "ghost", &serde_json::json!({ "command": "ls" }))
+            .execute_ssh("ssh_exec", "ghost", None, &serde_json::json!({ "command": "ls" }))
             .await
             .unwrap_err();
         assert_eq!(err, "资产不存在: ghost");
         // 状态查询同样不肯为未知资产编造会话状态
-        let err = runtime.execute_ssh_status("ghost").await.unwrap_err();
+        let err = runtime.execute_ssh_status("ghost", None).await.unwrap_err();
         assert_eq!(err, "资产不存在: ghost");
 
         // 空资产库的清单
@@ -288,7 +341,8 @@ mod tests {
     #[tokio::test]
     async fn ssh_tools_ask_the_user_to_connect_instead_of_connecting() {
         // 新模型(v0.140.0):资产存在但用户终端未连接——AI 不得自建连接,
-        // 返回引导文案,由模型提示用户去连接。
+        // 返回引导文案,由模型提示用户去连接。terminal_session 给不给都一样:
+        // 没有活会话可复用。
         let (runtime, dir) = runtime_in_temp("unconnected");
         runtime
             .assets()
@@ -303,15 +357,20 @@ mod tests {
             )
             .expect("建资产");
         let hint = runtime
-            .execute_ssh("ssh_exec", "a1", &serde_json::json!({ "command": "ls" }))
+            .execute_ssh(
+                "ssh_exec",
+                "a1",
+                Some("a1__k3f9a2"),
+                &serde_json::json!({ "command": "ls" }),
+            )
             .await
             .expect("未连接是软引导,不是错误");
         assert!(hint.contains("尚未连接"), "{hint}");
         assert!(hint.contains("复用你的连接"), "{hint}");
-        let status = runtime.execute_ssh_status("a1").await.unwrap();
+        let status = runtime.execute_ssh_status("a1", None).await.unwrap();
         assert!(status.contains("SSH 终端尚未连接(资产 a1)"), "{status}");
         let sftp = runtime
-            .execute_sftp("sftp_list", "a1", &serde_json::json!({ "path": "/tmp" }))
+            .execute_sftp("sftp_list", "a1", None, &serde_json::json!({ "path": "/tmp" }))
             .await
             .expect("未连接是软引导,不是错误");
         assert!(sftp.contains("尚未连接"), "{sftp}");
@@ -323,7 +382,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_asset_id_prefers_the_explicit_parameter() {
         let bindings = crate::bindings::SessionBindings::new();
-        bindings.bind("session-1", "ssh", "from-binding");
+        bindings.bind("session-1", "ssh", "from-binding", None);
         let params = serde_json::json!({ "assetId": "explicit", "sessionId": "session-1" });
         assert_eq!(resolve_asset_id(&bindings, &params).unwrap(), "explicit");
     }
@@ -331,10 +390,34 @@ mod tests {
     #[tokio::test]
     async fn resolve_asset_id_falls_back_to_the_session_binding() {
         let bindings = crate::bindings::SessionBindings::new();
-        bindings.bind("root", "ssh", "root-asset");
+        bindings.bind("root", "ssh", "root-asset", None);
         bindings.record_subagent_parent("child", "root");
         let params = serde_json::json!({ "sessionId": "child" });
         assert_eq!(resolve_asset_id(&bindings, &params).unwrap(), "root-asset");
+    }
+
+    #[test]
+    fn resolve_terminal_session_rides_the_binding_chain() {
+        // v0.140.1:SSH 页面里的 AI 助手绑定携带所在页面的会话 id;域工具据此
+        // 优先复用那个页面的连接。无页面上下文(主壳 AI)时为 None。
+        let bindings = crate::bindings::SessionBindings::new();
+        bindings.bind("root", "ssh", "root-asset", Some("root-asset__k3f9a2"));
+        bindings.record_subagent_parent("child", "root");
+        let with_page = serde_json::json!({ "sessionId": "child" });
+        assert_eq!(
+            resolve_terminal_session(&bindings, &with_page).as_deref(),
+            Some("root-asset__k3f9a2")
+        );
+        // 没带页面 id 的绑定 / 无 sessionId 参数:None
+        bindings.bind("plain", "ssh", "root-asset", None);
+        assert_eq!(
+            resolve_terminal_session(&bindings, &serde_json::json!({ "sessionId": "plain" })),
+            None
+        );
+        assert_eq!(
+            resolve_terminal_session(&bindings, &serde_json::json!({})),
+            None
+        );
     }
 
     #[test]

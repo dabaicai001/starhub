@@ -13,7 +13,7 @@
  * | bridge method | sidecar method | result |
  * |---|---|---|
  * | `starhub/tool.execute {sessionId,name,args}` | `name` with `args` (plus the injected `sessionId`) | model-readable text |
- * | `starhub/bind.asset {assetId,sessionId}` | `bind_asset_context` | `{ok,action:"bound"}` |
+ * | `starhub/bind.asset {assetId,sessionId,terminalSessionId?}` | `bind_asset_context` | `{ok,action:"bound"}` |
  * | `starhub/open.asset {assetId,tool?,sessionId}` | `starhub/open.asset` | `{ok,action}` |
  * | `starhub/focus.tool {assetId,tool,sessionId}` | `starhub/focus.tool` | `{ok,action}` |
  * | `starhub/live.snapshot` | `starhub/live.snapshot` | snapshot object |

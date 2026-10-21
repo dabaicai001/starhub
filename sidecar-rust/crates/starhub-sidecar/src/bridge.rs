@@ -114,7 +114,7 @@ fn bound_asset_id(ssh: &SshRuntime, args: &Value) -> Option<String> {
     args.get("sessionId")
         .and_then(Value::as_str)
         .and_then(|session_id| ssh.resolve_bound_asset(session_id))
-        .map(|(_asset_type, asset_id)| asset_id)
+        .map(|binding| binding.asset_id)
 }
 
 /// 域工具成功后的 AI 动作回写(契约 §1/M4):
@@ -313,7 +313,7 @@ mod tests {
         let sink: Arc<dyn EventSink> = Arc::clone(&collector) as Arc<dyn EventSink>;
         let ssh = runtime_with(Arc::clone(&sink));
         let state = BridgeState::default();
-        ssh.bind_session("s1", "ssh", "a1");
+        ssh.bind_session("s1", "ssh", "a1", None);
         let args = json!({ "sessionId": "s1", "command": "systemctl status nginx" });
         after_tool_success(&ssh, &sink, &state, "ssh_exec", &args, "active (running)");
 
