@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.139.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.139.1-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,9 +59,8 @@
 
 ## 当前版本
 
-### v0.139.0 (2026-10-21)
-- ✨ ✨ **Elasticsearch 文档级 CRUD 打通**(索引详情新增「文档」子页):sidecar 的 `db.es.getDocument` / `indexDocument` / `deleteDocument` 早有实现,但缺 Rust 转发规格与前端封装,文档完全摸不到。现在补上三段链路:① Rust ui_db 加 3 条转发规格(必填参数有单测);② es-service 封装三个命令;③ 索引详情加「文档」子页——match_all 分页浏览(复用 search 的 from/size)、行内「查看 / 编辑」(按 id 取整篇,保存走整篇 index 替换,语义最直观)、「新建文档」(_id 可省略由 ES 分配,非法/非对象 JSON 前端拦截)、删除(二次确认后刷新)。顺带修掉三个小问题:删除「正在搜索中」的索引后结果区不再残留已删索引的 hits(连同该索引记忆的 DSL 一起清)、`esCount` 死代码连同 `ui.db_es_count` 转发规格一并移除、概览索引行补右键菜单(查看详情 / 复制索引名 / 删除索引)。
-- ✨ ✨ **Broker 自动刷新可暂停**:头部加开关(默认开,保持既有 30s 周期);大集群上全量拉取有成本,暂停只停定时器、不影响手动刷新。
+### v0.139.1 (2026-10-21)
+- 🔧 🎨 **Redis 删除 key 改用自制确认弹窗**(替代原生 `window.confirm`):单个删除与批量删除(勾选)共用同一弹窗——清单在打开时锁定,批量时预览前若干个 key(超出 8 个折叠为「…等 N 个」),取消即放弃、失败不清勾选可重试;至此 Redis 工作台内所有破坏性操作(删 key / 清空 DB)都是同款弹窗,与 FLUSHDB、新建 Key 的模态风格一致。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

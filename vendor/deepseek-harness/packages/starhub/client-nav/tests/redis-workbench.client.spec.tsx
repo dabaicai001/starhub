@@ -576,7 +576,6 @@ describe('RedisWorkbench actions', () => {
   })
 
   it('right-clicks a key row: open / copy key / copy value / rename / delete from the menu', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const writeText = vi.fn(() => Promise.resolve())
     ;(navigator as { clipboard?: unknown }).clipboard = { writeText }
     const invoke = installTauri()
@@ -598,13 +597,13 @@ describe('RedisWorkbench actions', () => {
       fireEvent.contextMenu(screen.getByTitle('user:1'))
       fireEvent.click(screen.getByText('复制 key 名'))
       await waitFor(() =>{  expect(screen.getByText('已复制key 名')).toBeTruthy() })
-      // 菜单内删除与 hover 按钮同路径(confirm 已置 true)。
+      // 菜单内删除与 hover 按钮同路径(弹确认窗 → 确认)。
       fireEvent.contextMenu(screen.getByTitle('user:1'))
       fireEvent.click(screen.getByText('删除'))
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_del', { connId: 'c1', keys: ['user:1'] }) })
     } finally {
       restore()
-      confirmSpy.mockRestore()
       delete (navigator as { clipboard?: unknown }).clipboard
     }
   })
@@ -677,8 +676,7 @@ describe('RedisWorkbench actions', () => {
     }
   })
 
-  it('deletes a key after confirm, closes the value editor for that key, and guards on cancel', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('deletes a key after the confirm modal, closes the value editor for that key, and guards on cancel', async () => {
     const invoke = installTauri()
     const restore = stubInvoke(invoke)
     try {
@@ -687,33 +685,33 @@ describe('RedisWorkbench actions', () => {
       // 先打开值编辑器
       fireEvent.click(screen.getByTitle('user:1'))
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_get_value', expect.anything()) })
-      // 取消删除 → 不调用
+      // 弹确认窗(替代原生 confirm):取消 → 不调用
       fireEvent.click(screen.getByLabelText('删除 user:1'))
+      await waitFor(() =>{  expect(screen.getByText(/确定删除 key「user:1」/)).toBeTruthy() })
+      fireEvent.click(screen.getByText('取消'))
       expect(invoke).not.toHaveBeenCalledWith('db_redis_del', expect.anything())
       // 确认删除 → 调用 + toast + 值编辑器关闭(同 key)
-      confirmSpy.mockReturnValue(true)
       fireEvent.click(screen.getByLabelText('删除 user:1'))
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_del', { connId: 'c1', keys: ['user:1'] }) })
       await waitFor(() =>{  expect(screen.getByText('已删除:user:1')).toBeTruthy() })
       await waitFor(() =>{  expect(screen.getByText('未选择 Key')).toBeTruthy() })
     } finally {
       restore()
-      confirmSpy.mockRestore()
     }
   })
 
   it('surfaces a delete failure toast', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const invoke = installTauri({ delError: new Error('del-boom') })
     const restore = stubInvoke(invoke)
     try {
       renderWorkbench()
       await expandDb0WithKeys()
       fireEvent.click(screen.getByLabelText('删除 user:1'))
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(screen.getByText(/删除失败:del-boom/)).toBeTruthy() })
     } finally {
       restore()
-      confirmSpy.mockRestore()
     }
   })
 
@@ -1198,7 +1196,6 @@ describe('RedisWorkbench failure variants', () => {
   })
 
   it('surfaces raw-string rejections (non-Error) as toast/error text', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const raw = (msg: string) => Promise.reject(msg)
     const invoke = vi.fn((cmd: string) => {
       switch (cmd) {
@@ -1225,6 +1222,7 @@ describe('RedisWorkbench failure variants', () => {
       await waitFor(() =>{  expect(screen.getByTitle('user:1')).toBeTruthy() })
       // delete / rename / flush 裸串拒绝。
       fireEvent.click(screen.getByLabelText('删除 user:1'))
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(screen.getByText(/删除失败:raw-del/)).toBeTruthy() })
       fireEvent.click(screen.getByRole('button', { name: '重命名 user:1' }))
       await waitFor(() =>{  expect(screen.getByLabelText('新 key 名')).toBeTruthy() })
@@ -1254,7 +1252,6 @@ describe('RedisWorkbench failure variants', () => {
       expect(screen.getByRole('button', { name: '数据库 db4' }).getAttribute('aria-expanded')).toBe('false')
     } finally {
       restore()
-      confirmSpy.mockRestore()
     }
   })
 
@@ -1301,13 +1298,13 @@ describe('RedisWorkbench failure variants', () => {
       if (cmd === 'db_redis_execute') return Promise.reject(new Error('plain-exec'))
       return Promise.resolve(null)
     })
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const restore = stubInvoke(invoke)
     try {
       renderWorkbench()
       await expandDb0WithKeys()
       // delete 失败
       fireEvent.click(screen.getByLabelText('删除 user:1'))
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(screen.getByText(/删除失败:plain-del/)).toBeTruthy() })
       // rename 失败
       fireEvent.click(screen.getByRole('button', { name: '重命名 user:1' }))
@@ -1335,12 +1332,10 @@ describe('RedisWorkbench failure variants', () => {
       await waitFor(() =>{  expect(screen.getByText(/创建失败:plain-exec/)).toBeTruthy() })
     } finally {
       restore()
-      confirmSpy.mockRestore()
     }
   })
 
   it('keeps the value editor open when deleting a different key', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const invoke = installTauri()
     const restore = stubInvoke(invoke)
     try {
@@ -1354,11 +1349,11 @@ describe('RedisWorkbench failure variants', () => {
       await waitFor(() =>{  expect(screen.getByTitle('sess:2')).toBeTruthy() })
       // 删除不同的 key(sess:2)→ openValue(user:1) 保留下 (cur?.key !== key → cur)
       fireEvent.click(screen.getByLabelText('删除 sess:2'))
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_del', { connId: 'c1', keys: ['sess:2'] }) })
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_get_value', expect.objectContaining({ key: 'user:1' })) })
     } finally {
       restore()
-      confirmSpy.mockRestore()
     }
   })
 
@@ -1575,7 +1570,6 @@ describe('RedisWorkbench 增强(初始库 / 类型过滤 / 批量删除 / 分析
   })
 
   it('batch-deletes selected keys (leaf + folder checkboxes), closing the editor only when its key is deleted', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const invoke = installTauri()
     const restore = stubInvoke(invoke)
     try {
@@ -1589,15 +1583,17 @@ describe('RedisWorkbench 增强(初始库 / 类型过滤 / 批量删除 / 分析
       fireEvent.click(screen.getByLabelText('选择 sess:2'))
       const delBtn = await waitFor(() =>{  return screen.getByTestId('redis-delete-selected') })
       expect(delBtn.textContent).toContain('1')
-      // 取消批量删除:不发 del,勾选保留。
+      // 取消批量删除:不发 del,勾选保留(单个勾选也走key 名文案)。
       fireEvent.click(delBtn)
+      await waitFor(() =>{  expect(screen.getByText(/确定删除 key「sess:2」/)).toBeTruthy() })
+      fireEvent.click(screen.getByText('取消'))
       expect(invoke).not.toHaveBeenCalledWith('db_redis_del', expect.anything())
       expect(screen.getByTestId('redis-delete-selected')).toBeTruthy()
-      // 确认删除。
-      confirmSpy.mockReturnValue(true)
+      // 确认删除(单个勾选的 toast 与单键删除同款 key 名文案)。
       fireEvent.click(screen.getByTestId('redis-delete-selected'))
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_del', { connId: 'c1', keys: ['sess:2'] }) })
-      await waitFor(() =>{  expect(screen.getByText('已删除 1 个 key')).toBeTruthy() })
+      await waitFor(() =>{  expect(screen.getByText('已删除:sess:2')).toBeTruthy() })
       // 刷新后勾选清空(按钮消失);user:1 编辑器仍开着。
       await waitFor(() =>{  expect(screen.queryByTestId('redis-delete-selected')).toBeNull() })
       expect(screen.queryByText('未选择 Key')).toBeNull()
@@ -1606,16 +1602,15 @@ describe('RedisWorkbench 增强(初始库 / 类型过滤 / 批量删除 / 分析
       const delBtn2 = await waitFor(() =>{  return screen.getByTestId('redis-delete-selected') })
       expect(delBtn2.textContent).toContain('1')
       fireEvent.click(delBtn2)
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_del', { connId: 'c1', keys: ['user:1'] }) })
       await waitFor(() =>{  expect(screen.getByText('未选择 Key')).toBeTruthy() })
     } finally {
       restore()
-      confirmSpy.mockRestore()
     }
   })
 
   it('batch delete failure toasts and keeps the selection for retry', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const invoke = installTauri({ delError: new Error('bdel-boom') })
     const restore = stubInvoke(invoke)
     try {
@@ -1623,12 +1618,47 @@ describe('RedisWorkbench 增强(初始库 / 类型过滤 / 批量删除 / 分析
       await expandDb0WithKeys()
       fireEvent.click(screen.getByLabelText('选择 user:1'))
       fireEvent.click(await waitFor(() =>{  return screen.getByTestId('redis-delete-selected') }))
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
       await waitFor(() =>{  expect(screen.getByText(/删除失败:bdel-boom/)).toBeTruthy() })
       // 失败不清勾选,按钮仍在供重试。
       expect(screen.getByTestId('redis-delete-selected')).toBeTruthy()
     } finally {
       restore()
-      confirmSpy.mockRestore()
+    }
+  })
+
+  it('multi-key delete modal previews the locked key list and folds beyond eight', async () => {
+    const many = Array.from({ length: 10 }, (_unused, i) => keyInfo(`k:${i}`))
+    const invoke = vi.fn((cmd: string) => {
+      switch (cmd) {
+        case 'db_redis_connect': return Promise.resolve({ connId: 'c1', host: 'h', port: 6379 })
+        case 'db_redis_db_size': return Promise.resolve({ size: many.length })
+        case 'db_redis_scan': return Promise.resolve({ keys: many, cursor: 0 })
+        case 'db_redis_del': return Promise.resolve({ deleted: many.length })
+        default: return Promise.resolve(null)
+      }
+    })
+    const restore = stubInvoke(invoke)
+    try {
+      renderWorkbench()
+      await waitConnected()
+      clickDb(0)
+      // 等键树渲染出文件夹再全选(10 个 key)。
+      fireEvent.click(await waitFor(() =>{  return screen.getByLabelText('选择文件夹 k') }))
+      fireEvent.click(await waitFor(() =>{  return screen.getByTestId('redis-delete-selected') }))
+      // 标题带总数;清单展示前 8 个,其余折叠为「…等 10 个」。
+      await waitFor(() =>{  expect(screen.getByText('删除 10 个 Key')).toBeTruthy() })
+      expect(screen.getByText(/确定删除选中的 10 个 key/)).toBeTruthy()
+      expect(screen.getByTitle('k:0')).toBeTruthy()
+      expect(screen.getByTitle('k:7')).toBeTruthy()
+      expect(screen.queryByTitle('k:8')).toBeNull()
+      expect(screen.getByText('…等 10 个')).toBeTruthy()
+      // 确认 → 一次 del 提交全量清单。
+      fireEvent.click(screen.getByTestId('redis-confirm-delete'))
+      await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_del', { connId: 'c1', keys: many.map(k => k.key) }) })
+      await waitFor(() =>{  expect(screen.getByText('已删除 10 个 key')).toBeTruthy() })
+    } finally {
+      restore()
     }
   })
 

@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.139.0(✨ **Elasticsearch 文档级 CRUD 打通**(索引详情新增「文档」子页):sidecar 的 `db.es.getDocument` / `indexDocument` / `deleteDocument` 早有实现,但缺 Rust 转发规格与前端封装,文档完全摸不到。现在补上三段链路:① Rust ui_db 加 3 条转发规格(必填参数有单测);② es-service 封装三个命令;③ 索引详情加「文档」子页——match_all 分页浏览(复用 search 的 from/size)、行内「查看 / 编辑」(按 id 取整篇,保存走整篇 index 替换,语义最直观)、「新建文档」(_id 可省略由 ES 分配,非法/非对象 JSON 前端拦截)、删除(二次确认后刷新)。顺带修掉三个小问题:删除「正在搜索中」的索引后结果区不再残留已删索引的 hits(连同该索引记忆的 DSL 一起清)、`esCount` 死代码连同 `ui.db_es_count` 转发规格一并移除、概览索引行补右键菜单(查看详情 / 复制索引名 / 删除索引)。) |
+| 当前版本 | v0.139.1(🎨 **Redis 删除 key 改用自制确认弹窗**(替代原生 `window.confirm`):单个删除与批量删除(勾选)共用同一弹窗——清单在打开时锁定,批量时预览前若干个 key(超出 8 个折叠为「…等 N 个」),取消即放弃、失败不清勾选可重试;至此 Redis 工作台内所有破坏性操作(删 key / 清空 DB)都是同款弹窗,与 FLUSHDB、新建 Key 的模态风格一致。) |
 
 ## 架构一句话
 
@@ -145,4 +145,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-10-21 (v0.139.0)*
+*最后更新: 2026-10-21 (v0.139.1)*

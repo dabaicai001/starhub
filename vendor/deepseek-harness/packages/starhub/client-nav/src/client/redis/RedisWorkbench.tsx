@@ -28,6 +28,10 @@
  * 并同步 activeDb/expandedDb 与键列表;FLUSHDB 执行前先显式 select 目标库,且确认
  * 弹窗要求输入 db 序号二次确认(替代 window.confirm)。
  *
+ * v0.139.1:删除 key(单个/批量)的确认也从原生 window.confirm 改为自制弹窗——
+ * 清单在打开时锁定,批量时预览前若干个 key(超出折叠为计数),取消即放弃;
+ * 至此 Redis 工作台内所有破坏性操作(删 key/清空 DB)都是同款弹窗。
+ *
  * v0.137.0 交互重构:
  * - **键行补 TTL 徽标**:SCAN 已带回 ttl,旧版丢弃不用,用户无法分辨哪些 key
  *   即将过期;现在 -1 显示「∞」、其余显示剩余秒数(超 1 小时折算为小时)。
@@ -495,6 +499,8 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
   /** FLUSHDB 二次确认:目标 db(打开弹窗时锁定)与用户输入的确认序号。 */
   const [flushConfirm, setFlushConfirm] = useState<number | null>(null)
   const [flushInput, setFlushInput] = useState('')
+  /** 删除 key 的二次确认:待删清单(单个/批量共用;null = 关闭)。 */
+  const [confirmDeleteKeys, setConfirmDeleteKeys] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [openValue, setOpenValue] = useState<{ key: string; type: string; addFocus?: boolean } | null>(null)
   /** 键树文件夹展开态:db → 已展开路径集(默认全收起,点击文件夹行才展开)。 */
@@ -764,35 +770,40 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
     else await refreshExpanded(connId)
   }
 
-  const deleteKey = async (key: string) => {
-    const connId = connRef.current
-    /* v8 ignore next -- 仅连接建立后触发 */
-    if (connId === null) return
-    if (!window.confirm(`确定删除 key「${key}」?`)) return
-    try {
-      await redisDel(connId, [key])
-      notify(`已删除:${key}`)
-      setOpenValue(cur => (cur?.key === key ? null : cur))
-      await refreshExpanded(connId)
-    } catch (e: unknown) {
-      notify(`删除失败:${e instanceof Error ? e.message : String(e)}`)
-    }
+  /** 打开删除确认弹窗(单个 / 批量共用;key 清单锁定,取消即放弃)。 */
+  const askDeleteKeys = (keys: readonly string[]) => {
+    /* v8 ignore next -- 调用方(行按钮/菜单/批量钮)恒传非空清单 */
+    if (keys.length === 0) return
+    setConfirmDeleteKeys([...keys])
+  }
+
+  const deleteKey = (key: string) => {
+    askDeleteKeys([key])
   }
 
   /** 批量删除当前展开 db 的勾选 key:一次 db_redis_del 提交,成功后清空勾选并刷新。 */
-  const deleteSelected = async () => {
+  const deleteSelected = () => {
     const connId = connRef.current
     /* v8 ignore next -- 「删除所选」钮仅在连接后且展开 db 有勾选时渲染 */
     if (connId === null || expandedDb === null) return
     const keys = [...selectedFor(expandedDb)]
     /* v8 ignore next -- 勾选为 0 时按钮不渲染,守卫生不可达 */
     if (keys.length === 0) return
-    if (!window.confirm(`确定删除选中的 ${keys.length} 个 key?`)) return
+    askDeleteKeys(keys)
+  }
+
+  /** 确认删除:一次 db_redis_del 提交锁定清单,成功后清勾选/关值编辑器并刷新。 */
+  const confirmDeleteKeysNow = async () => {
+    const connId = connRef.current
+    const keys = confirmDeleteKeys
+    /* v8 ignore next -- 弹窗仅在连接后触发,守卫生不可达 */
+    if (connId === null || keys === null) return
     try {
       await redisDel(connId, keys)
-      notify(`已删除 ${keys.length} 个 key`)
-      setSelectedFor(expandedDb, EMPTY_SELECTED)
+      notify(keys.length === 1 ? `已删除:${keys[0]}` : `已删除 ${keys.length} 个 key`)
+      setSelectedFor(expandedDb ?? activeDb, EMPTY_SELECTED)
       setOpenValue(cur => (cur !== null && keys.includes(cur.key) ? null : cur))
+      setConfirmDeleteKeys(null)
       await refreshExpanded(connId)
     } catch (e: unknown) {
       /* v8 ignore next -- 宿主桥恒以 Error reject,String 兜底仅防御 */
@@ -1068,7 +1079,7 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                 {expandedDb !== null && selectedFor(expandedDb).size > 0 && (
                   <button type="button" className={css.dangerButton} data-testid="redis-delete-selected"
                     title="批量删除勾选的 key"
-                    onClick={() => void deleteSelected()}>删除所选 ({selectedFor(expandedDb).size})</button>
+                    onClick={deleteSelected}>删除所选 ({selectedFor(expandedDb).size})</button>
                 )}
                 <button type="button" className={css.primaryButton} title="新建 Key" aria-label="新建 Key"
                   disabled={!connected} onClick={() =>{  openNewKey() }}><IconPlusOutlineMedium size={14} /> 新建 Key</button>
@@ -1143,7 +1154,7 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                                     onCopy={key => void copyText(key, 'key 名')}
                                     onCopyValue={key => void copyKeyValue(key)}
                                     onRename={(key) => { setRenaming(key); setRenameTo(key) }}
-                                    onDelete={key => void deleteKey(key)}
+                                    onDelete={deleteKey}
                                     onToggleSelect={(key, checked) =>{  toggleKeySelected(db, key, checked) }}
                                     onToggleFolderSelect={(node2, checked) =>{  toggleFolderSelected(db, node2, checked) }} />
                                 ))}
@@ -1280,6 +1291,36 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                 <button type="button" className={css.secondaryButton} onClick={() =>{  setFlushConfirm(null) }}>取消</button>
                 <button type="button" className={css.dangerButton} disabled={flushInput.trim() !== String(flushConfirm)}
                   onClick={() => void flushDb(flushConfirm)}>清空</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 删除 key 二次确认(替代原生 confirm,与 FLUSHDB/新建同款弹窗):
+            清单在打开时锁定,取消即放弃;批量时展示前几个 key 与总数。 */}
+        {confirmDeleteKeys !== null && (
+          <div className={css.modalBackdrop}>
+            <div className={css.modal}>
+              <div className={css.modalTitle}>
+                {confirmDeleteKeys.length === 1 ? '删除 Key' : `删除 ${confirmDeleteKeys.length} 个 Key`}
+              </div>
+              <div className={css.placeholderDesc}>
+                {confirmDeleteKeys.length === 1
+                  ? `确定删除 key「${confirmDeleteKeys[0]}」?此操作不可恢复。`
+                  : `确定删除选中的 ${confirmDeleteKeys.length} 个 key?此操作不可恢复。`}
+              </div>
+              {confirmDeleteKeys.length > 1 && (
+                <div className={css.deleteKeyList}>
+                  {confirmDeleteKeys.slice(0, 8).map(k => <div key={k} className={css.deleteKeyItem} title={k}>{k}</div>)}
+                  {confirmDeleteKeys.length > 8 && (
+                    <div className={css.deleteKeyItem}>…等 {confirmDeleteKeys.length} 个</div>
+                  )}
+                </div>
+              )}
+              <div className={css.modalActions}>
+                <button type="button" className={css.secondaryButton} onClick={() =>{  setConfirmDeleteKeys(null) }}>取消</button>
+                <button type="button" className={css.dangerButton} data-testid="redis-confirm-delete"
+                  onClick={() => void confirmDeleteKeysNow()}>删除</button>
               </div>
             </div>
           </div>

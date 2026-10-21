@@ -117,6 +117,9 @@
 .modalBackdrop { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-mask-3); }
 .modal { display: flex; width: min(380px, calc(100vw - 32px)); flex-direction: column; gap: 10px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; padding: 16px; background: var(--dsw-alias-bg-layer-2); box-shadow: var(--dsw-shadow-lv3); }
 .modalTitle { color: var(--dsw-alias-label-primary); font-size: 14px; font-weight: 650; }
+/* 删除确认弹窗的 key 清单预览(批量时展示前若干个,超出折叠为计数)。 */
+.deleteKeyList { max-height: 132px; overflow-y: auto; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 6px 8px; background: var(--dsw-alias-bg-layer-2); }
+.deleteKeyItem { overflow: hidden; color: var(--dsw-alias-label-secondary); font-family: var(--ds-font-family-code); font-size: 11px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
 .modalActions { display: flex; justify-content: flex-end; gap: 8px; }
 /* 新建 key 弹窗:目标 DB / 类型选择器行。 */
 .modalFieldRow { display: flex; gap: 8px; }
