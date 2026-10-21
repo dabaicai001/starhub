@@ -17,16 +17,25 @@
  * - **加载态**:概览表格、索引详情在拉取中显示骨架/加载提示,不再是一片空白。
  * - **新建索引支持可选 mappings**:传 JSON 即带映射创建(旧版只建空索引)。
  *
+ * 本轮(ES 文档 CRUD 补齐):sidecar 的 db.es.getDocument / indexDocument /
+ * deleteDocument 早已实现,但缺 Rust 转发规格与前端封装,索引详情只能看映射、
+ * 摸不到文档。现在索引详情加**「文档」子页**:match_all 分页浏览(复用 search
+ * 的 from/size)、行内查看/编辑(整篇 index 替换,语义最直观)、新建(可省略
+ * _id 由 ES 分配)、删除(确认后刷新);顺带修掉三个小问题——删除「正在搜索中」
+ * 的索引后结果区不清空、esCount 死代码、概览索引行无右键菜单。
+ *
  * @module StarHub ES workbench (client)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { IconRefreshOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { RustAsset } from '../store.ts'
 import {
-  esClusterHealth, esConnect, esCreateIndex, esDeleteIndex, esDisconnect, esGetSettings, esGetMapping,
-  esListIndices, esSearch, type ClusterHealthInfo, type EsIndexInfo, type EsSearchResult,
+  esClusterHealth, esConnect, esCreateIndex, esDeleteDocument, esDeleteIndex, esDisconnect, esGetDocument, esGetSettings, esIndexDocument, esGetMapping,
+  esListIndices, esSearch, type ClusterHealthInfo, type EsDocumentInfo, type EsIndexInfo, type EsSearchResult,
 } from './es-service.ts'
 import { healthColor, fieldTypeColor } from './es-service.ts'
+import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
 import css from './ElasticsearchWorkbench.module.css'
 
 /** Connection state. */
@@ -112,6 +121,20 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
   const [mapping, setMapping] = useState<{ indexName: string; fields: MappingField[] } | null>(null)
   const [mappingLoading, setMappingLoading] = useState(false)
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null)
+  // 索引详情子页:映射 / 文档(文档子页走 db.es.* 文档 CRUD)。
+  const [indexSubTab, setIndexSubTab] = useState<'mapping' | 'documents'>('mapping')
+  const [docResult, setDocResult] = useState<EsSearchResult | null>(null)
+  const [docLoading, setDocLoading] = useState(false)
+  const [docFrom, setDocFrom] = useState(0)
+  const [docSize, setDocSize] = useState<number>(DEFAULT_PAGE_SIZE)
+  /** 文档编辑弹窗:create(新建,可省 id)/ edit(改已有文档,id 锁定)。 */
+  const [docEditor, setDocEditor] = useState<{ mode: 'create' } | { mode: 'edit'; id: string } | null>(null)
+  const [docIdText, setDocIdText] = useState('')
+  const [docBodyText, setDocBodyText] = useState('')
+  const [docBusy, setDocBusy] = useState(false)
+  const [docError, setDocError] = useState<string | null>(null)
+  /** 待删除的文档 id(确认弹窗)。 */
+  const [confirmDeleteDoc, setConfirmDeleteDoc] = useState<string | null>(null)
 
   const [showNewIndex, setShowNewIndex] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -213,9 +236,12 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
     searchIndexRef.current = name
     setSearchIndex(name)
     setTab('index')
+    setIndexSubTab('mapping')
     setMappingLoading(true)
     setMapping(null)
     setSettings(null)
+    setDocResult(null)
+    setDocFrom(0)
     /* v8 ignore next 1 -- 选择索引仅在有连接的概览行触发,无连接假分支不可达 */
     if (connRef.current !== null) {
       try {
@@ -230,6 +256,110 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
       }
     }
   }, [fail])
+
+  // ─── 文档子页(db.es.* 文档 CRUD) ───
+
+  /** 分页加载文档列表(match_all;复用 search 的 from/size,不另造轮子)。 */
+  const loadDocuments = useCallback(async (from: number, size: number) => {
+    const connId = connRef.current
+    /* v8 ignore next 1 -- 文档子页仅在有连接且选中索引时渲染 */
+    if (connId === null || selectedIndex === null) return
+    setDocLoading(true)
+    setError(null)
+    try {
+      const next = await esSearch(connId, selectedIndex, { query: { match_all: {} } }, from, size)
+      setDocResult(next)
+      setDocFrom(from)
+      setDocSize(size)
+    } catch (e) { fail(e) } finally {
+      setDocLoading(false)
+    }
+  }, [selectedIndex, fail])
+
+  /** 文档列表列:取当前页所有 hit 的字段并集(_id 恒在首列)。 */
+  const docColumns = useMemo(() => {
+    if (docResult === null || docResult.hits.length === 0) return []
+    const cols = new Set<string>(['_id'])
+    for (const hit of docResult.hits) for (const key of Object.keys(hit.source)) cols.add(key)
+    return Array.from(cols)
+  }, [docResult])
+
+  const openDocCreate = useCallback(() => {
+    setDocEditor({ mode: 'create' })
+    setDocIdText('')
+    setDocBodyText('{\n  \n}')
+    setDocError(null)
+  }, [])
+
+  const openDocEdit = useCallback(async (id: string) => {
+    const connId = connRef.current
+    /* v8 ignore next 1 -- 行内按钮仅在已连接时渲染 */
+    if (connId === null || selectedIndex === null) return
+    setDocError(null)
+    try {
+      const doc: EsDocumentInfo = await esGetDocument(connId, selectedIndex, id)
+      if (!doc.found) {
+        setError(`文档 ${id} 不存在(可能已被删除)`)
+        return
+      }
+      setDocEditor({ mode: 'edit', id })
+      setDocIdText(doc.id)
+      setDocBodyText(JSON.stringify(doc.source, null, 2))
+    } catch (e) { fail(e) }
+  }, [selectedIndex, fail])
+
+  /** 保存文档:整篇 index 替换(新建可省略 id,由 ES 分配)。 */
+  const saveDocument = useCallback(async () => {
+    const connId = connRef.current
+    /* v8 ignore next 1 -- 弹窗仅在已连接时开 */
+    if (connId === null || selectedIndex === null || docEditor === null) return
+    let body: Record<string, unknown>
+    try {
+      body = JSON.parse(docBodyText) as Record<string, unknown>
+    } catch {
+      setDocError('文档不是合法 JSON 对象')
+      return
+    }
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      setDocError('文档必须是 JSON 对象')
+      return
+    }
+    const id = docIdText.trim()
+    if (docEditor.mode === 'create' && id === '') {
+      // 新建且未填 id:交给 ES 分配(不传 id)。
+    }
+    setDocBusy(true)
+    setDocError(null)
+    try {
+      await esIndexDocument(connId, selectedIndex, body, docEditor.mode === 'edit' ? docEditor.id : (id === '' ? undefined : id))
+      setDocEditor(null)
+      await loadDocuments(docFrom, docSize)
+    } catch (e) {
+      setDocError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDocBusy(false)
+    }
+  }, [selectedIndex, docEditor, docBodyText, docIdText, docFrom, docSize, loadDocuments])
+
+  const deleteDocument = useCallback(async (id: string) => {
+    const connId = connRef.current
+    /* v8 ignore next 1 -- 确认弹窗仅在已连接时开 */
+    if (connId === null || selectedIndex === null) return
+    try {
+      await esDeleteDocument(connId, selectedIndex, id)
+      setConfirmDeleteDoc(null)
+      await loadDocuments(docFrom, docSize)
+    } catch (e) { fail(e) }
+  }, [selectedIndex, docFrom, docSize, loadDocuments, fail])
+
+  // 切到「文档」子页(或选中索引变化且停在文档页)时加载第一页。
+  useEffect(() => {
+    if (tab !== 'index' || indexSubTab !== 'documents' || selectedIndex === null) return
+    if (connRef.current === null) return
+    void loadDocuments(docFrom, docSize)
+    // 只在子页/索引切换时重载;翻页由分页按钮显式触发(避免 effect 循环)。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, indexSubTab, selectedIndex])
 
   /**
    * 执行 DSL 查询。from 与 size 显式传入(而非读闭包内的 state)——旧版
@@ -292,9 +422,17 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
     try {
       await esDeleteIndex(connRef.current, name)
       /* v8 ignore next 2 -- 删除的是已被选中/搜索中的索引时才清态;否则保留 */
-      if (selectedIndex === name) { setSelectedIndex(null); setMapping(null); setSettings(null) }
+      if (selectedIndex === name) { setSelectedIndex(null); setMapping(null); setSettings(null); setDocResult(null) }
       /* v8 ignore next 1 -- 删除的是搜索目标索引时才清 searchIndex */
-      if (searchIndex === name) setSearchIndex('')
+      if (searchIndex === name) {
+        setSearchIndex('')
+        searchIndexRef.current = ''
+        // 结果区还留着已删索引的 hits:一并清空,避免对不存在的索引分页。
+        setResult(null)
+        setSearchFrom(0)
+        // 该索引记忆的 DSL 随索引一起失效。
+        setDslByIndex(prev => { const next = new Map(prev); next.delete(name); return next })
+      }
       setConfirmDelete(null)
       await reloadIndices()
       setError(null)
@@ -343,7 +481,6 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
     const primitive = val as string | number | boolean | bigint | symbol
     return String(primitive)
   }, [])
-
   if (connState === 'connecting') {
     return <div className={css.frame}><div className={css.center}>正在连接…</div></div>
   }
@@ -400,13 +537,9 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
               <thead><tr><th>索引</th><th>文档数</th><th>存储</th><th>健康</th><th></th></tr></thead>
               <tbody>
                 {visibleIndices.map(idx => (
-                  <tr key={idx.name}>
-                    <td className={css.mono}><button type="button" className={css.link} onClick={() => void selectIndex(idx.name)}>{idx.name}</button></td>
-                    <td className={css.mono}>{idx.docsCount.toLocaleString()}</td>
-                    <td className={css.mono}>{idx.storeSize}</td>
-                    <td><span className={css.dot} style={{ background: healthColor(idx.health) }} />{idx.health}</td>
-                    <td><button type="button" className={css.dangerBtn} onClick={() =>{  setConfirmDelete(idx.name) }}>删除</button></td>
-                  </tr>
+                  <IndexRow key={idx.name} idx={idx}
+                    onOpen={(name) =>{  void selectIndex(name) }}
+                    onDelete={(name) =>{  setConfirmDelete(name) }} />
                 ))}
                 {visibleIndices.length === 0 && <tr><td colSpan={5} className={css.empty}>{indices.length === 0 ? '无索引' : '无匹配索引'}</td></tr>}
               </tbody>
@@ -492,13 +625,22 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
         </div>
       )}
 
-      {tab === 'index' && selectedIndex !== null && mapping !== null && (
+      {tab === 'index' && selectedIndex !== null && (
         <div className={css.body}>
           <div className={css.indicesHead}>
             <h3 className={css.sectionTitle}>{selectedIndex}</h3>
-            <button type="button" className={css.smallBtn} onClick={() => void selectIndex(selectedIndex)}>
-              <IconRefreshOutlineMedium size={11} /> 刷新
-            </button>
+            <div className={css.panelActions}>
+              <div className={css.subTabs}>
+                <button type="button" className={indexSubTab === 'mapping' ? css.subTabActive : css.subTab}
+                  onClick={() =>{  setIndexSubTab('mapping') }}>映射</button>
+                <button type="button" className={indexSubTab === 'documents' ? css.subTabActive : css.subTab}
+                  onClick={() =>{  setIndexSubTab('documents') }}>文档</button>
+              </div>
+              <button type="button" className={css.smallBtn}
+                onClick={() =>{  void (indexSubTab === 'documents' ? loadDocuments(docFrom, docSize) : selectIndex(selectedIndex)) }}>
+                <IconRefreshOutlineMedium size={11} /> 刷新
+              </button>
+            </div>
           </div>
           <div className={css.indexMeta}>
             <span className={css.muted}>
@@ -508,24 +650,115 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
               文档 {(selectedIndexRow?.docsCount ?? 0).toLocaleString()} 篇
             </span>
           </div>
-          <h4 className={css.subTitle}>映射</h4>
-          <div className={css.mappingTree}>
-            {mapping.fields.map(f => (
-              <MappingNode key={f.name} field={f} depth={0} />
-            ))}
-            {mapping.fields.length === 0 && <div className={css.empty}>该索引没有映射字段</div>}
-          </div>
-          {settings !== null && (
+
+          {indexSubTab === 'documents' ? (
+            <div className={css.docPanel}>
+              <div className={css.docToolbar}>
+                <label className={css.sizeLabel}>
+                  每页
+                  <select className={css.input} value={docSize} aria-label="文档每页条数"
+                    onChange={(e) =>{  void loadDocuments(0, Number(e.target.value)) }}>
+                    {PAGE_SIZES.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                  条
+                </label>
+                <span className={css.spacer2} />
+                <button type="button" className={css.primaryBtn} onClick={openDocCreate}>新建文档</button>
+              </div>
+              {docLoading && docResult === null && <div className={css.empty}>正在加载文档…</div>}
+              {!docLoading && docResult === null && <div className={css.empty}>无法加载文档</div>}
+              {docResult !== null && (
+                <>
+                  <div className={css.resultToolbar}>
+                    <span className={css.muted}>{docResult.totalHits.toLocaleString()} hits · {docResult.took}ms</span>
+                  </div>
+                  <div className={css.tableWrap}>
+                    <table className={css.table}>
+                      <thead><tr>{docColumns.map(c => <th key={c} className={css.mono}>{c}</th>)}<th></th></tr></thead>
+                      <tbody>
+                        {docResult.hits.map(hit => (
+                          <tr key={hit.id}>
+                            {docColumns.map(c => (
+                              <td key={c} className={css.mono}>{c === '_id' ? hit.id : docCellText(hit.source, c)}</td>
+                            ))}
+                            <td className={css.docActions}>
+                              <button type="button" className={css.smallBtn} onClick={() => void openDocEdit(hit.id)}>查看 / 编辑</button>
+                              <button type="button" className={css.dangerBtn} onClick={() =>{  setConfirmDeleteDoc(hit.id) }}>删除</button>
+                            </td>
+                          </tr>
+                        ))}
+                        {docResult.hits.length === 0 && <tr><td colSpan={docColumns.length + 1} className={css.empty}>该索引没有文档</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className={css.pagination}>
+                    <button type="button" className={css.smallBtn} disabled={docFrom === 0 || docLoading} onClick={() => void loadDocuments(Math.max(0, docFrom - docSize), docSize)}>上一页</button>
+                    <span className={css.mono}>
+                      {docFrom + 1}-{Math.min(docFrom + docSize, docResult.totalHits)} / {docResult.totalHits.toLocaleString()}
+                    </span>
+                    <button type="button" className={css.smallBtn} disabled={docFrom + docSize >= docResult.totalHits || docLoading} onClick={() => void loadDocuments(docFrom + docSize, docSize)}>下一页</button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
             <>
-              <h4 className={css.subTitle}>Settings</h4>
-              <pre className={css.jsonView}>{JSON.stringify(settings, null, 2)}</pre>
+              <h4 className={css.subTitle}>映射</h4>
+              <div className={css.mappingTree}>
+                {mapping?.fields.map(f => (
+                  <MappingNode key={f.name} field={f} depth={0} />
+                ))}
+                {mapping !== null && mapping.fields.length === 0 && <div className={css.empty}>该索引没有映射字段</div>}
+              </div>
+              {settings !== null && (
+                <>
+                  <h4 className={css.subTitle}>Settings</h4>
+                  <pre className={css.jsonView}>{JSON.stringify(settings, null, 2)}</pre>
+                </>
+              )}
             </>
           )}
         </div>
       )}
       {tab === 'index' && selectedIndex === null && <div className={`${css.body} ${css.empty}`}>从概览选择一个索引</div>}
-      {tab === 'index' && selectedIndex !== null && mappingLoading && mapping === null && (
+      {tab === 'index' && selectedIndex !== null && mappingLoading && mapping === null && indexSubTab === 'mapping' && (
         <div className={`${css.body} ${css.empty}`}>正在加载索引详情…</div>
+      )}
+
+      {/* 文档编辑弹窗:新建(可省 id,ES 分配)/ 编辑(id 锁定,整篇替换)。 */}
+      {docEditor !== null && selectedIndex !== null && (
+        <div className={css.backdrop}>
+          <div className={css.dialog}>
+            <p className={css.sectionTitle}>{docEditor.mode === 'create' ? `新建文档 · ${selectedIndex}` : `编辑文档 · ${docEditor.id}`}</p>
+            {docEditor.mode === 'create' && (
+              <input className={css.input} value={docIdText} placeholder="_id(留空由 ES 自动分配)" aria-label="文档 _id"
+                onChange={(e) =>{  setDocIdText(e.target.value) }} />
+            )}
+            <textarea className={`${css.input} ${css.docBodyInput}`} value={docBodyText} spellCheck={false}
+              aria-label="文档 JSON" placeholder={'{\n  "field": "value"\n}'}
+              onChange={(e) =>{  setDocBodyText(e.target.value) }} />
+            {docError !== null && <p className={css.error}>{docError}</p>}
+            <div className={css.dialogActions}>
+              <button type="button" className={css.smallBtn} onClick={() =>{  setDocEditor(null) }}>取消</button>
+              <button type="button" className={css.primaryBtn} disabled={docBusy} onClick={() => void saveDocument()}>
+                {docBusy ? '保存中…' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 删除文档二次确认。 */}
+      {confirmDeleteDoc !== null && (
+        <div className={css.backdrop}>
+          <div className={css.dialog}>
+            <p>确认删除文档 {confirmDeleteDoc}?此操作不可恢复。</p>
+            <div className={css.dialogActions}>
+              <button type="button" className={css.smallBtn} onClick={() =>{  setConfirmDeleteDoc(null) }}>取消</button>
+              <button type="button" className={css.dangerBtn} onClick={() => void deleteDocument(confirmDeleteDoc)}>删除</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showNewIndex && (
@@ -552,6 +785,15 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
   )
 }
 
+/** 文档表格单元格文本(与检索结果同规则:_id 由渲染层直取,对象 JSON 化)。 */
+function docCellText(source: Record<string, unknown>, field: string): string {
+  const val = source[field]
+  if (val === null || val === undefined) return ''
+  if (typeof val === 'object') return JSON.stringify(val)
+  const primitive = val as string | number | boolean | bigint | symbol
+  return String(primitive)
+}
+
 /** 递归渲染一个映射字段节点(按深度缩进,object/nested 的子字段全展开)。 */
 function MappingNode({ field, depth }: { field: MappingField; depth: number }) {
   const color = fieldTypeColor(field.type)
@@ -565,6 +807,45 @@ function MappingNode({ field, depth }: { field: MappingField; depth: number }) {
         <MappingNode key={ch.name} field={ch} depth={depth + 1} />
       ))}
     </>
+  )
+}
+
+/**
+ * 概览索引行:点名称进详情,右键菜单 = 查看详情 / 复制索引名 / 删除(与 MySQL
+ * 库行、Redis db 行同形态;旧版只有行尾一个删除按钮,无右键入口)。
+ * @param props - 索引行数据与动作回调。
+ * @returns 表格行(含右键菜单锚点)。
+ */
+function IndexRow({ idx, onOpen, onDelete }: {
+  idx: EsIndexInfo
+  onOpen: (name: string) => void
+  onDelete: (name: string) => void
+}) {
+  const menu = useContextMenu()
+  const items: readonly MenuEntry[] = [
+    { id: 'open', label: '查看详情' },
+    { id: 'copy', label: '复制索引名' },
+    { id: 'sep', type: 'separator' },
+    { id: 'delete', label: '删除索引', danger: true },
+  ]
+  return (
+    <tr onContextMenu={menu.onContextMenu}>
+      <td className={css.mono}><button type="button" className={css.link} onClick={() =>{  onOpen(idx.name) }}>{idx.name}</button></td>
+      <td className={css.mono}>{idx.docsCount.toLocaleString()}</td>
+      <td className={css.mono}>{idx.storeSize}</td>
+      <td><span className={css.dot} style={{ background: healthColor(idx.health) }} />{idx.health}</td>
+      <td><button type="button" className={css.dangerBtn} onClick={() =>{  onDelete(idx.name) }}>删除</button></td>
+      <ContextMenu
+        menu={menu}
+        items={items}
+        className={css.menuRoot}
+        onSelect={(id) => {
+          if (id === 'open') onOpen(idx.name)
+          else if (id === 'copy') void navigator.clipboard?.writeText(idx.name).catch(() => {})
+          else if (id === 'delete') onDelete(idx.name)
+        }}
+      />
+    </tr>
   )
 }
 

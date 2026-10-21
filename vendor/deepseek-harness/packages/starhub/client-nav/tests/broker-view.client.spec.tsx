@@ -232,6 +232,33 @@ describe('BrokerView', () => {
     }
   })
 
+  it('pauses and resumes the 30s auto-refresh from the header toggle', async () => {
+    vi.useFakeTimers()
+    const invoke = vi.fn((..._args: unknown[]) => Promise.resolve(kafkaOverview))
+    const restore = stubTauriInternals(invoke)
+    try {
+      render(<BrokerView asset={brokerAsset()} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(invoke).toHaveBeenCalledTimes(1)
+      // 默认开启:30s 后自动刷一次。
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000) })
+      expect(invoke).toHaveBeenCalledTimes(2)
+      // 暂停:再等 60s 不再自动刷(手动刷新按钮不受影响)。
+      const toggle = screen.getByRole('button', { name: '自动刷新' })
+      expect(toggle.getAttribute('aria-pressed')).toBe('true')
+      fireEvent.click(toggle)
+      expect(screen.getByRole('button', { name: '自动刷新' }).getAttribute('aria-pressed')).toBe('false')
+      await act(async () => { await vi.advanceTimersByTimeAsync(60000) })
+      expect(invoke).toHaveBeenCalledTimes(2)
+      // 恢复:下一个 30s 周期继续自动刷。
+      fireEvent.click(screen.getByRole('button', { name: '自动刷新' }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000) })
+      expect(invoke).toHaveBeenCalledTimes(3)
+    } finally {
+      restore()
+    }
+  })
+
   it('opens the topic detail dialog from a card and closes it', async () => {
     const restore = stubTauriInternals(() => Promise.resolve(kafkaOverview))
     try {

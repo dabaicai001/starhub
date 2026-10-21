@@ -68,6 +68,15 @@ export interface EsSearchHit {
   source: Record<string, unknown>
 }
 
+/** One document (GET by id 的结果;found=false 表示不存在/已删)。 */
+export interface EsDocumentInfo {
+  index: string
+  id: string
+  version: number
+  found: boolean
+  source: Record<string, unknown>
+}
+
 /** Search result envelope. */
 export interface EsSearchResult {
   took: number
@@ -171,16 +180,37 @@ export async function esSearch(
   return tauriInvoke('db_es_search', { connId, index, body, from, size })
 }
 
-/** Count documents matching an optional filter body.
+/** Get one document by id (索引详情「文档」子页的单文档查看)。
  * @param connId - the connection id.
  * @param index - the index name.
- * @param body - the optional filter body.
- * @returns the document count.
+ * @param id - the document id.
+ * @returns the document (found=false when missing).
  */
-export async function esCount(
-  connId: string, index: string, body?: Record<string, unknown>,
-): Promise<{ count: number }> {
-  return tauriInvoke('db_es_count', { connId, index, body })
+export async function esGetDocument(connId: string, index: string, id: string): Promise<EsDocumentInfo> {
+  return tauriInvoke('db_es_get_document', { connId, index, id })
+}
+
+/** Index (create or fully replace) a document; omit id to let ES assign one.
+ * @param connId - the connection id.
+ * @param index - the index name.
+ * @param body - the full document source.
+ * @param id - optional explicit document id.
+ * @returns an acknowledged result.
+ */
+export async function esIndexDocument(
+  connId: string, index: string, body: Record<string, unknown>, id?: string,
+): Promise<EsAcknowledgedResult> {
+  return tauriInvoke('db_es_index_document', { connId, index, body, ...(id !== undefined ? { id } : {}) })
+}
+
+/** Delete one document by id.
+ * @param connId - the connection id.
+ * @param index - the index name.
+ * @param id - the document id.
+ * @returns an acknowledged result.
+ */
+export async function esDeleteDocument(connId: string, index: string, id: string): Promise<EsAcknowledgedResult> {
+  return tauriInvoke('db_es_delete_document', { connId, index, id })
 }
 
 /** Pure helpers (unit-tested). */

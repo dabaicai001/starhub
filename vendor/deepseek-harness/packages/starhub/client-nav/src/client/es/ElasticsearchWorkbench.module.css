@@ -68,4 +68,17 @@
 .backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-mask-3); }
 .dialog { display: flex; min-width: 300px; flex-direction: column; gap: 12px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 7px; padding: 16px; background: var(--dsw-alias-bg-layer-2); box-shadow: var(--dsw-shadow-lv3); }
 .dialogActions { display: flex; justify-content: flex-end; gap: 8px; }
+/* 索引详情子页签(映射 / 文档)。 */
+.subTabs { display: inline-flex; gap: 2px; }
+.subTab { border: 1px solid transparent; border-radius: 5px; padding: 4px 12px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; font-family: inherit; font-size: 12px; }
+.subTab:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.subTabActive { border-color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent); color: var(--dsw-alias-state-business-primary); font-weight: 650; }
+/* 文档子页:工具条 + 行内操作列 + JSON 编辑框。 */
+.docPanel { display: flex; min-height: 0; flex: 1; flex-direction: column; }
+.docToolbar { display: flex; align-items: center; gap: 10px; padding: 4px 0 10px; }
+.spacer2 { flex: 1; }
+.docActions { display: flex; gap: 6px; white-space: nowrap; }
+.docBodyInput { min-height: 220px; resize: vertical; font-family: var(--ds-font-family-code); font-size: 11px; line-height: 1.5; }
+/* 右键菜单锚点包装(与 MySQL/Redis 行一致:空 span 不参与布局)。 */
+.menuRoot { display: contents; }
 @media (max-width: 800px) { .searchLayout { flex-direction: column; } .dslPanel { width: auto; min-width: 0; } }

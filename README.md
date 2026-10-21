@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.138.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.139.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,15 +59,9 @@
 
 ## 当前版本
 
-### v0.138.0 (2026-10-21)
-- ✨ ✨ **数据库网格行右键菜单扩充**:复制为 UPDATE(按主键定位)/ 复制为 JSON / **删除该行**(按主键走 `db_<prefix>_delete_rows`,成功后重载当前页)。`db_mysql_delete_rows` / `db_clickhouse_delete_rows` 此前只有 Go handler、缺 Rust 转发规格,前端不可达;本轮补齐(两族对称,命令表 93 条),纯函数 `rowToUpdate` / `rowToJson` 覆盖无主键/全主键/NULL 边界。
-- ✨ ✨ **Redis 键树补右键菜单**(MySQL 库/表行早有,Redis 一个都没有):key 行 = 打开 / 复制 key 名 / **复制 value** / 添加成员(结构类型)/ 重命名 / 删除;文件夹行 = 展开|收起 / 复制 key 前缀;db 行 = 新建 Key / 刷新 / 清空 DB(针对该行 db)。
-- ✨ ✨ **Redis 值编辑器快捷添加**:「新增成员」行从表格底部移到**顶部常驻**(sticky),输入框**回车即入表并保持焦点**(可连续追加);右键「添加成员」直达并聚焦新增行。string 仍走文本区(JSON 值有原文/格式化只读切换)。
-- ✨ ✨ **Redis stream 类型支持只读视图 + 新建**:sidecar `GetValue` 本就回传 stream 条目,但前端把 `{ID, Values}` 映射成空 field/value 行、保存静默无效——现在渲染 ID + 字段表的只读视图(增删改提示走 CLI XADD/XDEL/XTRIM),保存只应用 TTL;新建对话框与 `buildCreateKeyCommand` 支持 `XADD k * field value`;类型过滤补 stream。
-- 🐛 🐛 **Redis 新建 key 到「非展开库」的库漂移(P0,会误删数据)**:`createKey` 把持久连接 `redisSelect` 到目标库后不同步展开态——连接停在 dbN、UI 仍显示 dbM 的键列表,此后点旧库里的 key,读/删/改全落在 dbN 的同名 key 上。现在与 CLI SELECT 同路径:切库 + 展开态跟随 + 加载目标库键(看得见新建的 key),「UI 展示的库恒等于连接所在库」的不变量恢复。
-- 🐛 🐛 **Redis CLI 只读命令触发全库重扫**:`GET`/`KEYS`/`HGETALL` 等执行后旧版无脑 `refreshExpanded`,大库上每条只读命令都卡一次全量 SCAN。新增 `isMutatingRedisCommand` 动词表判定,只有写命令才同步键列表。
-- 🐛 🐛 **MySQL SQL 补全 schema 跨库串列**:`columnsByTable` 按裸表名缓存,`app.users` 与 `sys.users` 后展开者覆盖前者的列,补全补出另一个库的字段(与 v0.136.6 已修的「库.表」缓存隔离同源,补全这条漏了);`dropTable` 不清补全缓存、`onTableCreated` 用裸表名清。统一改 `tableStateKey` 键,schema 组装按当前执行库优先,并补 in-flight 守卫防重复请求。
-- 🐛 🐛 **Redis db 行右键「清空 DB」作用库不符**:菜单针对右键的 db,但 `askFlushDb` 取的是当前展开库/连接库;改为接受目标 db 参数。
+### v0.139.0 (2026-10-21)
+- ✨ ✨ **Elasticsearch 文档级 CRUD 打通**(索引详情新增「文档」子页):sidecar 的 `db.es.getDocument` / `indexDocument` / `deleteDocument` 早有实现,但缺 Rust 转发规格与前端封装,文档完全摸不到。现在补上三段链路:① Rust ui_db 加 3 条转发规格(必填参数有单测);② es-service 封装三个命令;③ 索引详情加「文档」子页——match_all 分页浏览(复用 search 的 from/size)、行内「查看 / 编辑」(按 id 取整篇,保存走整篇 index 替换,语义最直观)、「新建文档」(_id 可省略由 ES 分配,非法/非对象 JSON 前端拦截)、删除(二次确认后刷新)。顺带修掉三个小问题:删除「正在搜索中」的索引后结果区不再残留已删索引的 hits(连同该索引记忆的 DSL 一起清)、`esCount` 死代码连同 `ui.db_es_count` 转发规格一并移除、概览索引行补右键菜单(查看详情 / 复制索引名 / 删除索引)。
+- ✨ ✨ **Broker 自动刷新可暂停**:头部加开关(默认开,保持既有 30s 周期);大集群上全量拉取有成本,暂停只停定时器、不影响手动刷新。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

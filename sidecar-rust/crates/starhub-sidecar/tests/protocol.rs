@@ -677,15 +677,17 @@ fn capabilities_lists_the_android_method_surface() {
     );
     // 方法面总数:12(ssh/sftp + 全局)+ 15(db)+ 20(android)
     // + 5 桥命令 + 4 UI 面(资产 CRUD)+ 30 UI 面 B 组(交互会话)
-    // + 93 UI 面 C 组(数据面连接)+ 8 UI 面 D 组(审计/告警)
+    // + 95 UI 面 C 组(数据面连接)+ 8 UI 面 D 组(审计/告警)
     // + 4 UI 面 D 组(Android)+ 7 UI 面(密钥/宿主)
     // + 5 UI 面 M3(直播通道)+ 1 桥命令(live.endpoint)= 196
     // + 1 UI 面(`ui.open_external_url`,v0.133.1)= 197
     // + 5 UI 面 C 组 Redis 转发(slowlog/scanAll/bigkey/memoryAnalysis)= 202
     // + 2 UI 面 C 组 delete_rows 转发(mysql/clickhouse 行删除)= 204
+    // + 3 UI 面 C 组 ES 文档 CRUD 转发(get/index/delete document)= 207
+    // - 1 UI 面(`ui.db_es_count`,前端无消费方,随本次死代码清理移除)= 206
     // M4 定稿:AI 浏览器整体删除(16 个 browser_* 工具 + 4 个 ui.browser_* 设置),
     // 上游 dsh 原生提供 browser-use。
-    assert_eq!(methods.len(), 204, "方法面总数: {methods:?}");
+    assert_eq!(methods.len(), 206, "方法面总数: {methods:?}");
 }
 
 /// Android 方法面 roundtrip(不触设备的分支):未授权写操作硬错误;

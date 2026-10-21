@@ -2,9 +2,10 @@
  * Broker(Kafka / NSQ)状态工作台——React 壳内版。
  *
  * 自 `src/views/BrokerView.vue` 迁移(手册 P1 首个最小样本):结构保留、
- * class 换 dsw token、逻辑零改动。挂载即刷新 + 每 30 秒自动刷新;
- * 资产类型由 config.dbType 决定(kafka / nsq),连接参数取自资产配置,
- * 数据经共享 Tauri 桥调 Rust `broker_overview`。
+ * class 换 dsw token、逻辑零改动。挂载即刷新 + 每 30 秒自动刷新(头部开关可
+ * 暂停/恢复,大集群上全量拉取有成本);资产类型由 config.dbType 决定
+ * (kafka / nsq),连接参数取自资产配置,数据经共享 Tauri 桥调 Rust
+ * `broker_overview`。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
@@ -42,6 +43,8 @@ export function BrokerView({ asset }: BrokerViewProps) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sampleKey, setSampleKey] = useState(0)
+  // 30s 自动刷新开关(默认开,保持既有行为);大集群上全量拉取有成本,可手动停。
+  const [autoRefresh, setAutoRefresh] = useState(true)
 
   const refresh = useCallback(async () => {
     const host = typeof asset.config.host === 'string' ? asset.config.host : ''
@@ -74,12 +77,18 @@ export function BrokerView({ asset }: BrokerViewProps) {
     }
   }, [asset.config, kind])
 
-  // 挂载即刷新 + 每 30 秒自动刷新;卸载清定时器(Vue onMounted/onBeforeUnmount)。
+  // 挂载(或连接参数变化)即刷新一次;定时器独立成 effect——开关只决定定时器
+  // 是否存在,暂停时不应顺带触发一次刷新。
   useEffect(() => {
     void refresh()
+  }, [refresh])
+
+  // 自动刷新开时每 30s 一次;卸载 / 暂停时清定时器。手动刷新按钮不受开关影响。
+  useEffect(() => {
+    if (!autoRefresh) return
     const timer = window.setInterval(() => { void refresh() }, 30000)
     return () =>{  window.clearInterval(timer) }
-  }, [refresh])
+  }, [refresh, autoRefresh])
 
   const totalPartitions = useMemo(
     () => overview.resources.reduce((total, resource) => total + (resource.partitions || 0), 0),
@@ -135,6 +144,16 @@ export function BrokerView({ asset }: BrokerViewProps) {
           onClick={() => { void refresh() }}
         >
           <IconRefreshOutlineMedium size={14} className={refreshing ? css.spin : undefined} />
+        </button>
+        <button
+          type="button"
+          className={`${css.autoRefreshButton} ${autoRefresh ? css.autoRefreshOn : ''}`}
+          title={autoRefresh ? '自动刷新中(每 30 秒),点击暂停' : '自动刷新已暂停,点击开启(每 30 秒)'}
+          aria-label="自动刷新"
+          aria-pressed={autoRefresh}
+          onClick={() =>{  setAutoRefresh(v => !v) }}
+        >
+          {autoRefresh ? '自动 30s' : '已暂停'}
         </button>
       </div>
 

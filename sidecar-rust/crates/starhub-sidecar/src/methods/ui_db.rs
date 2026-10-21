@@ -66,7 +66,7 @@ pub struct Spec {
     required: &'static [&'static str],
 }
 
-/// C 组命令表(93 条):工作台 113 个命令里的数据面部分。
+/// C 组命令表(95 条):工作台 113 个命令里的数据面部分。
 ///
 /// mysql 与 clickhouse 两个族保持**完全对称**(前端 `cmdPrefix` 在两者间切换,
 /// 任何给一端加的命令另一端必须同时存在);postgres/sqlite/mssql 只有
@@ -491,11 +491,24 @@ pub const COMMANDS: &[Spec] = &[
         shape: Shape::Flat,
         required: &["connId", "index", "body"],
     },
+    // 文档级 CRUD(索引详情「文档」子页:浏览/查看/新建/删除单文档)。
     Spec {
-        command: "ui.db_es_count",
-        target: Target::Fixed("db.es.count"),
+        command: "ui.db_es_get_document",
+        target: Target::Fixed("db.es.getDocument"),
         shape: Shape::Flat,
-        required: &["connId", "index"],
+        required: &["connId", "index", "id"],
+    },
+    Spec {
+        command: "ui.db_es_index_document",
+        target: Target::Fixed("db.es.indexDocument"),
+        shape: Shape::Flat,
+        required: &["connId", "index", "body"],
+    },
+    Spec {
+        command: "ui.db_es_delete_document",
+        target: Target::Fixed("db.es.deleteDocument"),
+        shape: Shape::Flat,
+        required: &["connId", "index", "id"],
     },
     // ── Docker(21) ──
     Spec {
@@ -720,8 +733,8 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), before, "命令名重复:{names:?}");
         assert_eq!(
-            total, 93,
-            "C 组命令数(16+16+9+18+11+21+2),与 command_count() 一致"
+            total, 95,
+            "C 组命令数(16+16+9+18+13+21+2),与 command_count() 一致"
         );
         assert_eq!(total, command_count());
         for spec in COMMANDS {
@@ -832,6 +845,11 @@ mod tests {
                 "ui.db_mysql_delete_rows",
                 json!({ "connId": "c1", "table": "t" }),
                 "where",
+            ),
+            (
+                "ui.db_es_get_document",
+                json!({ "connId": "c1", "index": "i" }),
+                "id",
             ),
             (
                 "ui.docker_exec_session_write",

@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  esClusterHealth, esConnect, esCount, esCreateIndex, esDeleteIndex, esDisconnect,
+  esClusterHealth, esConnect, esCreateIndex, esDeleteDocument, esDeleteIndex, esDisconnect, esGetDocument, esIndexDocument,
   esGetSettings, esGetMapping, esListIndices, esSearch, fieldTypeColor, healthColor, indexRowOf,
 } from '../src/client/es/es-service.ts'
 import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
@@ -31,7 +31,9 @@ function recordingInvoke() {
       case 'db_es_create_index': return Promise.resolve({ acknowledged: true })
       case 'db_es_delete_index': return Promise.resolve({ acknowledged: true })
       case 'db_es_search': return Promise.resolve({ took: 1, timedOut: false, totalHits: 0, maxScore: null, hits: [], aggregations: {} })
-      case 'db_es_count': return Promise.resolve({ count: 3 })
+      case 'db_es_get_document': return Promise.resolve({ index: 'idx', id: 'd1', version: 1, found: true, source: { a: 1 } })
+      case 'db_es_index_document': return Promise.resolve({ acknowledged: true })
+      case 'db_es_delete_document': return Promise.resolve({ acknowledged: true })
       default: return Promise.resolve(null)
     }
   }
@@ -71,7 +73,7 @@ describe('es service commands', () => {
     }
   })
 
-  it('forwards create/delete/search/count with optional args', async () => {
+  it('forwards create/delete/search with optional args', async () => {
     const { call, calls } = recordingInvoke()
     const restore = stubInvoke(call)
     try {
@@ -83,10 +85,29 @@ describe('es service commands', () => {
 
       await esSearch('c1', 'idx', { query: {} }, 0, 20)
       expect(calls[2]).toEqual(['db_es_search', { connId: 'c1', index: 'idx', body: { query: {} }, from: 0, size: 20 }])
+    } finally {
+      restore()
+    }
+  })
 
-      const count = await esCount('c1', 'idx', { query: {} })
-      expect(calls[3]).toEqual(['db_es_count', { connId: 'c1', index: 'idx', body: { query: {} } }])
-      expect(count.count).toBe(3)
+  it('forwards document CRUD: get by id, index with/without id, delete by id', async () => {
+    const { call, calls } = recordingInvoke()
+    const restore = stubInvoke(call)
+    try {
+      const doc = await esGetDocument('c1', 'idx', 'd1')
+      expect(calls[0]).toEqual(['db_es_get_document', { connId: 'c1', index: 'idx', id: 'd1' }])
+      expect(doc.found).toBe(true)
+
+      // 带 id:整篇替换既有文档。
+      await esIndexDocument('c1', 'idx', { a: 2 }, 'd1')
+      expect(calls[1]).toEqual(['db_es_index_document', { connId: 'c1', index: 'idx', body: { a: 2 }, id: 'd1' }])
+
+      // 不带 id:不下发 id 字段(ES 自动分配)。
+      await esIndexDocument('c1', 'idx', { a: 3 })
+      expect(calls[2]).toEqual(['db_es_index_document', { connId: 'c1', index: 'idx', body: { a: 3 } }])
+
+      await esDeleteDocument('c1', 'idx', 'd1')
+      expect(calls[3]).toEqual(['db_es_delete_document', { connId: 'c1', index: 'idx', id: 'd1' }])
     } finally {
       restore()
     }

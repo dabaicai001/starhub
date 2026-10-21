@@ -563,7 +563,8 @@ describe('ElasticsearchWorkbench defensive paths', () => {
       await screen.findByText(/logs/)
       fireEvent.click(screen.getByText('logs'))
       // No fields → mapping section renders empty; settings rejected → hidden.
-      expect(await screen.findByText('映射')).toBeTruthy()
+      // 「映射」同时是子页按钮与区块标题,按 heading 角色取标题。
+      expect(await screen.findByRole('heading', { name: '映射' })).toBeTruthy()
       expect(calls).toContain('db_es_get_index_settings')
       expect(screen.queryByText('Settings')).toBeNull()
     } finally {
@@ -749,6 +750,175 @@ describe('ElasticsearchWorkbench close', () => {
       await screen.findByText('Elasticsearch · es-prod')
       fireEvent.click(screen.getByText('关闭'))
       expect(onClose).toHaveBeenCalled()
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe('ElasticsearchWorkbench 文档子页(db.es.* 文档 CRUD)', () => {
+  /** 带文档命令的 invoke 替身;search 同时服务检索页与文档列表。 */
+  function docInvoke() {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = (cmd: string, args?: Record<string, unknown>): unknown => {
+      calls.push([cmd, args ?? {}])
+      switch (cmd) {
+        case 'db_es_connect': return Promise.resolve({ connId: 'c1' })
+        case 'db_es_disconnect': return Promise.resolve(null)
+        case 'db_es_cluster_health': return Promise.resolve({ status: 'green', numberOfNodes: 1 })
+        case 'db_es_list_indices': return Promise.resolve([
+          { name: 'logs', docsCount: 2, storeSize: '1kb', health: 'green', status: 'open', primaryShards: 1, replicaShards: 0 },
+        ])
+        case 'db_es_get_index_mapping': return Promise.resolve({ indexName: 'logs', fields: [{ name: 'msg', type: 'text' }] })
+        case 'db_es_get_index_settings': return Promise.resolve({ index: { number_of_shards: '1' } })
+        case 'db_es_search': return Promise.resolve({
+          took: 1, timedOut: false, totalHits: 2, maxScore: null,
+          hits: [
+            { index: 'logs', id: 'doc-1', score: null, source: { msg: 'hello' } },
+            { index: 'logs', id: 'doc-2', score: null, source: { msg: 'world' } },
+          ],
+          aggregations: {},
+        })
+        case 'db_es_get_document': return Promise.resolve({ index: 'logs', id: 'doc-1', version: 3, found: true, source: { msg: 'hello' } })
+        case 'db_es_index_document': return Promise.resolve({ acknowledged: true })
+        case 'db_es_delete_document': return Promise.resolve({ acknowledged: true })
+        default: return Promise.resolve(null)
+      }
+    }
+    return { invoke, calls }
+  }
+
+  /** 连接 → 点索引进详情 → 切「文档」子页。 */
+  async function openDocuments() {
+    render(<ElasticsearchWorkbench asset={esAsset} onClose={vi.fn()} />)
+    await screen.findByText(/logs/)
+    fireEvent.click(screen.getByText('logs'))
+    fireEvent.click(await screen.findByRole('button', { name: '文档' }))
+  }
+
+  it('lists documents paged and pages without re-querying from scratch', async () => {
+    const { invoke, calls } = docInvoke()
+    const restore = stubInvoke(invoke)
+    try {
+      await openDocuments()
+      // 文档列表走 db_es_search(match_all, from/size 显式)。
+      await waitFor(() =>{  expect(calls.some(([c, a]) => c === 'db_es_search' && a.index === 'logs' && (a.body as { query: unknown }).query !== undefined)).toBe(true) })
+      expect(await screen.findByText('doc-1')).toBeTruthy()
+      expect(screen.getByText('doc-2')).toBeTruthy()
+      expect(screen.getByText(/2 hits/)).toBeTruthy()
+      // 翻页:from 前进一页。
+      const searchCallsBefore = calls.filter(([c]) => c === 'db_es_search').length
+      fireEvent.change(screen.getByLabelText('文档每页条数'), { target: { value: '10' } })
+      await waitFor(() =>{  expect(calls.filter(([c]) => c === 'db_es_search').length).toBeGreaterThan(searchCallsBefore) })
+    } finally {
+      restore()
+    }
+  })
+
+  it('edits a document: loads it by id and saves via index (full replace)', async () => {
+    const { invoke, calls } = docInvoke()
+    const restore = stubInvoke(invoke)
+    try {
+      await openDocuments()
+      await screen.findByText('doc-1')
+      fireEvent.click(screen.getAllByText('查看 / 编辑')[0]!)
+      // 先按 id 取整篇;编辑态标题明示 id(不渲染可改的 _id 输入)。
+      await waitFor(() =>{  expect(calls.some(([c, a]) => c === 'db_es_get_document' && a.id === 'doc-1')).toBe(true) })
+      expect(screen.getByText(/编辑文档 · doc-1/)).toBeTruthy()
+      expect(screen.queryByLabelText('文档 _id')).toBeNull()
+      // 改内容 → 保存 → index_document 带原 id 与整篇 body。
+      const body = screen.getByLabelText('文档 JSON')
+      fireEvent.change(body, { target: { value: '{"msg":"edited"}' } })
+      fireEvent.click(screen.getByText('保存'))
+      await waitFor(() =>{  expect(calls.some(([c, a]) => c === 'db_es_index_document' && a.id === 'doc-1' && (a.body as { msg: string }).msg === 'edited')).toBe(true) })
+      // 保存后刷新列表(再来一次 search)。
+      await waitFor(() =>{  expect(calls.filter(([c]) => c === 'db_es_search').length).toBeGreaterThan(1) })
+    } finally {
+      restore()
+    }
+  })
+
+  it('creates a document without an id (ES assigns it) and rejects non-object JSON', async () => {
+    const { invoke, calls } = docInvoke()
+    const restore = stubInvoke(invoke)
+    try {
+      await openDocuments()
+      await screen.findByText('doc-1')
+      fireEvent.click(screen.getByText('新建文档'))
+      // 不填 _id:保存时不下发 id(由 ES 分配)。
+      fireEvent.change(screen.getByLabelText('文档 JSON'), { target: { value: '{"msg":"new"}' } })
+      fireEvent.click(screen.getByText('保存'))
+      await waitFor(() =>{  expect(calls.some(([c, a]) => c === 'db_es_index_document' && a.body !== undefined && !('id' in a))).toBe(true) })
+      // 非法 JSON:前端拦截,不下发。
+      const before = calls.filter(([c]) => c === 'db_es_index_document').length
+      fireEvent.click(screen.getByText('新建文档'))
+      fireEvent.change(screen.getByLabelText('文档 JSON'), { target: { value: '[1,2]' } })
+      fireEvent.click(screen.getByText('保存'))
+      await waitFor(() =>{  expect(screen.getByText('文档必须是 JSON 对象')).toBeTruthy() })
+      expect(calls.filter(([c]) => c === 'db_es_index_document').length).toBe(before)
+    } finally {
+      restore()
+    }
+  })
+
+  it('deletes a document after confirm and refreshes the list', async () => {
+    const { invoke, calls } = docInvoke()
+    const restore = stubInvoke(invoke)
+    try {
+      await openDocuments()
+      await screen.findByText('doc-1')
+      fireEvent.click(screen.getAllByText('删除')[0]!)
+      // 确认弹窗:目标 id 明示;弹窗里的「删除」是最后一个同名按钮。
+      await waitFor(() =>{  expect(screen.getByText(/确认删除文档 doc-1/)).toBeTruthy() })
+      const confirmBtn = screen.getAllByText('删除', { selector: 'button' }).at(-1)!
+      fireEvent.click(confirmBtn)
+      await waitFor(() =>{  expect(calls.some(([c, a]) => c === 'db_es_delete_document' && a.id === 'doc-1')).toBe(true) })
+    } finally {
+      restore()
+    }
+  })
+
+  it('right-clicks an overview index row for open / copy / delete', async () => {
+    const { invoke, calls } = docInvoke()
+    const restore = stubInvoke(invoke)
+    try {
+      render(<ElasticsearchWorkbench asset={esAsset} onClose={vi.fn()} />)
+      await screen.findByText(/logs/)
+      // 右键索引行 → 菜单(查看详情 / 复制索引名 / 删除索引)。
+      const row = screen.getByText('logs').closest('tr') as HTMLElement
+      fireEvent.contextMenu(row)
+      await waitFor(() =>{  expect(screen.getByText('查看详情')).toBeTruthy() })
+      expect(screen.getByText('复制索引名')).toBeTruthy()
+      // 删除走确认弹窗(与行尾按钮同路径)。
+      fireEvent.click(screen.getByText('删除索引'))
+      await waitFor(() =>{  expect(screen.getByText(/确认删除索引 logs/)).toBeTruthy() })
+      expect(calls.some(([c]) => c === 'db_es_delete_index')).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
+  it('clears the search result when deleting the index being searched', async () => {
+    const { invoke, calls } = docInvoke()
+    const restore = stubInvoke(invoke)
+    try {
+      render(<ElasticsearchWorkbench asset={esAsset} onClose={vi.fn()} />)
+      await screen.findByText(/logs/)
+      // 检索页选中 logs 并执行,拿到结果。
+      fireEvent.click(screen.getByRole('button', { name: '检索' }))
+      fireEvent.change(screen.getByLabelText('目标索引'), { target: { value: 'logs' } })
+      fireEvent.click(screen.getByRole('button', { name: '执行查询' }))
+      await waitFor(() =>{  expect(screen.getByText(/2 hits/)).toBeTruthy() })
+      // 回概览删除 logs:结果区清空(旧版残留已删索引的 hits)。
+      fireEvent.click(screen.getByRole('button', { name: '概览' }))
+      fireEvent.click(screen.getAllByText('删除', { selector: 'button' })[0]!)
+      await waitFor(() =>{  expect(screen.getByText(/确认删除索引 logs/)).toBeTruthy() })
+      // 确认弹窗里的「删除」是当前最后一个同名按钮。
+      fireEvent.click(screen.getAllByText('删除', { selector: 'button' }).at(-1)!)
+      await waitFor(() =>{  expect(calls.some(([c]) => c === 'db_es_delete_index')).toBe(true) })
+      fireEvent.click(screen.getByRole('button', { name: '检索' }))
+      await waitFor(() =>{  expect(screen.getByText('输入 DSL 并执行查询')).toBeTruthy() })
+      expect(screen.queryByText(/2 hits/)).toBeNull()
     } finally {
       restore()
     }

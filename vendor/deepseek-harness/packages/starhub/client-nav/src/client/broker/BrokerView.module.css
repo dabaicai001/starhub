@@ -104,6 +104,33 @@
   cursor: default;
 }
 
+/* 自动刷新开关:开启=主色描边胶囊,暂停=弱化。 */
+.autoRefreshButton {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  flex: none;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 13px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.autoRefreshButton:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.autoRefreshOn {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }
