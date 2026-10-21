@@ -164,7 +164,9 @@ describe('SshTerminalOverlay', () => {
     ;(globalThis as unknown as { ResizeObserver: typeof ResizeObserverMock }).ResizeObserver = ResizeObserverMock
     const { unmount } = render(<SshTerminalOverlay asset={asset} onClose={vi.fn()} />)
     await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('ssh_connect', {
+      // v0.140.0:assetId 随连接下发,AI 域工具据此复用本会话(不自建连接)。
       id: SESSION_ID,
+      assetId: 'ssh-1',
       config: {
         host: '10.0.0.5',
         port: 22,
@@ -503,6 +505,7 @@ describe('SshTerminalOverlay', () => {
     const { unmount } = render(<SshTerminalOverlay asset={mfaAsset} onClose={vi.fn()} />)
     await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('ssh_connect', {
       id: SESSION_ID,
+      assetId: 'ssh-1',
       config: expect.objectContaining({
         authMode: 'mfa',
         mfaEnabled: true,

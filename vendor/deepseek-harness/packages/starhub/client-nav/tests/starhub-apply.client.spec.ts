@@ -30,7 +30,6 @@ import { StarHubToolWorkspace } from '../src/client/StarHubToolWorkspace.tsx'
 import { StarHubWorkbenchPanel } from '../src/client/StarHubWorkbenchPanel.tsx'
 import { StarHubLivePanel } from '../src/client/live/StarHubLivePanel.tsx'
 import { ExecDrawerButton } from '../src/client/conn/ExecDrawerButton.tsx'
-import { StarHubConnCard } from '../src/client/conn/StarHubConnCard.tsx'
 import { AndroidSettingsTab } from '../src/client/settings/android.tsx'
 import { SshSettingsTab } from '../src/client/settings/ssh.tsx'
 import { STARHUB_ASSET_SOURCE } from '../src/client/asset-source.ts'
@@ -125,15 +124,17 @@ describe('client-nav apply (rc.2)', () => {
   it('registers the rc.2 slots with their components in order', () => {
     const { ctx, inject, register } = fakeContext()
     applyPlugin(ctx)
+    // v0.140.0:主壳 AI 连接卡(StarHubConnCard)随「AI 复用用户终端会话」
+    // 模型退役,shell.overlay 只剩 StarHubOverlay 一个席位。
     expect(inject.mock.calls.map(c => c[0])).toEqual([
-      'shell.overlay', 'shell.overlay',
+      'shell.overlay',
       'sidebar.panellist', 'main', 'main', 'main',
       'conversation.session.header.actions',
       'settings.section', 'settings.section',
     ])
     const components = register.mock.calls.map(c => c[1])
     expect(components).toEqual([
-      StarHubOverlay, StarHubConnCard,
+      StarHubOverlay,
       ToolsPanelIcon, StarHubToolWorkspace, StarHubWorkbenchPanel, StarHubLivePanel,
       ExecDrawerButton,
       AndroidSettingsTab, SshSettingsTab,

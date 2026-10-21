@@ -17,9 +17,14 @@ import {
 import type { ExecRecord } from './exec-records.ts'
 import css from './ExecRecordList.module.css'
 
-/** sessionId → 行首展示名:`dsh:{assetId}:ssh` → `assetId`。 */
+/**
+ * sessionId → 行首展示名。两种形态都认:
+ * - 终端会话 id(v0.140.0 起,AI 复用用户连接):`<assetId>__<随机后缀>` → `assetId`;
+ * - 历史 AI exec 连接 id:`dsh:{assetId}:ssh` → `assetId`(兼容旧记录)。
+ */
 function assetName(sessionId: string): string {
-  return sessionId.replace(/^dsh:/, '').replace(/:ssh$/, '')
+  const legacy = sessionId.replace(/^dsh:/, '').replace(/:ssh$/, '')
+  return legacy.split('__')[0] ?? legacy
 }
 
 /** 记录时间展示(HH:MM:SS)。 */
@@ -80,7 +85,7 @@ export function ExecRecordList({ records, onClose, onClear, onDisconnect }: {
       <div className={css.list} role="region" aria-label="SSH 执行记录列表">
         {records.length === 0 && (
           <div className={css.status}>
-            暂无记录。当前会话中,AI 通过 @ 绑定的 SSH 资产静默执行命令后,每次完成都会在这里出现一条。
+            暂无记录。当前会话中,AI 在你已连接的 SSH 终端会话上执行只读命令后,每次完成都会在这里出现一条。
           </div>
         )}
         {records.map(record => {

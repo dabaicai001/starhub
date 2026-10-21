@@ -44,7 +44,6 @@ import {
   createConnectionManagerOverlay, createStarHubAssets, createToolSelectionBridge,
   type RustAsset,
 } from './store.ts'
-import { StarHubConnCard } from './conn/StarHubConnCard.tsx'
 import { ExecDrawerButton } from './conn/ExecDrawerButton.tsx'
 import { createExecRecordsBridge, subscribeSshExecEvents } from './conn/exec-records.ts'
 import { assetSubtitle, assetWindowUrl, type StarHubAsset } from './sections.ts'
@@ -201,17 +200,10 @@ export function apply(ctx: Context): void {
       },
     }),
   }, StarHubOverlay))
-  // 主壳 AI 连接卡(v0.99.0 整体重构):合并 MFA 验证卡与堡垒机选机器浮层为
-  // 一张统一连接卡。组件级监听请求/结束信号(ssh:kb-interactive /
-  // ssh:bastion-select / ssh:bastion-done),不随浮层重挂载丢失,修复「命令
-  // 已执行但按钮卡住/浮层不关」;同一时刻至多一张卡(互斥)。
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'shell.overlay',
-    id: 'starhub-conn-card',
-    order: 115,
-    label: 'StarHub ConnCard',
-  }, StarHubConnCard))
   // 沙箱桌面「请求人工介入」横幅随沙箱桌面域整体退役(v0.132.0)。
+  // 主壳 AI 连接卡(StarHubConnCard)随 v0.140.0「AI 复用用户终端会话」模型
+  // 一并退役:AI 不再持有连接,MFA / 堡垒机选机器 / 主机密钥提示只属于
+  // 用户自己的终端页,壳内不再需要第二张验证卡。
   const workspaceInject = (): StarHubToolWorkspaceInjected => ({
     openAsset: openAssetPage,
     refreshAssets: assets.refresh,

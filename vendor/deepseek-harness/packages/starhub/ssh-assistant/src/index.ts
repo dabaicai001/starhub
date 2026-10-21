@@ -7,7 +7,7 @@
  * provider/key/model,助手 therefore 复用同一套模型连接,面板可临时切换),
  * creation window 里把工具面 `restrict` 到本资产的 SSH/SFTP 8 个工具并经
  * 桥 `starhub/bind.asset` 绑定资产(sidecar 的 `resolve_asset_id` 因此自动
- * 路由,`ensure_ssh_session` 复用该资产已有的 AI exec 连接)。
+ * 路由;命令执行在用户终端页已连接的会话上,AI 不自建连接,v0.140.0)。
  *
  * 会话打上 StarHub 自有的本地 cwd(Config `sessionCwd`):没有 cwd 的会话
  * 拼不出系统提示的 {{cwd}} 段(回合在第 1 步静默失败、面板无响应),且被
@@ -21,6 +21,8 @@
  * 审批:助手会话的 `approval/request` 由本插件 prepend 承接——经 SSE 推给
  * 面板、面板 POST 决策;面板没在流上时交回链尾(壳内审批 UI 不受影响)。
  * 风险分级仍归 starhub-approval-bridge 的风险门(只读放行、写/风险 ask)。
+ * MFA/堡垒机/主机密钥验证卡不再出现在助手侧:AI 不持有连接,这些提示只
+ * 属于用户自己的终端页(v0.140.0)。
  *
  * @module @deepseek-ai/dsh-starhub-ssh-assistant
  */
@@ -42,7 +44,6 @@ import type {} from '@deepseek-ai/dsh-llm'
 import { AssistantRegistry } from './registry.ts'
 import {
   ASSISTANT_ROUTES,
-  activeConnsHandler,
   approvalHandler,
   closeHandler,
   modelHandler,
@@ -67,7 +68,6 @@ const BIND_ASSET_METHOD = 'starhub/bind.asset'
 
 /** Private host service names resolved through `ctx.get` (not declared merges). */
 const SDK_TRANSPORT_SERVICE = 'sdk-transport'
-const SDK_NOTIFICATIONS_SERVICE = 'sdk-notifications'
 const AGENT_DEFAULT_MODEL_SERVICE = 'agentDefaultModel'
 const SESSION_TITLE_SERVICE = 'sessionTitle'
 
@@ -146,16 +146,6 @@ export function apply(ctx: Context, config: AssistantConfig = {}): void {
       const models = await ctx.llm.listModels(provider)
       return models.some(entry => entry.id === model)
     },
-    subscribeNotification: (method, handler) => {
-      // 连接验证卡事件走 bridge 的通知 hub(sidecar 的 starhub/domain-event
-      // 按内层事件名分发);缺失时返回 no-op 退订——助手仍可用,只是 MFA/堡垒机
-      // 卡回落壳内连接卡(与插件未加载时同一体验)。
-      const hub = ctx.get(SDK_NOTIFICATIONS_SERVICE) as {
-        subscribe(method: string, handler: (params: object) => void): () => void
-      } | undefined
-      if (hub === undefined) return () => undefined
-      return hub.subscribe(method, handler)
-    },
   })
 
   // 会话事件流:助手会话的 durable log 原样转发给面板(用户/助手消息、
@@ -218,7 +208,6 @@ export function apply(ctx: Context, config: AssistantConfig = {}): void {
     { path: ASSISTANT_ROUTES.model, handler: modelHandler(deps) },
     { path: ASSISTANT_ROUTES.approval, handler: approvalHandler(deps) },
     { path: ASSISTANT_ROUTES.models, handler: modelsHandler(deps) },
-    { path: ASSISTANT_ROUTES.activeConns, handler: activeConnsHandler(deps) },
     { path: ASSISTANT_ROUTES.stream, handler: streamHandler(deps) },
   ]
   for (const route of routes) {

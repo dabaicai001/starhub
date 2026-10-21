@@ -2,12 +2,14 @@
  * starhub-ssh-assistant 测试:注册表簿记(假 host)+ 真实组合(真 AgentLoop
  * + 脚本化 mock adapter,走真实 HTTP 路由驱动一整回合)。
  *
- * 组合层钉死三件事:
+ * 组合层钉死四件事:
  * 1. 助手会话的工具面被 restrict 到 SSH/SFTP——调用未授权工具(bash)拿到
  *    工具错误,授权工具(ssh_exec)正常执行并回 tool/result;
  * 2. durable log 事件经 SSE 路由原样到达面板客户端(晚到客户端先收重放);
  * 3. 助手会话的 approval/request 由本插件承接:SSE 推卡 → 面板结算 →
- *    工具放行;非助手会话原样交回链尾。
+ *    工具放行;非助手会话原样交回链尾;
+ * 4. 助手**不持有连接**(v0.140.0):不订阅任何连接验证卡事件,MFA /
+ *    堡垒机选机器 / 主机密钥提示只属于用户自己的终端页。
  */
 
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -27,8 +29,9 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import * as plugin from '../src/index.ts'
-import { AssistantRegistry, aiConnId, connFrame, type AssistantHost } from '../src/registry.ts'
+import { AssistantRegistry, type AssistantHost } from '../src/registry.ts'
 import { decodeAssistantFrame, type AssistantFrame } from '../src/frames.ts'
+import { ASSISTANT_TOOLS, assistantPersona } from '../src/persona.ts'
 
 // ── 假 host(注册表簿记单测)───────────────────────────────────────
 
@@ -57,21 +60,18 @@ function fakeHost(): AssistantHost & {
   bindings: Array<[string, string]>
   created: CreateAgentOptions[]
   renames: Array<[string, string]>
-  notifications: Map<string, (params: object) => void>
 } {
   const agents = new Map<string, FakeAgent>()
   const disposed: string[] = []
   const bindings: Array<[string, string]> = []
   const created: CreateAgentOptions[] = []
   const renames: Array<[string, string]> = []
-  const notifications = new Map<string, (params: object) => void>()
   return {
     agents,
     disposed,
     bindings,
     created,
     renames,
-    notifications,
     sessionCwd: '/tmp/starhub-ssh-assistant-test',
     createAgent(options: CreateAgentOptions): Promise<AgentHandle> {
       const id = String(options.sessionId)
@@ -100,10 +100,6 @@ function fakeHost(): AssistantHost & {
     defaultSelection() { return { provider: 'mock', model: 'mock-model' } },
     modelExists(provider: string, model: string): Promise<boolean> {
       return Promise.resolve(provider === 'mock' && model === 'mock-model')
-    },
-    subscribeNotification(method: string, handler: (params: object) => void): () => void {
-      notifications.set(method, handler)
-      return () => { notifications.delete(method) }
     },
   }
 }
@@ -201,54 +197,32 @@ describe('AssistantRegistry bookkeeping', () => {
     await expect(registry.setModel(assistantId, 'mock', 'nope')).rejects.toThrow('当前不可用')
   })
 
-  it('routes the asset AI-exec connection cards to the panel', async () => {
+  it('owns no connection: subscribes to no verification-card events (v0.140.0)', async () => {
+    // 新模型:AI 复用用户终端会话,不自建连接——注册表因此不再订阅任何
+    // sidecar 连接验证卡事件(MFA / 堡垒机 / 主机密钥), AssistantHost 面上
+    // 也不再出现 subscribeNotification。
     const host = fakeHost()
     const registry = new AssistantRegistry(host)
     const { assistantId } = await registry.open({ sshSessionId: 's1', assetId: 'a1', assetName: 'server' })
-    // 订阅精确事件(connId = dsh:a1:ssh,与 Rust ai_conn_id 对齐)。
-    expect(host.notifications.has('ssh:kb-interactive:dsh:a1:ssh')).toBe(true)
-    expect(host.notifications.has('ssh:hostkey-confirm:dsh:a1:ssh')).toBe(true)
-    const frames: AssistantFrame[] = []
-    registry.attach(assistantId, frame => frames.push(frame))
-
-    host.notifications.get('ssh:kb-interactive:dsh:a1:ssh')?.({
-      sessionId: 'dsh:a1:ssh',
-      instructions: 'Verification code',
-      prompts: [{ prompt: 'Password', echo: false }],
-      autoFill: [null],
-    })
-    const kb = frames.find(frame => frame.t === 'kb-interactive')
-    expect(kb).toMatchObject({ t: 'kb-interactive', connId: 'dsh:a1:ssh', instructions: 'Verification code' })
-
-    // 晚到客户端:重推挂起的 MFA 卡。
-    const late: AssistantFrame[] = []
-    registry.attach(assistantId, frame => late.push(frame))
-    expect(late.some(frame => frame.t === 'kb-interactive')).toBe(true)
-
-    // 连接成功 → 卡关闭;不再重推。
-    host.notifications.get('ssh:mfa-connected:dsh:a1:ssh')?.({})
-    const latest: AssistantFrame[] = []
-    registry.attach(assistantId, frame => latest.push(frame))
-    expect(latest.some(frame => frame.t === 'kb-interactive')).toBe(false)
-
-    // 堡垒机输出帧原样透传字节。
-    host.notifications.get('ssh:bastion-output:dsh:a1:ssh')?.([104, 105])
-    const out = frames.find(frame => frame.t === 'bastion-output')
-    expect(out).toMatchObject({ t: 'bastion-output', connId: 'dsh:a1:ssh', bytes: [104, 105] })
-
-    // active-conns 只报有面板客户端的连接。
-    expect(registry.activeConns()).toEqual(['dsh:a1:ssh'])
+    expect('subscribeNotification' in host).toBe(false)
+    // 生命周期照旧:关闭不抛、会话释放。
     await registry.close(assistantId)
-    expect(registry.activeConns()).toEqual([])
-    expect(host.notifications.size).toBe(0)
+    expect(host.agents.size).toBe(0)
   })
 
-  it('drops notifications for unknown connection events', () => {
-    expect(aiConnId('a1')).toBe('dsh:a1:ssh')
-    expect(connFrame('nope', 'dsh:a1:ssh', {})).toBeNull()
-    expect(connFrame('hostkey', 'dsh:a1:ssh', {})).toBeNull()
-    expect(connFrame('bastion-output', 'dsh:a1:ssh', 'not-array' as unknown as object)).toMatchObject({ bytes: [] })
-    expect(connFrame('bastion-done', 'dsh:a1:ssh', {})).toEqual({ t: 'bastion-done', connId: 'dsh:a1:ssh' })
+  it('persona encodes the reuse-connection and read-only rules (v0.140.0)', () => {
+    const persona = assistantPersona('web-01')
+    // 复用用户连接 / 未连接提示去连
+    expect(persona).toContain('never open your own connection')
+    expect(persona).toContain('open the SSH terminal page')
+    // 自主只读;写操作交回人工
+    expect(persona).toContain('read-only commands on your own initiative')
+    expect(persona).toContain('hands it back to you')
+    // 工具面仍是 8 个 SSH/SFTP 工具
+    expect(ASSISTANT_TOOLS).toEqual([
+      'ssh_exec', 'ssh_exec_background', 'ssh_wait_task', 'ssh_session_status',
+      'sftp_list', 'sftp_stat', 'sftp_upload', 'sftp_download',
+    ])
   })
 })
 
@@ -433,14 +407,6 @@ async function mounted(options: { script: () => StreamChunk[][] }) {
       return { title, source: { kind: 'user' } }
     },
   })
-  // 假 sdk-notifications:记录订阅,测试可手动派发精确事件。
-  const notifications = new Map<string, (params: object) => void>()
-  ctx.provide('sdk-notifications', {
-    subscribe(method: string, handler: (params: object) => void) {
-      notifications.set(method, handler)
-      return () => { notifications.delete(method) }
-    },
-  })
   // sessionCwd 走插件 Config 指到临时目录:缺省会 mkdir 到真实用户目录。
   const sessionCwd = mkdtempSync(join(tmpdir(), 'starhub-ssh-assistant-'))
   onTestFinished(() =>{  rmSync(sessionCwd, { recursive: true, force: true }) })
@@ -467,7 +433,7 @@ async function mounted(options: { script: () => StreamChunk[][] }) {
     await handler(fakeRequest('GET', `/starhub/api/assistant/stream?assistantId=${assistantId}`), res)
     return { frames: () => res.frames(), res }
   }
-  return { ctx, adapter, routes, bridgeCalls, ran, notifications, renames, sessionCwd, post, get, stream }
+  return { ctx, adapter, routes, bridgeCalls, ran, renames, sessionCwd, post, get, stream }
 }
 
 describe('starhub-ssh-assistant composition', () => {
@@ -628,27 +594,19 @@ describe('starhub-ssh-assistant composition', () => {
     expect((res as { providers: Array<{ provider: string; models: Array<{ id: string }> }> }).providers[0]?.models[0]?.id).toBe('mock-model')
   })
 
-  it('forwards the asset connection card to the panel and reports active conns', async () => {
+  it('registers no connection-card routes (AI owns no connection, v0.140.0)', async () => {
+    // 新模型:active-conns 路由随连接卡机制一并移除;路由面只剩
+    // open/prompt/stop/close/model/approval/models/stream。
     const host = await mounted({ script: () => [[...textResponse('done')]] })
-    const opened = await host.post('/starhub/api/assistant/open', {
-      sshSessionId: 's1', assetId: 'ssh-1', assetName: 'server',
-    })
-    const assistantId = (opened as { assistantId: string }).assistantId
-    const { frames } = await host.stream(assistantId)
-
-    // sidecar 精确事件(AI exec 连接 dsh:ssh-1:ssh)→ SSE 帧。
-    const kb = host.notifications.get('ssh:kb-interactive:dsh:ssh-1:ssh')
-    expect(kb).toBeDefined()
-    kb?.({
-      sessionId: 'dsh:ssh-1:ssh',
-      instructions: 'Verification code',
-      prompts: [{ prompt: 'Password', echo: false }],
-      autoFill: [null],
-    })
-    expect(frames().some(frame => frame.t === 'kb-interactive')).toBe(true)
-
-    // 壳内连接卡据此抑制:active-conns 只含有面板客户端的连接。
-    const active = await host.get('/starhub/api/assistant/active-conns')
-    expect(active).toEqual({ conns: ['dsh:ssh-1:ssh'] })
+    expect([...host.routes.keys()].sort()).toEqual([
+      '/starhub/api/assistant/approval',
+      '/starhub/api/assistant/close',
+      '/starhub/api/assistant/model',
+      '/starhub/api/assistant/models',
+      '/starhub/api/assistant/open',
+      '/starhub/api/assistant/prompt',
+      '/starhub/api/assistant/stop',
+      '/starhub/api/assistant/stream',
+    ])
   })
 })

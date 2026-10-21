@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 /**
- * SSH 执行记录抽屉(v0.100.0 重构;v0.100.1 会话隔离 + 行内断开):
- * - exec-records 桥:note 去重置顶 / 上限淘汰 / 非 dsh 会话忽略 / 按活跃
- *   会话过滤(setConversation)/ removeSession 跨视角移除 / 清空只作用当前会话;
- * - 订阅:tauriListen 注册 ssh:exec-done 并过滤后写入,disposer 反注册;
+ * SSH 执行记录抽屉(v0.100.0 重构;v0.100.1 会话隔离 + 行内断开;
+ * v0.140.0 AI 复用用户终端会话——sessionId 改为终端形态
+ * `<assetId>__<随机>`,事件只由 AI 域工具路径广播,前缀过滤移除):
+ * - exec-records 桥:note 去重置顶 / 上限淘汰 / 按活跃会话过滤
+ *   (setConversation)/ removeSession 跨视角移除 / 清空只作用当前会话;
+ * - 订阅:tauriListen 注册 ssh:exec-done 并写入,disposer 反注册;
  * - ExecDrawerButton:开合回调与计数角标(计数已随隔离过滤);
  * - ExecRecordList:行点击展开/收起、行尾「断开连接」、清空与返回。
  */
@@ -43,31 +45,29 @@ function rec(sessionId: string, overrides: Partial<ExecRecord> = {}): ExecRecord
 }
 
 describe('createExecRecordsBridge', () => {
-  it('keeps the latest record per session at the top and ignores non-dsh sessions', () => {
+  it('keeps the latest record per session at the top', () => {
     const bridge = createExecRecordsBridge()
-    bridge.note(makeEvent('dsh:a1:ssh', 'ls', 'one'))
-    bridge.note(makeEvent('dsh:a2:ssh', 'df', 'two'))
-    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['dsh:a2:ssh', 'dsh:a1:ssh'])
+    // v0.140.0:AI 命令跑在用户终端会话上,sessionId 是终端形态
+    bridge.note(makeEvent('a1__k3f9a2', 'ls', 'one'))
+    bridge.note(makeEvent('a2__8x1c00', 'df', 'two'))
+    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['a2__8x1c00', 'a1__k3f9a2'])
     // 同连接再次执行:替换旧条目并置顶(不产生第二条)
-    bridge.note(makeEvent('dsh:a1:ssh', 'uptime', 'fresh'))
+    bridge.note(makeEvent('a1__k3f9a2', 'uptime', 'fresh'))
     const records = bridge.source.getSnapshot().records
     expect(records).toHaveLength(2)
-    expect(records[0]!.sessionId).toBe('dsh:a1:ssh')
+    expect(records[0]!.sessionId).toBe('a1__k3f9a2')
     expect(records[0]!.command).toBe('uptime')
-    // 非 dsh 会话(AI 域工具以外)不入列
-    bridge.note(makeEvent('plain-session', 'whoami', 'root'))
-    expect(bridge.source.getSnapshot().records).toHaveLength(2)
   })
 
   it('evicts the oldest record beyond the cap and clears on demand', () => {
     const bridge = createExecRecordsBridge()
     for (let i = 0; i < 55; i++) {
-      bridge.note(makeEvent(`dsh:cap-${i}:ssh`, `cmd-${i}`, ''))
+      bridge.note(makeEvent(`cap-${i}__aaaaaa`, `cmd-${i}`, ''))
     }
     const records = bridge.source.getSnapshot().records
     expect(records).toHaveLength(50)
-    expect(records[0]!.sessionId).toBe('dsh:cap-54:ssh')
-    expect(records.at(-1)!.sessionId).toBe('dsh:cap-5:ssh')
+    expect(records[0]!.sessionId).toBe('cap-54__aaaaaa')
+    expect(records.at(-1)!.sessionId).toBe('cap-5__aaaaaa')
     bridge.clear()
     expect(bridge.source.getSnapshot().records).toHaveLength(0)
   })
@@ -84,58 +84,58 @@ describe('createExecRecordsBridge', () => {
   it('shows nothing until tracking starts, then isolates records per conversation', () => {
     const bridge = createExecRecordsBridge()
     // 未喂入任何会话前(兼容模式):不过滤,全量可见
-    bridge.note(makeEvent('dsh:a1:ssh', 'ls', ''))
-    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['dsh:a1:ssh'])
+    bridge.note(makeEvent('a1__k3f9a2', 'ls', ''))
+    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['a1__k3f9a2'])
     // 跟踪开启后打上「当时会话」标记;未标记的历史条目在隔离态不可见
     bridge.setConversation('conv-B')
     expect(bridge.source.getSnapshot().records).toHaveLength(0)
-    bridge.note(makeEvent('dsh:b1:ssh', 'df', ''))
-    bridge.note(makeEvent('dsh:b2:ssh', 'free', ''))
-    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['dsh:b2:ssh', 'dsh:b1:ssh'])
+    bridge.note(makeEvent('b1__k3f9a2', 'df', ''))
+    bridge.note(makeEvent('b2__k3f9a2', 'free', ''))
+    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['b2__k3f9a2', 'b1__k3f9a2'])
     expect(bridge.source.getSnapshot().records.every(r => r.conversationId === 'conv-B')).toBe(true)
     // 切回另一会话:B 的记录隐藏,A 只见本会话新产生的
     bridge.setConversation('conv-A')
     expect(bridge.source.getSnapshot().records).toHaveLength(0)
-    bridge.note(makeEvent('dsh:a2:ssh', 'uptime', ''))
-    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['dsh:a2:ssh'])
+    bridge.note(makeEvent('a2__k3f9a2', 'uptime', ''))
+    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['a2__k3f9a2'])
     bridge.setConversation('conv-B')
-    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['dsh:b2:ssh', 'dsh:b1:ssh'])
+    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['b2__k3f9a2', 'b1__k3f9a2'])
   })
 
   it('hides a closed connection everywhere once removeSession runs', () => {
     const bridge = createExecRecordsBridge()
     bridge.setConversation('conv-A')
-    bridge.note(makeEvent('dsh:a1:ssh', 'ls', ''))
+    bridge.note(makeEvent('a1__k3f9a2', 'ls', ''))
     bridge.setConversation('conv-B')
-    bridge.note(makeEvent('dsh:b1:ssh', 'df', ''))
+    bridge.note(makeEvent('b1__k3f9a2', 'df', ''))
     // 从 A 视角断开 B 正在用的连接:A 不受影响
     bridge.setConversation('conv-A')
-    bridge.removeSession('dsh:b1:ssh')
-    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['dsh:a1:ssh'])
+    bridge.removeSession('b1__k3f9a2')
+    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['a1__k3f9a2'])
     // 切到 B:该连接的记录已消失
     bridge.setConversation('conv-B')
     expect(bridge.source.getSnapshot().records).toHaveLength(0)
     // 未知连接的移除是无害 no-op
-    bridge.removeSession('dsh:none:ssh')
+    bridge.removeSession('none__k3f9a2')
     expect(bridge.source.getSnapshot().records).toHaveLength(0)
   })
 
   it('scopes 清空 to the current conversation and leaves other sessions untouched', () => {
     const bridge = createExecRecordsBridge()
     bridge.setConversation('conv-A')
-    bridge.note(makeEvent('dsh:a1:ssh', 'ls', ''))
+    bridge.note(makeEvent('a1__k3f9a2', 'ls', ''))
     bridge.setConversation('conv-B')
-    bridge.note(makeEvent('dsh:b1:ssh', 'df', ''))
+    bridge.note(makeEvent('b1__k3f9a2', 'df', ''))
     bridge.clear()
     expect(bridge.source.getSnapshot().records).toHaveLength(0)
     // B 清空后切回 A:A 的记录仍在
     bridge.setConversation('conv-A')
-    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['dsh:a1:ssh'])
+    expect(bridge.source.getSnapshot().records.map(r => r.sessionId)).toEqual(['a1__k3f9a2'])
   })
 })
 
 describe('subscribeSshExecEvents', () => {
-  it('feeds dsh events into note and stops feeding after dispose', async () => {
+  it('feeds exec-done events into note and stops feeding after dispose', async () => {
     const invoke = vi.fn((..._args: unknown[]) => Promise.resolve(null))
     stubInternals(invoke)
 
@@ -144,12 +144,12 @@ describe('subscribeSshExecEvents', () => {
     // 订阅走共享 SSE 连接(按事件名 ssh:exec-done 监听)。
     await waitFor(() => { expect(hostEventListeners('ssh:exec-done')).toBe(1) })
 
-    emitHostEvent('ssh:exec-done', makeEvent('dsh:a1:ssh', 'ls', 'out'))
+    emitHostEvent('ssh:exec-done', makeEvent('a1__k3f9a2', 'ls', 'out'))
     await waitFor(() => { expect(bridge.source.getSnapshot().records).toHaveLength(1) })
 
     void dispose()
     // dispose 后不再派发到桥(handler 已从扇出表移除)。
-    emitHostEvent('ssh:exec-done', makeEvent('dsh:a2:ssh', 'df', 'out2'))
+    emitHostEvent('ssh:exec-done', makeEvent('a2__k3f9a2', 'df', 'out2'))
     await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
     expect(bridge.source.getSnapshot().records).toHaveLength(1)
   })
@@ -174,8 +174,8 @@ describe('ExecDrawerButton', () => {
 
   it('opens the exec view and shows the record count when closed', () => {
     const props = buttonProps({ viewOpen: false, records: [
-      rec('dsh:a1:ssh'),
-      rec('dsh:a2:ssh'),
+      rec('a1__k3f9a2'),
+      rec('a2__k3f9a2'),
     ] })
     render(<ExecDrawerButton {...props} />)
     const pill = screen.getByRole('button', { name: /执行/ })
@@ -199,7 +199,7 @@ describe('ExecDrawerButton', () => {
 
 describe('ExecRecordList', () => {
   const records = [
-    rec('dsh:asset-9:ssh', { command: 'docker ps -a | head -3', output: 'CONTAINER ID   IMAGE\na1b2c3 nginx', at: Date.now() }),
+    rec('asset-9__k3f9a2', { command: 'docker ps -a | head -3', output: 'CONTAINER ID   IMAGE\na1b2c3 nginx', at: Date.now() }),
   ]
 
   it('renders rows collapsed by default and expands the full output on click', () => {
@@ -218,7 +218,7 @@ describe('ExecRecordList', () => {
     const onDisconnect = vi.fn()
     render(<ExecRecordList records={records} onClose={vi.fn()} onClear={vi.fn()} onDisconnect={onDisconnect} />)
     fireEvent.click(screen.getByRole('button', { name: '断开 asset-9 的连接并移除记录' }))
-    expect(onDisconnect).toHaveBeenCalledWith('dsh:asset-9:ssh')
+    expect(onDisconnect).toHaveBeenCalledWith('asset-9__k3f9a2')
   })
 
   it('clears current-conversation records and closes the panel via the injected callbacks', () => {

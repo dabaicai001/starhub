@@ -172,14 +172,14 @@ export const BRIDGED_TOOLS: readonly BridgedToolSpec[] = [
   // ── SSH(会话绑定 SSH 资产)──
   {
     toolName: 'ssh_exec',
-    description: '在当前 SSH 会话中执行一条可自行结束的非交互命令并返回输出。只读命令自动放行,写/风险命令会请求用户确认。MFA 堡垒机资产首次连接会自动弹出验证/选机器卡片,用户完成一次后会话复用,后续命令静默执行;不要为此调用 open_connection 打开窗口。',
+    description: '在用户已连接的 SSH 终端会话中执行一条可自行结束的非交互命令并返回输出。命令跑在用户终端页的那条 shell 里(用户可见),AI 不自建连接:若尚未连接,结果会提示用户先去终端页连接(堡垒机需用户自己完成 MFA 与选机器),届时重试同一命令即可。自主执行限只读命令;修改/删除/安装/重启类命令必须先以文本形式提供给用户,由用户亲手执行或明确交回给你执行。只读命令自动放行,写/风险命令仍会请求用户确认。',
     parameters: {
       command: { type: 'string', required: true, description: '要执行的完整命令,例如 "ls -la /var/log"' },
     },
   },
   {
     toolName: 'ssh_exec_background',
-    description: '把一条耗时较长(可能超过 10 秒)的命令写成脚本在远端 nohup 后台执行,立即返回 task_id,不阻塞终端;输出写入日志文件。适合安装、下载、编译、批量处理等场景。启动后必须调用 ssh_wait_task 轮询任务状态与日志。命令本身仍会经过风险确认。',
+    description: '把一条耗时较长(可能超过 10 秒)的只读命令写成脚本在用户终端会话所在服务器上 nohup 后台执行,立即返回 task_id,不阻塞终端;输出写入日志文件。适合大范围 find、日志扫描等长时间只读工作。启动后必须调用 ssh_wait_task 轮询任务状态与日志。安装/编译等写操作不适用本工具——先以文本形式提供给用户人工执行。命令本身仍会经过风险确认。',
     parameters: {
       command: { type: 'string', required: true, description: '要后台执行的完整命令(可以是多行脚本)' },
     },
@@ -194,27 +194,27 @@ export const BRIDGED_TOOLS: readonly BridgedToolSpec[] = [
   },
   {
     toolName: 'ssh_session_status',
-    description: '查询当前绑定资产 SSH 会话的状态(不触发连接):未连接 / 已连接 / 堡垒机已选中目标机器。用于在执行命令前判断是否会弹「选机器」卡片、命令是否静默执行;MFA 堡垒机资产首次连接会自动弹验证与选机器卡片,选中后会话复用,后续命令静默执行不弹窗。',
+    description: '查询用户终端页对该资产的连接状态(不触发连接):未连接(需提示用户去终端页连接,堡垒机由其完成 MFA 与选机器)/ 已连接(命令经同一连接执行)/ 堡垒机已连接(命令写入用户终端 shell,用户可见)。执行命令前可调用它判断是否要先提示用户连接。',
     parameters: {},
   },
-  // ── SFTP(复用会话绑定的 SSH 资产)──
+  // ── SFTP(复用用户终端页已连接的 SSH 会话)──
   {
     toolName: 'sftp_list',
-    description: '通过当前 SSH 连接列出远端目录内容,用于确认上传或下载路径。',
+    description: '通过用户终端页已连接的 SSH 会话列出远端目录内容,用于确认上传或下载路径。未连接时结果会提示用户先去终端页连接。',
     parameters: {
       path: { type: 'string', required: true, description: '远端绝对目录路径,例如 /var/log' },
     },
   },
   {
     toolName: 'sftp_stat',
-    description: '通过当前 SSH 连接查看一个远端文件或目录的大小、权限和修改时间。',
+    description: '通过用户终端页已连接的 SSH 会话查看一个远端文件或目录的大小、权限和修改时间。',
     parameters: {
       path: { type: 'string', required: true, description: '远端绝对路径' },
     },
   },
   {
     toolName: 'sftp_upload',
-    description: '把一个或多个本机文件上传到当前 SSH 服务器。调用前会要求用户确认本机路径和远端目录。',
+    description: '把一个或多个本机文件上传到用户终端会话所在的 SSH 服务器。这会修改远端,属于写操作:先向用户说明并等待其明确交回给你执行。调用前会要求用户确认本机路径和远端目录。',
     parameters: {
       localPaths: { type: 'array', required: true, description: '本机文件的完整路径列表,最多 20 个', items: { type: 'string' } },
       remoteDir: { type: 'string', required: true, description: '远端目标目录的绝对路径' },
@@ -223,7 +223,7 @@ export const BRIDGED_TOOLS: readonly BridgedToolSpec[] = [
   },
   {
     toolName: 'sftp_download',
-    description: '把当前 SSH 服务器上的一个或多个文件下载到本机目录。调用前会要求用户确认远端路径和本机目录。',
+    description: '把用户终端会话所在 SSH 服务器上的一个或多个文件下载到本机目录(只读远端)。调用前会要求用户确认远端路径和本机目录。',
     parameters: {
       remotePaths: { type: 'array', required: true, description: '远端文件的绝对路径列表,最多 20 个', items: { type: 'string' } },
       localDir: { type: 'string', required: true, description: '本机目标目录的完整路径' },
@@ -579,8 +579,8 @@ export function apply(ctx: Context): void {
     name: 'open_connection',
     description:
       '打开(或聚焦)指定 StarHub 资产的连接窗口(SSH 终端/SFTP/数据库)。仅当用户明确要求「打开/查看窗口」时才调用;'
-      + '执行命令/查询不需要开窗——AI 域工具会由后端静默建立连接,不再弹额外窗口。'
-      + 'MFA 堡垒机资产首次连接会自动弹出验证/选机器卡片,不要因此调用本工具。非破坏性 UI 动作,不执行任何命令。',
+      + '执行命令/查询不需要开窗——AI 命令直接跑在用户终端页已连接的会话上,AI 不自建连接。'
+      + '资产尚未连接时,可建议用户打开终端页自行连接(堡垒机的 MFA 与选机器只能由用户本人完成),不要因此调用本工具代连。非破坏性 UI 动作,不执行任何命令。',
     parameters: {
       assetId: { type: 'string', required: true, description: '要打开的资产 id(可用 starhub_list_assets 查询)' },
     },
@@ -594,8 +594,8 @@ export function apply(ctx: Context): void {
     name: 'focus_terminal',
     description:
       '打开(或聚焦)指定 StarHub 资产的 SSH 终端窗口。仅当用户明确要求打开终端观察时才调用;'
-      + 'AI 执行命令不需要开终端窗口,连接由后端静默建立。'
-      + '适合需要用户配合观察终端输出、或要在终端里执行交互式命令的场景;非破坏性 UI 动作,不执行任何命令。',
+      + 'AI 执行命令不需要开终端窗口——命令直接写在用户已连接的终端会话里,用户在自己的终端里就能看到。'
+      + '适合需要用户配合观察终端输出、完成堡垒机选机器、或执行交互式命令的场景;非破坏性 UI 动作,不执行任何命令。',
     parameters: {
       assetId: { type: 'string', required: true, description: '要聚焦的资产 id(可用 starhub_list_assets 查询)' },
     },

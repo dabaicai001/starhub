@@ -689,6 +689,9 @@ export function SshTerminalOverlay({ asset, onClose }: SshTerminalOverlayProps) 
         const kbInteractive = buildKbInteractive(asset.config)
         await tauriInvoke('ssh_connect', {
           id: sessionId,
+          // 资产归属(v0.140.0):AI 域工具据此复用本会话执行命令,不再自建
+          // 连接;缺失时该会话不参与 AI 复用(旧前端行为)。
+          assetId: asset.id,
           config: {
             ...asset.config,
             auth: buildSshAuth(asset.config),

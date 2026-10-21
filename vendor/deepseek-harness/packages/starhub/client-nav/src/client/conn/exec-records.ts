@@ -1,10 +1,16 @@
 /**
- * SSH 执行记录状态桥(v0.100.0 重构,v0.100.1 按会话隔离):
- * 后端 `ssh_exec_core` 每次成功执行都广播通用 `ssh:exec-done`
+ * SSH 执行记录状态桥(v0.100.0 重构,v0.100.1 按会话隔离;
+ * v0.140.0 随「AI 复用用户终端会话」模型改过滤规则):
+ * 后端 AI 域工具每次成功执行都广播通用 `ssh:exec-done`
  * (payload sessionId/command/output,输出已截断 4000 字符);头部「执行」
  * 按钮(conversation.session.header.actions)与工具面板的执行记录视图
  * (StarHubToolWorkspace 内)读同一份桥——裸 source 桥范式(one-handle-
  * one-scope,同 live 通道簿)。
+ *
+ * 过滤规则(v0.140.0):`ssh:exec-done` 现在**只由 AI 域工具路径**广播
+ * (`tools::exec_ssh_command`;UI 路径的 cwd 探测等不广播),sessionId 是
+ * 用户终端页的会话 id(`<assetId>__<随机>`),不再是 `dsh:<assetId>:ssh`——
+ * 旧的前缀过滤随之移除,否则新模型下一条记录都进不来。
  *
  * 会话隔离(2026-08-27):记录写入时打上「当时活跃会话」的标记(apply 层
  * 订阅 sessions.list 切换经 setConversation 喂入),状态里的 records 只暴露
@@ -15,15 +21,18 @@
  * 渲染/旧测试路径仍看到全量列表;apply 一启动即同步喂入,生产恒为隔离态。
  *
  * 事件订阅挂 apply 的 `ctx.effect`(插件生命周期常驻),不随抽屉/按钮的
- * 开关与重挂载丢失——与 StarHubConnCard 的组件级监听同因,但订阅点升到
- * 插件层:视图组件是纯展示,卸载不影响采集。
+ * 开关与重挂载丢失:视图组件是纯展示,卸载不影响采集。
  */
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { tauriListen } from '../tauri.ts'
 
 /** 单条 SSH 执行记录(每个会话连接保留最近一次命令)。 */
 export interface ExecRecord {
-  /** 会话连接 id(`dsh:{assetId}:ssh`)。 */
+  /**
+   * 产生该记录的会话 id。v0.140.0 起 AI 命令跑在用户终端会话上,这里是
+   * 终端页会话 id(`<assetId>__<随机后缀>`);历史上曾是 AI exec 连接
+   * id(`dsh:{assetId}:ssh`)。
+   */
   readonly sessionId: string
   /**
    * 产生该记录时的活跃会话 id(apply 层在事件到达时刻喂入的当前会话);
@@ -44,11 +53,7 @@ export interface ExecRecordsState {
   records: ExecRecord[]
 }
 
-/** AI 域工具会话前缀:只接管 `dsh:{assetId}:ssh` 形式的连接。 */
-const AI_CONN_PREFIX = 'dsh:'
-
-/**
- * 记录条数上限(全量含隐藏条目一并计数):超出淘汰最旧,避免长会话下列表
+/** 记录条数上限(全量含隐藏条目一并计数):超出淘汰最旧,避免长会话下列表
  * 与内存无限增长。
  */
 const MAX_RECORDS = 50
@@ -65,8 +70,9 @@ export interface ExecRecordsBridge {
   /** 注入 hooks 舱位的裸 observable。 */
   readonly source: SnapshotStore<ExecRecordsState>
   /**
-   * 写入一条执行完成事件:`dsh:` 以外的会话忽略;同连接替换旧条目并置顶;
-   * 记录打上当前会话标记;超出上限淘汰最旧。
+   * 写入一条执行完成事件:同连接替换旧条目并置顶;记录打上当前会话标记;
+   * 超出上限淘汰最旧。v0.140.0 起事件只由 AI 域工具路径广播(UI 探测不
+   * 广播),无需再按连接前缀过滤。
    */
   readonly note: (event: SshExecDoneEvent) => void
   /**
@@ -106,7 +112,6 @@ export function createExecRecordsBridge(): ExecRecordsBridge {
   return {
     source,
     note: (event) => {
-      if (!event.sessionId.startsWith(AI_CONN_PREFIX)) return
       const rest = all.filter(r => r.sessionId !== event.sessionId)
       const record: ExecRecord = {
         sessionId: event.sessionId,
@@ -156,7 +161,6 @@ export function subscribeSshExecEvents(note: (event: SshExecDoneEvent) => void):
   let disposed = false
   let unlisten: (() => Promise<void>) | undefined
   void tauriListen<SshExecDoneEvent>('ssh:exec-done', (event) => {
-    if (!event.sessionId.startsWith(AI_CONN_PREFIX)) return
     note(event)
   })
     .then((off) => {
