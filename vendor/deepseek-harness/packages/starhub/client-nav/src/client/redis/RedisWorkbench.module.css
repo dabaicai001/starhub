@@ -42,15 +42,21 @@
 .dbStatus { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px 4px 10px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
 
 /* per-db 搜索行(v0.102.0:搜索框移入展开的 db 区块内)。 */
-.dbSearchRow { position: relative; display: flex; align-items: center; padding: 2px 4px 6px 2px; }
+.dbSearchRow { position: relative; display: flex; align-items: center; gap: 4px; padding: 2px 4px 6px 2px; }
 .dbSearch { width: 100%; min-width: 0; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; outline: none; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code); font-size: 11px; padding: 4px 22px 4px 8px; box-sizing: border-box; }
 .dbSearch::placeholder { color: var(--dsw-alias-label-dimmed); }
 .dbSearch:focus { border-color: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary) 35%, transparent); }
-.dbSearchClear { position: absolute; right: 8px; width: 16px; height: 16px; border: 0; border-radius: 50%; background: transparent; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 1; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.dbSearchClear { position: absolute; right: 76px; width: 16px; height: 16px; border: 0; border-radius: 50%; background: transparent; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 1; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .dbSearchClear:hover { color: var(--dsw-alias-state-business-primary); background: var(--dsw-alias-interactive-bg-hover); }
+/* per-db 类型过滤下拉(搜索行右侧)。 */
+.dbTypeFilter { flex: none; width: 68px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; outline: none; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-size: 11px; padding: 3px 4px; }
+.dbTypeFilter:focus { border-color: var(--dsw-alias-state-business-primary); }
 
 /* ─── 键树 ─── */
 .keyList { flex: 1; overflow-y: auto; padding: 2px 0; }
+/* 右键菜单锚点包装:ContextMenu 的 Menu 原语把 className 落在 wrapper span 上,
+   display:contents 让这个空 span 不参与行布局(菜单本体走 portal 到 body)。 */
+.menuRoot { display: contents; }
 .keyRow { display: flex; align-items: center; gap: 4px; border: 1px solid transparent; border-radius: 5px; padding: 2px 4px; }
 .keyRow:hover { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); }
 .keyMain { display: flex; min-width: 0; flex: 1; align-items: center; gap: 7px; border: 0; padding: 4px 2px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; text-align: left; }
@@ -66,6 +72,35 @@
 .miniButton, .miniDanger { width: 23px; height: 23px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; font-size: 11px; }
 .miniDanger:hover { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); color: var(--dsw-alias-state-error-primary); }
 .miniButton:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-state-business-primary); }
+
+/* 批量删除勾选框与选中行高亮。 */
+.keyCheck { flex: none; width: 12px; height: 12px; margin: 0 2px; accent-color: var(--dsw-alias-state-business-primary); cursor: pointer; }
+.keyRowSelected { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 30%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent); }
+
+/* ─── 主区页签(键值 / 分析) ─── */
+.mainTabs { display: flex; gap: 2px; padding: 6px 12px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); }
+.mainTab, .mainTabActive { border: 0; border-bottom: 2px solid transparent; padding: 5px 12px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; font-size: 12px; }
+.mainTab:hover { color: var(--dsw-alias-label-primary); }
+.mainTabActive { border-bottom-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-label-primary); font-weight: 650; }
+
+/* ─── 分析页 ─── */
+.analysis { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 14px; }
+.analysisBlock { display: flex; flex-direction: column; gap: 6px; }
+.analysisTitle { color: var(--dsw-alias-label-primary); font-size: 12px; font-weight: 650; }
+.analysisTitleRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.analysisSection { display: flex; flex-direction: column; gap: 2px; }
+.analysisSectionTitle { color: var(--dsw-alias-label-tertiary); font-size: 11px; font-weight: 600; }
+.analysisTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.analysisTable th { padding: 4px 8px; color: var(--dsw-alias-label-tertiary); font-size: 11px; font-weight: 600; text-align: left; }
+.analysisTable td { border-top: 1px solid var(--dsw-alias-border-l2); padding: 4px 8px; color: var(--dsw-alias-label-primary); }
+.analysisKey { color: var(--dsw-alias-label-secondary); font-family: var(--ds-font-family-code); }
+.analysisValue { font-family: var(--ds-font-family-code); word-break: break-all; }
+.analysisStatus { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.analysisForm { display: flex; gap: 6px; }
+.analysisInput { flex: 1; min-width: 0; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; outline: none; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code); font-size: 11px; padding: 4px 8px; }
+.analysisInput:focus { border-color: var(--dsw-alias-state-business-primary); }
+.analysisKeyButton { border: 0; padding: 0; background: transparent; color: var(--dsw-alias-state-business-primary); cursor: pointer; font-family: var(--ds-font-family-code); font-size: 12px; }
+.analysisKeyButton:hover { text-decoration: underline; }
 
 /* ─── 右侧主区 ─── */
 .main { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }

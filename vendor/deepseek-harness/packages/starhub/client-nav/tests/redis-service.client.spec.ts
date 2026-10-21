@@ -5,9 +5,9 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  redisConnect, redisDBSize, redisDel, redisDisconnect, redisExecute, redisFlushDB,
-  redisGetValue, redisInfo, redisQuote, redisRename, redisScan, redisScanAccumulate,
-  redisSelect, redisSet, type RedisScanResult,
+  redisBigkeyScan, redisConnect, redisDBSize, redisDel, redisDisconnect, redisExecute, redisFlushDB,
+  redisGetValue, redisInfo, redisMemoryAnalysis, redisQuote, redisRename, redisScan, redisScanAccumulate,
+  redisScanAll, redisSelect, redisSet, redisSlowlogGet, redisSlowlogReset, type RedisScanResult,
 } from '../src/client/redis/redis-service.ts'
 import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
 
@@ -28,6 +28,11 @@ function recordingInvoke() {
       case 'db_redis_select': return Promise.resolve(null)
       case 'db_redis_db_size': return Promise.resolve({ size: 42 })
       case 'db_redis_scan': return Promise.resolve({ keys: [{ key: 'a', type: 'string', ttl: -1 }], cursor: 0, total: 1 })
+      case 'db_redis_scan_all': return Promise.resolve({ keys: [{ key: 'h', type: 'hash', ttl: -1 }], cursor: 0, total: 1 })
+      case 'db_redis_slowlog_get': return Promise.resolve([{ id: 1, duration: 15000, timestamp: 1700000000, command: 'KEYS *' }])
+      case 'db_redis_slowlog_reset': return Promise.resolve(null)
+      case 'db_redis_bigkey_scan': return Promise.resolve([{ key: 'big', type: 'string', size: 99999, length: 0 }])
+      case 'db_redis_memory_analysis': return Promise.resolve([{ prefix: 'user:*', keys: 10, memory: 4096, percentage: 80 }])
       case 'db_redis_get_value': return Promise.resolve({ key: 'k', type: 'string', value: 'v', ttl: -1 })
       case 'db_redis_del': return Promise.resolve({ deleted: 1 })
       case 'db_redis_rename': return Promise.resolve(null)
@@ -124,6 +129,37 @@ describe('redis service commands', () => {
   it('rejects when the host bridge reports an error', async () => {
     stubHostBridge(() => Promise.reject(new Error('host bridge unavailable')))
     await expect(redisConnect({ host: 'h', port: 6379 })).rejects.toThrow('host bridge unavailable')
+  })
+
+  it('forwards scan_all / slowlog / bigkey / memory-analysis commands with the right args', async () => {
+    const { call, calls } = recordingInvoke()
+    const restore = stubInvoke(call)
+    try {
+      const all = await redisScanAll('c1', 'user:*', 'hash')
+      expect(calls[0]).toEqual(['db_redis_scan_all', { connId: 'c1', match: 'user:*', typeFilter: 'hash' }])
+      expect(all.keys[0]?.key).toBe('h')
+
+      // match / typeFilter 缺省 → undefined
+      await redisScanAll('c1')
+      expect(calls[1]).toEqual(['db_redis_scan_all', { connId: 'c1', match: undefined, typeFilter: undefined }])
+
+      const slow = await redisSlowlogGet('c1', 100)
+      expect(calls[2]).toEqual(['db_redis_slowlog_get', { connId: 'c1', count: 100 }])
+      expect(slow[0]).toEqual({ id: 1, duration: 15000, timestamp: 1700000000, command: 'KEYS *' })
+
+      await redisSlowlogReset('c1')
+      expect(calls[3]).toEqual(['db_redis_slowlog_reset', { connId: 'c1' }])
+
+      const big = await redisBigkeyScan('c1', undefined, 2048, 500)
+      expect(calls[4]).toEqual(['db_redis_bigkey_scan', { connId: 'c1', match: undefined, stringThreshold: 2048, memberThreshold: 500 }])
+      expect(big[0]?.key).toBe('big')
+
+      const mem = await redisMemoryAnalysis('c1', 'sess:*', 10)
+      expect(calls[5]).toEqual(['db_redis_memory_analysis', { connId: 'c1', match: 'sess:*', sampleSize: 10 }])
+      expect(mem[0]?.prefix).toBe('user:*')
+    } finally {
+      restore()
+    }
   })
 })
 

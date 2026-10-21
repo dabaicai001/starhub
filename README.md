@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.137.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.138.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,9 +59,15 @@
 
 ## 当前版本
 
-### v0.137.0 (2026-10-21)
-- ✨ ✨ **SQL 执行结果分页 + 行数上限可选**:① sidecar `db.mysql.execute`(及 clickhouse/sqlite/mssql/postgres)新增可选参数 `maxRows`——对未显式带 LIMIT 的 SELECT 强制夹到该值,**默认从写死的 100 提升到 1000**,硬上限 10 万(`ClampExecuteMaxRows` 归一化);前端 SQL 工具栏新增「行数上限」下拉(100/500/1000/5000),随执行下发。② 结果区把硬编码「只渲染前 200 行 + 仅显示前 200 行」改为**客户端分页条**(上一页/下一页 + 每页条数 100/500/1000/5000 + 「第 x–y 行 / 共 N 行」),翻页不重新执行;工具条补展示耗时。
-- 🐛 🐛 **StarHub 工作台窗口弹层「透明盒子」**:数据库/Redis 工作台跑在独立 iframe 窗口(`apps/starhub-window`),其 `window-shell.css` 只 import 了 ui-theme 8 个样式表中的 3 个,**缺 `gradient-shadow-text.css`**——`--dsw-menu-backdrop-filter`(菜单毛玻璃)、`--dsw-elevation-*`(菜单投影)、`--dsw-shadow-lv*`(筛选弹层投影)全部未定义,右键菜单/列筛选弹层只剩 45%–58% 不透明填充、无模糊无阴影,叠在内容上就是一块透明框。现按 ui-theme 的 STYLES 列表补齐 `gradient-shadow-text.css`/`corner-shape.css`/`focus.css`,并在构建产物中断言令牌落地。
+### v0.138.0 (2026-10-21)
+- ✨ ✨ **数据库网格行右键菜单扩充**:复制为 UPDATE(按主键定位)/ 复制为 JSON / **删除该行**(按主键走 `db_<prefix>_delete_rows`,成功后重载当前页)。`db_mysql_delete_rows` / `db_clickhouse_delete_rows` 此前只有 Go handler、缺 Rust 转发规格,前端不可达;本轮补齐(两族对称,命令表 93 条),纯函数 `rowToUpdate` / `rowToJson` 覆盖无主键/全主键/NULL 边界。
+- ✨ ✨ **Redis 键树补右键菜单**(MySQL 库/表行早有,Redis 一个都没有):key 行 = 打开 / 复制 key 名 / **复制 value** / 添加成员(结构类型)/ 重命名 / 删除;文件夹行 = 展开|收起 / 复制 key 前缀;db 行 = 新建 Key / 刷新 / 清空 DB(针对该行 db)。
+- ✨ ✨ **Redis 值编辑器快捷添加**:「新增成员」行从表格底部移到**顶部常驻**(sticky),输入框**回车即入表并保持焦点**(可连续追加);右键「添加成员」直达并聚焦新增行。string 仍走文本区(JSON 值有原文/格式化只读切换)。
+- ✨ ✨ **Redis stream 类型支持只读视图 + 新建**:sidecar `GetValue` 本就回传 stream 条目,但前端把 `{ID, Values}` 映射成空 field/value 行、保存静默无效——现在渲染 ID + 字段表的只读视图(增删改提示走 CLI XADD/XDEL/XTRIM),保存只应用 TTL;新建对话框与 `buildCreateKeyCommand` 支持 `XADD k * field value`;类型过滤补 stream。
+- 🐛 🐛 **Redis 新建 key 到「非展开库」的库漂移(P0,会误删数据)**:`createKey` 把持久连接 `redisSelect` 到目标库后不同步展开态——连接停在 dbN、UI 仍显示 dbM 的键列表,此后点旧库里的 key,读/删/改全落在 dbN 的同名 key 上。现在与 CLI SELECT 同路径:切库 + 展开态跟随 + 加载目标库键(看得见新建的 key),「UI 展示的库恒等于连接所在库」的不变量恢复。
+- 🐛 🐛 **Redis CLI 只读命令触发全库重扫**:`GET`/`KEYS`/`HGETALL` 等执行后旧版无脑 `refreshExpanded`,大库上每条只读命令都卡一次全量 SCAN。新增 `isMutatingRedisCommand` 动词表判定,只有写命令才同步键列表。
+- 🐛 🐛 **MySQL SQL 补全 schema 跨库串列**:`columnsByTable` 按裸表名缓存,`app.users` 与 `sys.users` 后展开者覆盖前者的列,补全补出另一个库的字段(与 v0.136.6 已修的「库.表」缓存隔离同源,补全这条漏了);`dropTable` 不清补全缓存、`onTableCreated` 用裸表名清。统一改 `tableStateKey` 键,schema 组装按当前执行库优先,并补 in-flight 守卫防重复请求。
+- 🐛 🐛 **Redis db 行右键「清空 DB」作用库不符**:菜单针对右键的 db,但 `askFlushDb` 取的是当前展开库/连接库;改为接受目标 db 参数。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

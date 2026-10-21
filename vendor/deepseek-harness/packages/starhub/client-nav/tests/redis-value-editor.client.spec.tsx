@@ -3,12 +3,13 @@
  * Redis 值编辑器(RedisValueEditor.tsx,v0.102.0 受控 props 版):按 key 加载、
  * key 切换重挂载/重拉取、加载失败重试(generation 重拉)、string 文本编辑
  * 保存/还原、结构类型(hash/list/set/zset)字段表增删改保存(含改名删旧
- * 成员、list 新增走 RPUSH)、成员筛选(仅过滤展示)、TTL 输入,以及
- * ttlToInput / delVerb / fieldPlaceholders 的覆盖。
+ * 成员、list 新增走 RPUSH)、成员筛选(仅过滤展示)、TTL 输入、string 值的
+ * JSON 格式化只读切换(tryFormatJson),以及 ttlToInput / delVerb /
+ * fieldPlaceholders 的覆盖。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { RedisValueEditor, delVerb, fieldPlaceholders, humanizeTtl, parseTtlInput, rowsFromValue, ttlToInput } from '../src/client/redis/RedisValueEditor.tsx'
+import { RedisValueEditor, delVerb, fieldPlaceholders, humanizeTtl, parseTtlInput, rowsFromValue, tryFormatJson, ttlToInput } from '../src/client/redis/RedisValueEditor.tsx'
 import type { RedisValueResult } from '../src/client/redis/redis-service.ts'
 import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
 
@@ -89,6 +90,18 @@ describe('RedisValueEditor exports', () => {
     expect(humanizeTtl(90)).toBe('1 分 30 秒')
     expect(humanizeTtl(3660)).toBe('1 时 1 分')
     expect(humanizeTtl(90000)).toBe('1 天 1 时')
+  })
+
+  it('tryFormatJson pretty-prints JSON objects/arrays and rejects scalars and non-JSON', () => {
+    expect(tryFormatJson('{"a":1}')).toBe('{\n  "a": 1\n}')
+    expect(tryFormatJson('[1,2]')).toBe('[\n  1,\n  2\n]')
+    // 纯量 JSON(数字/字符串/null)不做格式化——没有信息量。
+    expect(tryFormatJson('123')).toBeNull()
+    expect(tryFormatJson('"str"')).toBeNull()
+    expect(tryFormatJson('null')).toBeNull()
+    // 非法 JSON / 空串。
+    expect(tryFormatJson('{bad')).toBeNull()
+    expect(tryFormatJson('')).toBeNull()
   })
 })
 
@@ -203,6 +216,31 @@ describe('RedisValueEditor load & key switching', () => {
 })
 
 describe('RedisValueEditor string save & revert', () => {
+  it('offers a read-only pretty-print view for JSON string values, saving always from raw text', async () => {
+    const invoke = installInvoke({ foo: { key: 'foo', type: 'string', value: '{"a":1,"b":[2]}', ttl: -1 } })
+    renderEditor('foo', 'string')
+    await waitFor(() =>{  expect((screen.getByPlaceholderText<HTMLTextAreaElement>('值…')).value).toBe('{"a":1,"b":[2]}') })
+    // 切到格式化视图:只读 pretty-print,textarea 卸载。
+    fireEvent.click(screen.getByLabelText('格式化视图'))
+    await waitFor(() =>{  expect(screen.getByTestId('redis-json-view').textContent).toContain('"a": 1') })
+    expect(screen.queryByPlaceholderText('值…')).toBeNull()
+    // 切回原文:原样文本,格式化产物不回写。
+    fireEvent.click(screen.getByLabelText('原文视图'))
+    await waitFor(() =>{  expect((screen.getByPlaceholderText<HTMLTextAreaElement>('值…')).value).toBe('{"a":1,"b":[2]}') })
+    // 编辑原文后保存:走 db_redis_set 的仍是原文。
+    fireEvent.change(screen.getByPlaceholderText('值…'), { target: { value: '{"c":3}' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_set', { connId: 'c1', key: 'foo', value: '{"c":3}', expiration: undefined }) })
+  })
+
+  it('hides the JSON toggle for non-JSON string values', async () => {
+    installInvoke({ foo: { key: 'foo', type: 'string', value: 'plain text', ttl: -1 } })
+    renderEditor('foo', 'string')
+    await waitFor(() =>{  expect((screen.getByPlaceholderText<HTMLTextAreaElement>('值…')).value).toBe('plain text') })
+    expect(screen.queryByLabelText('格式化视图')).toBeNull()
+    expect(screen.queryByTestId('redis-json-view')).toBeNull()
+  })
+
   it('saves an edited string with a TTL and updates dirty state', async () => {
     const invoke = installInvoke({ foo: { key: 'foo', type: 'string', value: 'hello', ttl: 30 } })
     renderEditor('foo', 'string')
@@ -600,11 +638,25 @@ describe('RedisValueEditor value parsing edge cases', () => {
     expect((screen.getAllByPlaceholderText<HTMLInputElement>('值')[0]!).value).toBe('')
   })
 
-  it('renders an unknown type with default field/value columns', async () => {
-    installInvoke({ st: { key: 'st', type: 'stream', value: { f1: 'v1' }, ttl: -1 } })
+  it('renders stream entries read-only (ID + fields) and saves TTL only', async () => {
+    // sidecar 对 stream 回传 [{ID, Values}];旧版把条目映射成空 field/value 行、
+    // 保存静默无效,现在是明确的只读视图(增删改走 CLI XADD/XDEL/XTRIM)。
+    const invoke = installInvoke({ st: { key: 'st', type: 'stream', value: [{ ID: '1-1', Values: { f1: 'v1' } }], ttl: -1, size: 1 } })
     renderEditor('st', 'stream')
     await waitFor(() =>{  expect(screen.getByText('STREAM')).toBeTruthy() })
-    expect((screen.getByPlaceholderText<HTMLInputElement>('字段')).value).toBe('f1')
+    // 只读:没有字段/成员输入框,条目 ID 与字段表以文本展示。
+    expect(screen.queryByPlaceholderText('字段')).toBeNull()
+    expect(screen.queryByPlaceholderText('新字段')).toBeNull()
+    expect(screen.getByText('1-1')).toBeTruthy()
+    expect(screen.getByText('{"f1":"v1"}')).toBeTruthy()
+    expect(screen.getByText(/stream 只读/)).toBeTruthy()
+    // 无结构改动 → 保存禁用;改 TTL 后保存只下发 EXPIRE(无 HSET/SADD 之类)。
+    expect((screen.getByText<HTMLButtonElement>('保存')).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('TTL 秒数'), { target: { value: '60' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_execute', { connId: 'c1', command: 'EXPIRE st 60' }) })
+    const commands = invoke.mock.calls.filter(c => c[0] === 'db_redis_execute').map(c => (c[1] as { command: string }).command)
+    expect(commands).toEqual(['EXPIRE st 60'])
   })
 
   it('revert keeps an added (unsubmitted) structural row with its entered member', async () => {

@@ -35,6 +35,7 @@ export function buildKeyTree(keys: readonly RedisKeyInfo[], separator = ':'): Ke
     // 逐段下钻:除最后一段外都落成文件夹(同名 key 与文件夹共存时,
     // 叶子按原名落进该文件夹——如 'a' 与 'a:b' 同时存在)。
     for (let i = 0; i < parts.length - 1; i++) {
+      /* v8 ignore next -- split 恒给出全部段,?? '' 只是 noUncheckedIndexedAccess 的类型兜底 */
       const seg = parts[i] ?? ''
       prefix = prefix === '' ? seg : `${prefix}${separator}${seg}`
       let folder = folders.get(prefix)
@@ -46,6 +47,7 @@ export function buildKeyTree(keys: readonly RedisKeyInfo[], separator = ':'): Ke
       siblings = folder.children
     }
     siblings.push({
+      /* v8 ignore next -- split 恒有最后一段,?? info.key 只是 noUncheckedIndexedAccess 的类型兜底 */
       name: parts[parts.length - 1] ?? info.key,
       path: info.key,
       keyInfo: info,
@@ -92,4 +94,14 @@ export function allFolderPaths(nodes: readonly KeyTreeNode[]): Set<string> {
 export function countLeaves(node: KeyTreeNode): number {
   if (node.keyInfo !== null) return 1
   return node.children.reduce((total, child) => total + countLeaves(child), 0)
+}
+
+/**
+ * 收集节点下的全部叶子 key(文件夹勾选 = 选中其下全部 key 用)。
+ * @param node - 树节点(文件夹或叶子)。
+ * @returns 叶子完整 key 列表(叶子自身即唯一元素)。
+ */
+export function leafKeys(node: KeyTreeNode): string[] {
+  if (node.keyInfo !== null) return [node.keyInfo.key]
+  return node.children.flatMap(leafKeys)
 }

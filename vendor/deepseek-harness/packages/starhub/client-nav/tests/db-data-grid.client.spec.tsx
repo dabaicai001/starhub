@@ -11,7 +11,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { DbDataGrid, cellText, downloadTextFile, rowsToCsv, rowToInsert, sqlLiteral, whereSuggestions } from '../src/client/DbDataGrid.tsx'
+import { DbDataGrid, cellText, downloadTextFile, rowsToCsv, rowToInsert, rowToJson, rowToUpdate, sqlLiteral, whereSuggestions } from '../src/client/DbDataGrid.tsx'
 import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
 
 const RESULT = {
@@ -21,13 +21,16 @@ const RESULT = {
   isSelect: true,
 }
 
-/** 装宿主桥 invoke 替身:get_table_data / list_columns / update_rows。 */
+/** 装宿主桥 invoke 替身:get_table_data / list_columns / update_rows / delete_rows。 */
 function stubInvoke(opts: {
   failLoad?: boolean
   failUpdate?: boolean
   zeroAffected?: boolean
   noPk?: boolean
   updateRowsError?: string
+  failDelete?: boolean
+  zeroDeleted?: boolean
+  deleteRowsError?: string
 } = {}) {
   const calls: Array<[cmd: string, args: Record<string, unknown>]> = []
   const invoke = vi.fn((cmdOrName: string, args?: Record<string, unknown>) => {
@@ -45,6 +48,12 @@ function stubInvoke(opts: {
       if (opts.failUpdate) return Promise.reject(new Error('update failed'))
       if (opts.zeroAffected) return Promise.resolve({ rowsAffected: 0 })
       if (opts.updateRowsError !== undefined) return Promise.resolve({ rowsAffected: 0, error: opts.updateRowsError })
+      return Promise.resolve({ rowsAffected: 1 })
+    }
+    if (cmdOrName === 'db_mysql_delete_rows') {
+      if (opts.failDelete) return Promise.reject(new Error('delete failed'))
+      if (opts.zeroDeleted) return Promise.resolve({ rowsAffected: 0 })
+      if (opts.deleteRowsError !== undefined) return Promise.resolve({ rowsAffected: 0, error: opts.deleteRowsError })
       return Promise.resolve({ rowsAffected: 1 })
     }
     return Promise.reject(new Error(`unexpected ${cmdOrName}`))
@@ -84,6 +93,29 @@ describe('DbDataGrid pure helpers', () => {
     expect(rowToInsert('users', cols, [1, "o'brien"])).toBe(
       'INSERT INTO `users` (`id`, `name`) VALUES (1, \'o\'\'brien\');',
     )
+  })
+
+  it('rowToUpdate builds a PK-anchored UPDATE (SET non-PK cols, WHERE PK cols)', () => {
+    const cols = [{ name: 'id', type: 'BIGINT' }, { name: 'name', type: 'VARCHAR' }]
+    expect(rowToUpdate('users', cols, [7, 'x'], ['id'])).toBe(
+      'UPDATE `users` SET `name` = \'x\' WHERE `id` = 7;',
+    )
+    // 多主键 + NULL 值
+    const cols2 = [{ name: 'a', type: 'INT' }, { name: 'b', type: 'INT' }, { name: 'c', type: 'TEXT' }]
+    expect(rowToUpdate('t', cols2, [1, 2, null], ['a', 'b'])).toBe(
+      'UPDATE `t` SET `c` = NULL WHERE `a` = 1 AND `b` = 2;',
+    )
+    // 无主键列 → null(调用方提示无法定位)
+    expect(rowToUpdate('t', cols, [1, 'x'], [])).toBeNull()
+    // 全主键表:退化为「SET 首列 = 原值」的空操作,语句仍合法
+    expect(rowToUpdate('t', cols, [7, 'x'], ['id', 'name'])).toBe(
+      'UPDATE `t` SET `id` = 7 WHERE `id` = 7 AND `name` = \'x\';',
+    )
+  })
+
+  it('rowToJson builds a JSON object keyed by column (null preserved)', () => {
+    const cols = [{ name: 'id' }, { name: 'note' }]
+    expect(rowToJson(cols, [1, null])).toBe('{\n  "id": 1,\n  "note": null\n}')
   })
 
   it('rowsToCsv escapes commas, quotes, newlines and emits null as empty', () => {
@@ -322,6 +354,53 @@ describe('DbDataGrid', () => {
     const sql = writeText.mock.calls[0]?.[0] as string
     expect(sql).toContain('INSERT INTO `users`')
     expect(sql).toContain('VALUES (1, \'alice\', NULL)')
+  })
+
+  it('copies the row as UPDATE / JSON via the row context menu', async () => {
+    stubInvoke()
+    const writeText = vi.fn((_text: string) => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    render(<DbDataGrid connId="c1" table="users" />)
+    await waitFor(() =>{  expect(screen.getByText('alice')).toBeTruthy() })
+    const rowEl = screen.getByText('alice').closest('[role="row"]') as HTMLElement
+    // UPDATE:按主键定位(SET 非主键列,WHERE 主键列)。
+    fireEvent.contextMenu(rowEl)
+    fireEvent.click(await screen.findByText('复制为 UPDATE'))
+    await waitFor(() =>{  expect(writeText).toHaveBeenCalled() })
+    expect(writeText.mock.calls[0]?.[0]).toBe('UPDATE `users` SET `name` = \'alice\', `note` = NULL WHERE `id` = 1;')
+    // JSON:列名为键,NULL 保留为 null。
+    fireEvent.contextMenu(rowEl)
+    fireEvent.click(await screen.findByText('复制为 JSON'))
+    await waitFor(() =>{  expect(writeText).toHaveBeenCalledTimes(2) })
+    expect(writeText.mock.calls[1]?.[0]).toBe('{\n  "id": 1,\n  "name": "alice",\n  "note": null\n}')
+  })
+
+  it('deletes the row via the context menu (PK-anchored delete_rows) and reloads', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const { calls } = stubInvoke()
+    render(<DbDataGrid connId="c1" table="users" database="app" />)
+    await waitFor(() =>{  expect(screen.getByText('alice')).toBeTruthy() })
+    const loadsBefore = calls.filter(([cmd]) => cmd === 'db_mysql_get_table_data').length
+    const rowEl = screen.getByText('bob').closest('[role="row"]') as HTMLElement
+    fireEvent.contextMenu(rowEl)
+    fireEvent.click(await screen.findByText('删除该行'))
+    // 删除按主键定位,参数名与 sidecar 契约一致(where);成功后重载当前页。
+    await waitFor(() =>{  expect(calls.some(([cmd, a]) => cmd === 'db_mysql_delete_rows' && a.where === '`id` = 2' && a.database === 'app' && a.table === 'users')).toBe(true) })
+    await waitFor(() =>{  expect(calls.filter(([cmd]) => cmd === 'db_mysql_get_table_data').length).toBeGreaterThan(loadsBefore) })
+    confirmSpy.mockRestore()
+  })
+
+  it('guards row deletion without primary keys and on cancel', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const { calls } = stubInvoke({ noPk: true })
+    render(<DbDataGrid connId="c1" table="users" />)
+    await waitFor(() =>{  expect(screen.getByText('alice')).toBeTruthy() })
+    const rowEl = screen.getByText('alice').closest('[role="row"]') as HTMLElement
+    fireEvent.contextMenu(rowEl)
+    fireEvent.click(await screen.findByText('删除该行'))
+    await waitFor(() =>{  expect(screen.getByText('表缺少主键列,无法定位行删除')).toBeTruthy() })
+    expect(calls.some(([cmd]) => cmd === 'db_mysql_delete_rows')).toBe(false)
+    confirmSpy.mockRestore()
   })
 
   it('edits a cell into the dirty set and saves via db_mysql_update_rows', async () => {

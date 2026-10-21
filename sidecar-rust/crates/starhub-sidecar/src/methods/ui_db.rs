@@ -66,7 +66,7 @@ pub struct Spec {
     required: &'static [&'static str],
 }
 
-/// C 组命令表(86 条):工作台 113 个命令里的数据面部分。
+/// C 组命令表(93 条):工作台 113 个命令里的数据面部分。
 ///
 /// mysql 与 clickhouse 两个族保持**完全对称**(前端 `cmdPrefix` 在两者间切换,
 /// 任何给一端加的命令另一端必须同时存在);postgres/sqlite/mssql 只有
@@ -163,6 +163,12 @@ pub const COMMANDS: &[Spec] = &[
         shape: Shape::Flat,
         required: &["connId", "table", "sets", "where"],
     },
+    Spec {
+        command: "ui.db_mysql_delete_rows",
+        target: Target::Fixed("db.mysql.deleteRows"),
+        shape: Shape::Flat,
+        required: &["connId", "table", "where"],
+    },
     // ── ClickHouse(15,与 MySQL 对称) ──
     Spec {
         command: "ui.db_clickhouse_connect",
@@ -254,6 +260,12 @@ pub const COMMANDS: &[Spec] = &[
         shape: Shape::Flat,
         required: &["connId", "table", "sets", "where"],
     },
+    Spec {
+        command: "ui.db_clickhouse_delete_rows",
+        target: Target::Fixed("db.clickhouse.deleteRows"),
+        shape: Shape::Flat,
+        required: &["connId", "table", "where"],
+    },
     // ── PostgreSQL / SQLite / MSSQL(各 3:前端只调 connect / test / disconnect) ──
     Spec {
         command: "ui.db_postgres_connect",
@@ -309,7 +321,7 @@ pub const COMMANDS: &[Spec] = &[
         shape: Shape::Flat,
         required: &["connId"],
     },
-    // ── Redis(13) ──
+    // ── Redis(18) ──
     Spec {
         command: "ui.db_redis_connect",
         target: Target::Fixed("db.redis.connect"),
@@ -385,6 +397,36 @@ pub const COMMANDS: &[Spec] = &[
     Spec {
         command: "ui.db_redis_info",
         target: Target::Fixed("db.redis.info"),
+        shape: Shape::Flat,
+        required: &["connId"],
+    },
+    Spec {
+        command: "ui.db_redis_scan_all",
+        target: Target::Fixed("db.redis.scanAll"),
+        shape: Shape::Flat,
+        required: &["connId"],
+    },
+    Spec {
+        command: "ui.db_redis_slowlog_get",
+        target: Target::Fixed("db.redis.slowlogGet"),
+        shape: Shape::Flat,
+        required: &["connId"],
+    },
+    Spec {
+        command: "ui.db_redis_slowlog_reset",
+        target: Target::Fixed("db.redis.slowlogReset"),
+        shape: Shape::Flat,
+        required: &["connId"],
+    },
+    Spec {
+        command: "ui.db_redis_bigkey_scan",
+        target: Target::Fixed("db.redis.bigkeyScan"),
+        shape: Shape::Flat,
+        required: &["connId"],
+    },
+    Spec {
+        command: "ui.db_redis_memory_analysis",
+        target: Target::Fixed("db.redis.memoryAnalysis"),
         shape: Shape::Flat,
         required: &["connId"],
     },
@@ -678,8 +720,8 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), before, "命令名重复:{names:?}");
         assert_eq!(
-            total, 86,
-            "C 组命令数(15+15+9+13+11+21+2),与 command_count() 一致"
+            total, 93,
+            "C 组命令数(16+16+9+18+11+21+2),与 command_count() 一致"
         );
         assert_eq!(total, command_count());
         for spec in COMMANDS {
@@ -720,8 +762,8 @@ mod tests {
             .iter()
             .filter(|spec| spec.command.starts_with("ui.db_clickhouse_"))
             .count();
-        assert_eq!(mysql_count, 15);
-        assert_eq!(clickhouse_count, 15, "clickhouse 族与 mysql 族对称");
+        assert_eq!(mysql_count, 16);
+        assert_eq!(clickhouse_count, 16, "clickhouse 族与 mysql 族对称");
     }
 
     #[tokio::test]
@@ -784,6 +826,11 @@ mod tests {
             (
                 "ui.db_mysql_update_rows",
                 json!({ "connId": "c1", "table": "t", "sets": {} }),
+                "where",
+            ),
+            (
+                "ui.db_mysql_delete_rows",
+                json!({ "connId": "c1", "table": "t" }),
                 "where",
             ),
             (

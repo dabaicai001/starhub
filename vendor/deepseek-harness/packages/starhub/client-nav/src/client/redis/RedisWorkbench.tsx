@@ -43,16 +43,32 @@
  *   原地重建连接。
  * - **键树 React key 去重**:key `a` 与同名文件夹 `a`(来自 key `a:b`)的 path
  *   相同,渲染 key 加节点种类前缀,避免重复 key 让协调器复用错行。
+ *
+ * 本轮增强:
+ * - **建连采纳资产配置的初始库**:`asset.config.db` 为 0-15 整数时直接连到该库
+ *   并同步 activeDb(旧版硬编码 db0,库与 UI 状态漂移)。
+ * - **per-db 类型过滤**:搜索行右侧下拉(全部/string/hash/list/set/zset),按 db
+ *   隔离持久;选中具体类型时该 db 改走 db_redis_scan_all(服务端过滤的一次性
+ *   全量,无「加载更多」),「全部」维持 redisScanAccumulate 分页。
+ * - **批量删除**:key 叶子行与文件夹行加勾选框(文件夹 = 其下全部叶子),工具栏
+ *   「删除所选 (N)」一次 db_redis_del 提交;键列表重扫即清空勾选(重扫结果可能
+ *   已变,保留旧勾选会删掉看不见的 key)。
+ * - **右侧主区「键值 / 分析」页签**:分析页(见 RedisAnalysisPanel)含服务器
+ *   信息、慢日志、BigKey 扫描、内存分析四块。
+ * - **新建 key 支持 TTL**:string 拼 `SET k v EX ttl`,其它类型创建后补 EXPIRE。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   IconChevronDownOutlineMedium, IconChevronRightOutlineMedium, IconCloseFillMedium, IconCloseOutlineMedium,
   IconCodeOutlineMedium, IconCopyOutlineMedium, IconEditOutlineMedium, IconPlusOutlineMedium, IconTrashOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { RustAsset } from '../store.ts'
-import { redisConnect, redisDBSize, redisDel, redisDisconnect, redisExecute, redisFlushDB, redisQuote, redisRename, redisScan, redisScanAccumulate, redisSelect, type RedisKeyInfo } from './redis-service.ts'
-import { allFolderPaths, buildKeyTree, countLeaves, type KeyTreeNode } from './key-tree.ts'
+import { redisConnect, redisDBSize, redisDel, redisDisconnect, redisExecute, redisFlushDB, redisGetValue, redisQuote, redisRename, redisScan, redisScanAccumulate, redisScanAll, redisSelect, type RedisKeyInfo } from './redis-service.ts'
+import { allFolderPaths, buildKeyTree, countLeaves, leafKeys, type KeyTreeNode } from './key-tree.ts'
 import { RedisValueEditor } from './RedisValueEditor.tsx'
+import { RedisAnalysisPanel } from './RedisAnalysisPanel.tsx'
+import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
 import css from './RedisWorkbench.module.css'
 
 /** Redis 固定 DB 编号(单机 0-15)。 */
@@ -122,16 +138,67 @@ interface DbLoadable {
       记录,若 match 也是 '' 会被 toggleDb 误判为完整缓存而跳过加载(展开后
       显示「暂无 key」),故未加载恒为 null,命中判定天然失败。 */
   match: string | null
+  /** 本次加载使用的类型过滤('' = 全部);null = 从未加载过键(与 match 同理)。 */
+  typeFilter: string | null
 }
 
 /** 未加载 db 的占位记录(patchDbList 的合并基底)。 */
-const EMPTY_DB_LOADABLE: DbLoadable = { keys: [], cursor: 0, complete: true, loading: false, error: null, size: 0, match: null }
+const EMPTY_DB_LOADABLE: DbLoadable = {
+  keys: [], cursor: 0, complete: true, loading: false, error: null, size: 0, match: null, typeFilter: null,
+}
 
 /** 无展开文件夹的占位集(toggleKeyFolder 从不原地改动,可安全共享)。 */
 const EMPTY_FOLDER_PATHS: ReadonlySet<string> = new Set()
 
+/** 无勾选的占位集(勾选操作从不原地改动,可安全共享)。 */
+const EMPTY_SELECTED: ReadonlySet<string> = new Set()
+
 /** 新建 key 支持的类型。 */
-export const NEW_KEY_TYPES = ['string', 'hash', 'list', 'set', 'zset'] as const
+export const NEW_KEY_TYPES = ['string', 'hash', 'list', 'set', 'zset', 'stream'] as const
+
+/** per-db 类型过滤可选值:'' = 全部(走分页 SCAN),其余走 scan_all 服务端过滤。 */
+export const REDIS_TYPE_FILTERS = ['', 'string', 'hash', 'list', 'set', 'zset', 'stream'] as const
+
+/**
+ * 会改变键空间(或 key 元数据)的 Redis 命令动词——CLI 执行后需要重扫所在库。
+ * 只读命令(GET/KEYS/HGETALL/TTL/TYPE/SCAN…)不改变键集合,重扫纯属浪费:
+ * 大库上一次全库 SCAN 可能数秒,旧版无脑刷新让每条只读命令都卡一遍。
+ * @param command - CLI 原始输入(未 trim 也可)。
+ * @returns 首个 token 是写操作时 true。
+ */
+export function isMutatingRedisCommand(command: string): boolean {
+  const first = command.trim().split(/\s+/)[0]
+  if (first === undefined) return false
+  const verb = first.toUpperCase()
+  return MUTATING_REDIS_VERBS.has(verb)
+}
+
+/** 写操作动词表(SET/HDEL/XADD/EXPIRE/FLUSHDB…;SELECT 由调用方单独拦截)。 */
+const MUTATING_REDIS_VERBS: ReadonlySet<string> = new Set([
+  'SET', 'SETEX', 'PSETEX', 'SETNX', 'MSET', 'MSETNX', 'GETSET', 'GETDEL', 'GETEX', 'APPEND',
+  'INCR', 'DECR', 'INCRBY', 'DECRBY', 'INCRBYFLOAT',
+  'DEL', 'UNLINK', 'EXPIRE', 'PEXPIRE', 'EXPIREAT', 'PEXPIREAT', 'PERSIST', 'RESTORE', 'MIGRATE', 'COPY', 'MOVE', 'RENAME', 'RENAMENX',
+  'HDEL', 'HMSET', 'HSET', 'HSETNX', 'HINCRBY', 'HINCRBYFLOAT',
+  'LPUSH', 'RPUSH', 'LPUSHX', 'RPUSHX', 'LPOP', 'RPOP', 'LSET', 'LREM', 'LTRIM', 'LINSERT', 'LMOVE', 'RPOPLPUSH',
+  'SADD', 'SREM', 'SPOP', 'SMOVE', 'SINTERSTORE', 'SUNIONSTORE', 'SDIFFSTORE',
+  'ZADD', 'ZINCRBY', 'ZREM', 'ZREMRANGEBYSCORE', 'ZREMRANGEBYRANK', 'ZREMRANGEBYLEX', 'ZPOPMIN', 'ZPOPMAX', 'ZRANGESTORE',
+  'XADD', 'XDEL', 'XTRIM', 'XSETID', 'XGROUP', 'XCLAIM', 'XAUTOCLAIM',
+  'PFADD', 'PFMERGE',
+  'FLUSHDB', 'FLUSHALL', 'SWAPDB', 'FUNCTION', 'SCRIPT',
+])
+
+/**
+ * 新建 key 对话框的值输入占位符(按类型说明这一项填什么)。
+ * @param type - 选中的 key 类型。
+ * @returns 占位符/aria-label 共用的文案。
+ */
+export function valuePlaceholder(type: string): string {
+  if (type === 'string') return '值(string)'
+  if (type === 'hash') return '值(hash)'
+  if (type === 'stream') return '首条目的字段值'
+  if (type === 'zset') return '首个成员'
+  return '首个成员'
+}
 
 /** 新建 key 对话框输入。 */
 interface NewKeyDraft {
@@ -144,58 +211,120 @@ interface NewKeyDraft {
   field: string
   /** zset 的分值。 */
   score: string
+  /** TTL 秒数输入(空 = 持久化;非正整数在创建时拦截,不创建)。 */
+  ttl: string
+}
+
+/**
+ * 解析新建 key 的 TTL 输入:空 = 持久化(null);正整数 = 秒数;其余为 'invalid'。
+ * 0/负数必须拒绝:Redis 的 `EXPIRE key 0` 语义是「立即删除 key」,`SET k v EX 0`
+ * 是服务端报错,都不符合「新建 key」的预期。
+ * @param input - TTL 输入框原始文本。
+ * @returns null = 持久化;正整数 = 秒数;'invalid' = 非法输入。
+ */
+export function parseNewKeyTtl(input: string): number | null | 'invalid' {
+  const trimmed = input.trim()
+  if (trimmed === '') return null
+  const n = Number(trimmed)
+  if (!Number.isInteger(n) || n <= 0) return 'invalid'
+  return n
+}
+
+/** buildCreateKeyCommand 的返回:命令文本 + 解析出的 TTL 秒。 */
+export interface CreateKeyCommand {
+  command: string
+  /** 合法正整数 TTL(秒);无 TTL 为 null(调用方据此决定是否追加 EXPIRE)。 */
+  ttl: number | null
 }
 
 /**
  * 组装新建 key 的 Redis 命令:按类型分派(hash 用 field+value,zset 用 score+member,
- * list/set 以 value 作首个成员——Redis 不允许创建空集合,必须先写一个元素)。
- * @param draft - 对话框输入(key 已 trim)。
- * @returns 命令文本;hash 缺 field / zset score 非数字时返回 null(调用方提示)。
+ * list/set 以 value 作首个成员——Redis 不允许创建空集合,必须先写一个元素;
+ * stream 用 XADD,服务器分配 id,field+value 即首条目的字段与值)。
+ * string 类型带 TTL 时拼成 `SET k v EX ttl`;其它类型的创建命令没有 TTL 语义,
+ * TTL 经返回值带出,由调用方在创建成功后追加 `EXPIRE key ttl`。
+ * @param draft - 对话框输入(key 已 trim;ttl 需先经 parseNewKeyTtl 校验,此处非法按无 TTL 处理)。
+ * @returns 命令与 TTL;hash/stream 缺 field / zset score 非数字时返回 null(调用方提示)。
  */
-export function buildCreateKeyCommand(draft: NewKeyDraft): string | null {
+export function buildCreateKeyCommand(draft: NewKeyDraft): CreateKeyCommand | null {
   const key = redisQuote(draft.key)
   const value = redisQuote(draft.value)
+  const ttlParsed = parseNewKeyTtl(draft.ttl)
+  const ttl = ttlParsed === 'invalid' ? null : ttlParsed
   switch (draft.type) {
     case 'hash': {
       if (draft.field.trim() === '') return null
-      return `HSET ${key} ${redisQuote(draft.field)} ${value}`
+      return { command: `HSET ${key} ${redisQuote(draft.field)} ${value}`, ttl }
     }
-    case 'list': return `RPUSH ${key} ${value}`
-    case 'set': return `SADD ${key} ${value}`
+    case 'list': return { command: `RPUSH ${key} ${value}`, ttl }
+    case 'set': return { command: `SADD ${key} ${value}`, ttl }
+    case 'stream': {
+      if (draft.field.trim() === '') return null
+      // `*` = 服务器分配条目 id;field+value 即首条目的一个字段对。
+      return { command: `XADD ${key} * ${redisQuote(draft.field)} ${value}`, ttl }
+    }
     case 'zset': {
       const score = Number(draft.score)
       if (draft.score.trim() === '' || !Number.isFinite(score)) return null
-      return `ZADD ${key} ${score} ${value}`
+      return { command: `ZADD ${key} ${score} ${value}`, ttl }
     }
-    default: return `SET ${key} ${value}`
+    default: return { command: ttl === null ? `SET ${key} ${value}` : `SET ${key} ${value} EX ${ttl}`, ttl }
   }
 }
 
-/** 树行渲染入参:节点 + 深度 + 展开态与操作回调。 */
+/** 树行渲染入参:节点 + 深度 + 展开态/勾选集与操作回调。 */
 interface KeyTreeRowProps {
   node: KeyTreeNode
   depth: number
   expanded: ReadonlySet<string>
+  /** 当前 db 的批量删除勾选集。 */
+  selected: ReadonlySet<string>
   onToggle: (path: string) => void
   onOpen: (key: string, type: string) => void
+  /** 打开 key 并把焦点落到值编辑器的「新增成员」行(右键快捷添加用)。 */
+  onOpenAndAdd: (key: string, type: string) => void
   onCopy: (key: string) => void
+  onCopyValue: (key: string) => void
   onRename: (key: string) => void
   onDelete: (key: string) => void
+  onToggleSelect: (key: string, checked: boolean) => void
+  onToggleFolderSelect: (node: KeyTreeNode, checked: boolean) => void
 }
 
 /**
- * 渲染一行键树节点:文件夹行(箭头 + 段名 + 叶子计数,点击折叠/展开,子级递归)
- * 或叶子行(类型徽标 + 最后一段 + TTL 徽标,操作沿用完整 key)。
+ * 渲染一行键树节点:文件夹行(勾选框 + 箭头 + 段名 + 叶子计数,点击折叠/展开,
+ * 子级递归)或叶子行(勾选框 + 类型徽标 + 最后一段 + TTL 徽标,操作沿用完整 key)。
+ * 勾选用于批量删除:文件夹勾选 = 其下全部叶子;勾选的叶子行高亮。
+ *
+ * 右键菜单(与 MySQL 库/表行对齐,旧版键树完全没有右键入口):
+ * 叶子行 = 打开 / 复制 key 名 / 复制 value / 添加成员(结构类型)/ 重命名 / 删除;
+ * 文件夹行 = 展开|收起 / 复制 key 前缀。
  * @param props - 节点与回调。
  * @returns 该行(及展开时的子级行)。
  */
-function KeyTreeRow({ node, depth, expanded, onToggle, onOpen, onCopy, onRename, onDelete }: KeyTreeRowProps) {
+function KeyTreeRow({
+  node, depth, expanded, selected, onToggle, onOpen, onOpenAndAdd, onCopy, onCopyValue, onRename, onDelete, onToggleSelect, onToggleFolderSelect,
+}: KeyTreeRowProps) {
+  const menu = useContextMenu()
   const indent = { paddingLeft: 5 + depth * 14 }
   if (node.keyInfo !== null) {
     const k = node.keyInfo
     const ttl = ttlBadge(k.ttl)
+    const checked = selected.has(k.key)
+    const items: readonly MenuEntry[] = [
+      { id: 'open', label: '打开' },
+      { id: 'copy', label: '复制 key 名' },
+      { id: 'copy-value', label: '复制 value' },
+      ...(k.type === 'string' ? [] : [{ id: 'add', label: '添加成员' }]),
+      { id: 'rename', label: '重命名' },
+      { id: 'sep', type: 'separator' },
+      { id: 'delete', label: '删除', danger: true },
+    ]
     return (
-      <div className={css.keyRow} style={indent}>
+      <div className={`${css.keyRow} ${checked ? css.keyRowSelected : ''}`} style={indent} onContextMenu={menu.onContextMenu}>
+        <input type="checkbox" className={css.keyCheck} checked={checked} title="选择"
+          aria-label={`选择 ${k.key}`}
+          onChange={(e) =>{  onToggleSelect(k.key, e.target.checked) }} />
         <button type="button" className={css.keyMain} onClick={() =>{  onOpen(k.key, k.type) }}>
           <span className={css.keyType}>{k.type}</span>
           <span className={css.keyName} title={k.key}>{node.name}</span>
@@ -209,13 +338,35 @@ function KeyTreeRow({ node, depth, expanded, onToggle, onOpen, onCopy, onRename,
           <button type="button" className={css.miniDanger} title="删除" aria-label={`删除 ${k.key}`}
             onClick={() =>{  onDelete(k.key) }}><IconCloseFillMedium size={13} /></button>
         </div>
+        <ContextMenu
+          menu={menu}
+          items={items}
+          className={css.menuRoot}
+          onSelect={(id) => {
+            if (id === 'open') onOpen(k.key, k.type)
+            else if (id === 'copy') onCopy(k.key)
+            else if (id === 'copy-value') onCopyValue(k.key)
+            else if (id === 'add') onOpenAndAdd(k.key, k.type)
+            else if (id === 'rename') onRename(k.key)
+            else if (id === 'delete') onDelete(k.key)
+          }}
+        />
       </div>
     )
   }
   const open = expanded.has(node.path)
+  // 文件夹勾选态 = 其下全部叶子都已勾选(部分勾选不显示半选,保持布尔简单)。
+  const folderChecked = leafKeys(node).every(k => selected.has(k))
+  const folderItems: readonly MenuEntry[] = [
+    { id: 'toggle', label: open ? '收起' : '展开' },
+    { id: 'copy-prefix', label: '复制 key 前缀' },
+  ]
   return (
     <>
-      <div className={css.keyRow} style={indent}>
+      <div className={css.keyRow} style={indent} onContextMenu={menu.onContextMenu}>
+        <input type="checkbox" className={css.keyCheck} checked={folderChecked} title="全选该文件夹"
+          aria-label={`选择文件夹 ${node.path}`}
+          onChange={(e) =>{  onToggleFolderSelect(node, e.target.checked) }} />
         <button type="button" className={css.keyMain} onClick={() =>{  onToggle(node.path) }}
           aria-expanded={open} aria-label={`文件夹 ${node.path}`}>
           <span className={css.folderChevron} aria-hidden="true">
@@ -224,13 +375,25 @@ function KeyTreeRow({ node, depth, expanded, onToggle, onOpen, onCopy, onRename,
           <span className={css.folderName} title={node.path}>{node.name}</span>
           <span className={css.folderCount}>{countLeaves(node)}</span>
         </button>
+        <ContextMenu
+          menu={menu}
+          items={folderItems}
+          className={css.menuRoot}
+          onSelect={(id) => {
+            if (id === 'toggle') onToggle(node.path)
+            else if (id === 'copy-prefix') onCopy(node.path)
+          }}
+        />
       </div>
       {open && node.children.map(child => (
         // key 与同名文件夹可共存(key `a` 与 key `a:b` 会同时出现在根层),
         // 两者的 path 都是 `a`;React key 必须带节点种类前缀,否则重复 key
         // 会让协调器复用错行。
         <KeyTreeRow key={`${child.keyInfo === null ? 'f' : 'k'}:${child.path}`} node={child} depth={depth + 1} expanded={expanded}
-          onToggle={onToggle} onOpen={onOpen} onCopy={onCopy} onRename={onRename} onDelete={onDelete} />
+          selected={selected}
+          onToggle={onToggle} onOpen={onOpen} onOpenAndAdd={onOpenAndAdd} onCopy={onCopy} onCopyValue={onCopyValue}
+          onRename={onRename} onDelete={onDelete}
+          onToggleSelect={onToggleSelect} onToggleFolderSelect={onToggleFolderSelect} />
       ))}
     </>
   )
@@ -242,6 +405,57 @@ function toCliText(v: unknown): string {
   if (v === undefined) return ''
   const primitive = v as string | number | boolean | bigint | symbol
   return String(primitive)
+}
+
+/** DB 树一行的动作集(点击展开 / 右键菜单)。 */
+interface DbRowActions {
+  onToggle: () => void
+  onNewKey: () => void
+  onRefresh: () => void
+  onFlush: () => void
+}
+
+/**
+ * DB 树单行:点击展开/收起(懒加载键),右键菜单 = 新建 Key / 刷新 / 清空 DB
+ * (与 MySQL 库行右键同形态;旧版 Redis db 行没有任何右键入口)。
+ * @param props - db 编号、展开态、键总数与动作回调。
+ * @returns 该 db 行(含右键菜单锚点)。
+ */
+function DbTreeRow({ db, open, size, actions }: {
+  db: number
+  open: boolean
+  size: number | undefined
+  actions: DbRowActions
+}) {
+  const menu = useContextMenu()
+  const items: readonly MenuEntry[] = [
+    { id: 'new-key', label: '新建 Key' },
+    { id: 'refresh', label: '刷新' },
+    { id: 'sep', type: 'separator' },
+    { id: 'flush', label: '清空 DB', danger: true },
+  ]
+  return (
+    <div className={css.dbRow} onContextMenu={menu.onContextMenu}>
+      <button type="button" className={css.keyMain} onClick={actions.onToggle}
+        aria-expanded={open} aria-label={`数据库 db${db}`}>
+        <span className={css.folderChevron} aria-hidden="true">
+          {open ? <IconChevronDownOutlineMedium size={12} /> : <IconChevronRightOutlineMedium size={12} />}
+        </span>
+        <span className={css.dbName}>db{db}</span>
+        {size !== undefined && <span className={css.folderCount}>{size.toLocaleString()}</span>}
+      </button>
+      <ContextMenu
+        menu={menu}
+        items={items}
+        className={css.menuRoot}
+        onSelect={(id) => {
+          if (id === 'new-key') actions.onNewKey()
+          else if (id === 'refresh') actions.onRefresh()
+          else if (id === 'flush') actions.onFlush()
+        }}
+      />
+    </div>
+  )
 }
 
 /**
@@ -262,6 +476,12 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
   const [dbLists, setDbLists] = useState<ReadonlyMap<number, DbLoadable>>(new Map())
   /** per-db 搜索词(v0.102.0:搜索框移入各 db 区块,词按 db 隔离持久)。 */
   const [searchDrafts, setSearchDrafts] = useState<ReadonlyMap<number, string>>(new Map())
+  /** per-db 类型过滤(REDIS_TYPE_FILTERS 之一;'' / 缺省 = 全部,按 db 隔离持久)。 */
+  const [typeFilters, setTypeFilters] = useState<ReadonlyMap<number, string>>(new Map())
+  /** 批量删除勾选集(db → 已勾选 key 集;该 db 键列表重扫后清空,见 loadKeysForDb)。 */
+  const [selectedKeys, setSelectedKeys] = useState<ReadonlyMap<number, ReadonlySet<string>>>(new Map())
+  /** 右侧主区页签:键值(现有内容)/ 分析(RedisAnalysisPanel)。 */
+  const [mainTab, setMainTab] = useState<'keys' | 'analysis'>('keys')
   const [cliOpen, setCliOpen] = useState(false)
   const [cliInput, setCliInput] = useState('')
   const [cliOutput, setCliOutput] = useState<string>('')
@@ -271,12 +491,12 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameTo, setRenameTo] = useState('')
   const [newKeyOpen, setNewKeyOpen] = useState(false)
-  const [newKeyDraft, setNewKeyDraft] = useState<NewKeyDraft>({ key: '', type: 'string', value: '', db: 0, field: '', score: '' })
+  const [newKeyDraft, setNewKeyDraft] = useState<NewKeyDraft>({ key: '', type: 'string', value: '', db: 0, field: '', score: '', ttl: '' })
   /** FLUSHDB 二次确认:目标 db(打开弹窗时锁定)与用户输入的确认序号。 */
   const [flushConfirm, setFlushConfirm] = useState<number | null>(null)
   const [flushInput, setFlushInput] = useState('')
   const [toast, setToast] = useState<string | null>(null)
-  const [openValue, setOpenValue] = useState<{ key: string; type: string } | null>(null)
+  const [openValue, setOpenValue] = useState<{ key: string; type: string; addFocus?: boolean } | null>(null)
   /** 键树文件夹展开态:db → 已展开路径集(默认全收起,点击文件夹行才展开)。 */
   const [expandedKeys, setExpandedKeys] = useState<ReadonlyMap<number, ReadonlySet<string>>>(new Map())
   const connRef = useRef<string | null>(null)
@@ -323,19 +543,62 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
     setSearchDrafts(prev => new Map(prev).set(db, text))
   }, [])
 
-  /** 连续加载某个 db 的键(从 0 游标 SCAN 到归零/单批上限;按 match 过滤),写入该 db 缓存。 */
-  const loadKeysForDb = useCallback(async (connId: string, db: number, match: string) => {
+  /** 取/写某个 db 的类型过滤(per-db 隔离;'' = 全部)。 */
+  const typeFilterFor = useCallback((db: number) => typeFilters.get(db) ?? '', [typeFilters])
+  const setTypeFilterFor = useCallback((db: number, type: string) => {
+    setTypeFilters(prev => new Map(prev).set(db, type))
+  }, [])
+
+  /** 取/写某个 db 的批量删除勾选集(per-db 隔离)。 */
+  const selectedFor = useCallback((db: number) => selectedKeys.get(db) ?? EMPTY_SELECTED, [selectedKeys])
+  const setSelectedFor = useCallback((db: number, keys: ReadonlySet<string>) => {
+    setSelectedKeys(prev => new Map(prev).set(db, keys))
+  }, [])
+
+  /** 勾选/取消单个 key。 */
+  const toggleKeySelected = useCallback((db: number, key: string, checked: boolean) => {
+    const next = new Set(selectedFor(db))
+    if (checked) next.add(key)
+    else next.delete(key)
+    setSelectedFor(db, next)
+  }, [selectedFor, setSelectedFor])
+
+  /** 勾选/取消文件夹下全部叶子 key(勾选 = 选中该文件夹下全部 key)。 */
+  const toggleFolderSelected = useCallback((db: number, node: KeyTreeNode, checked: boolean) => {
+    const next = new Set(selectedFor(db))
+    for (const k of leafKeys(node)) {
+      if (checked) next.add(k)
+      else next.delete(k)
+    }
+    setSelectedFor(db, next)
+  }, [selectedFor, setSelectedFor])
+
+  /**
+   * 连续加载某个 db 的键并写入该 db 缓存。类型过滤为「全部」时走
+   * redisScanAccumulate 分页(游标归零/单批上限,可「加载更多」续传);选中具体
+   * 类型时改走 redisScanAll——服务端按类型过滤的一次性全量(complete 恒 true,
+   * 无「加载更多」),代价是一次 RPC 可能扫全库。
+   * 加载成功后清空该 db 的勾选集:重扫结果可能已变(搜索词/类型过滤变了,或别的
+   * 客户端改删过 key),保留旧勾选会让「删除所选」删掉看不见的 key。
+   */
+  const loadKeysForDb = useCallback(async (connId: string, db: number, match: string, typeFilter: string) => {
     patchDbList(db, { loading: true, error: null })
     try {
-      const { keys, cursor, complete } = await redisScanAccumulate(
-        (cur, m, count) => redisScan(connId, cur, m, count),
-        0, match === '' ? undefined : match, [], SCAN_BATCH_LIMIT,
-      )
-      patchDbList(db, { keys, cursor, complete, loading: false, error: null, match })
+      if (typeFilter !== '') {
+        const result = await redisScanAll(connId, match === '' ? undefined : match, typeFilter)
+        patchDbList(db, { keys: result.keys, cursor: 0, complete: true, loading: false, error: null, match, typeFilter })
+      } else {
+        const { keys, cursor, complete } = await redisScanAccumulate(
+          (cur, m, count) => redisScan(connId, cur, m, count),
+          0, match === '' ? undefined : match, [], SCAN_BATCH_LIMIT,
+        )
+        patchDbList(db, { keys, cursor, complete, loading: false, error: null, match, typeFilter })
+      }
+      setSelectedFor(db, EMPTY_SELECTED)
     } catch (e: unknown) {
       patchDbList(db, { loading: false, error: e instanceof Error ? e.message : String(e) })
     }
-  }, [patchDbList])
+  }, [patchDbList, setSelectedFor])
 
   /**
    * 从缓存游标续传某个 db 的剩余键(「加载更多」/ 部分缓存展开时自动续传一批):
@@ -361,10 +624,13 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
   // 挂载建连一次,卸载断连;不自动取键(DB 树全部收起,点击才懒加载)。
   useEffect(() => {
     const config = asset.config
+    // 采纳资产配置的初始库(config.db):仅 0-15 的整数生效,其余回落 0;建连
+    // 成功后同步 activeDb,避免「连接在 dbN 而 UI 以为在 db0」的漂移。
+    const configDb = typeof config.db === 'number' && Number.isInteger(config.db) && config.db >= 0 && config.db <= 15 ? config.db : 0
     const connParams = {
       host: typeof config.host === 'string' ? config.host : '',
       port: typeof config.port === 'number' ? config.port : 6379,
-      db: 0,
+      db: configDb,
       ssl: config.ssl === true,
       ...(typeof config.password === 'string' ? { password: config.password } : {}),
     }
@@ -375,6 +641,7 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
         if (cancelled) return
         if (!info.connId) throw new Error('Redis 连接未返回 connId')
         connRef.current = info.connId
+        setActiveDb(configDb)
         setConnected(true)
       })
       .catch((e: unknown) => {
@@ -423,45 +690,73 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
     }
     const cached = dbLists.get(db)
     const match = toScanMatch(searchFor(db).trim())
-    // 缓存命中:键 + 搜索匹配一致时不再从头请求。完整缓存直接复用;部分缓存
-    // (上次停在单批上限)自动从游标续传一批,避免大 db 每次展开都重扫。
-    if (cached !== undefined && cached.match === match) {
+    const typeFilter = typeFilterFor(db)
+    // 缓存命中:键 + 搜索匹配 + 类型过滤都一致时不再从头请求。完整缓存直接复用;
+    // 部分缓存(上次停在单批上限)自动从游标续传一批,避免大 db 每次展开都重扫。
+    if (cached !== undefined && cached.match === match && cached.typeFilter === typeFilter) {
       if (cached.complete) return
       void loadMoreKeysForDb(connId, db)
       return
     }
-    await Promise.all([refreshSizeForDb(connId, db), loadKeysForDb(connId, db, match)])
+    await Promise.all([refreshSizeForDb(connId, db), loadKeysForDb(connId, db, match, typeFilter)])
   }
 
-  /** 重新加载某个 db 的键与总数(错误重试 / 刷新钮共用),沿用该 db 当前搜索词。 */
+  /** 重新加载某个 db 的键与总数(错误重试 / 刷新钮共用),沿用该 db 当前搜索词与类型过滤。 */
   const reloadDb = async (db: number) => {
     const connId = connRef.current
     /* v8 ignore next -- 仅连接建立后触发 */
     if (connId === null) return
-    await Promise.all([refreshSizeForDb(connId, db), loadKeysForDb(connId, db, toScanMatch(searchFor(db).trim()))])
+    await Promise.all([refreshSizeForDb(connId, db), loadKeysForDb(connId, db, toScanMatch(searchFor(db).trim()), typeFilterFor(db))])
   }
 
   /** 重新加载当前展开 db(键操作 / CLI / 清空后的数据同步)。 */
   const refreshExpanded = async (connId: string) => {
     /* v8 ignore next -- 调用方全部保证展开态:键行/刷新钮仅在展开时可用 */
     if (expandedDb === null) return
-    await Promise.all([refreshSizeForDb(connId, expandedDb), loadKeysForDb(connId, expandedDb, toScanMatch(searchFor(expandedDb).trim()))])
+    const match = toScanMatch(searchFor(expandedDb).trim())
+    await Promise.all([refreshSizeForDb(connId, expandedDb), loadKeysForDb(connId, expandedDb, match, typeFilterFor(expandedDb))])
   }
 
-  // 搜索词防抖:展开 db 的搜索词与其缓存匹配串不一致时,停敲 350ms 自动重扫;
-  // toggleDb 的首次加载(entry 未建)不在此处触发,避免双请求;加载进行中
+  /**
+   * 把客户端切到目标库并在 UI 上展开它(缓存命中则续传/复用)。
+   *
+   * 用于所有会改变连接所在库的路径(CLI SELECT、新建 key 到别的库):sidecar 的
+   * Redis 客户端是持久单库语义,只发 redisSelect 而不同步 expandedDb 会让
+   * 「连接在 dbN、UI 显示 dbM」——此后点 dbM 列表里的 key,读/删/改全部落在
+   * dbN 的同名 key 上(库漂移,见 FLUSHDB 二次确认的同款防线)。
+   */
+  const selectAndExpandDb = useCallback(async (connId: string, db: number) => {
+    setExpandedDb(db)
+    setOpenValue(null)
+    if (activeDb !== db) {
+      await redisSelect(connId, db)
+      setActiveDb(db)
+    }
+    const cached = dbLists.get(db)
+    const match = toScanMatch(searchFor(db).trim())
+    const typeFilter = typeFilterFor(db)
+    if (cached !== undefined && cached.match === match && cached.typeFilter === typeFilter) {
+      if (!cached.complete) void loadMoreKeysForDb(connId, db)
+      return
+    }
+    await Promise.all([refreshSizeForDb(connId, db), loadKeysForDb(connId, db, match, typeFilter)])
+  }, [activeDb, dbLists, loadMoreKeysForDb, loadKeysForDb, refreshSizeForDb, searchFor, typeFilterFor])
+
+  // 搜索词/类型过滤防抖:展开 db 的搜索词或类型过滤与其缓存不一致时,停敲 350ms
+  // 自动重扫;toggleDb 的首次加载(entry 未建)不在此处触发,避免双请求;加载进行中
   // (toggleDb 首次加载在途)同样跳过,加载落地后 dbLists 变化会重估本效应。
   const expandedSearch = expandedDb === null ? '' : searchFor(expandedDb)
+  const expandedTypeFilter = expandedDb === null ? '' : typeFilterFor(expandedDb)
   useEffect(() => {
     if (expandedDb === null) return
     const connId = connRef.current
     if (connId === null) return
     const entry = dbLists.get(expandedDb)
     const desired = toScanMatch(expandedSearch.trim())
-    if (entry === undefined || entry.loading || entry.match === desired) return
-    const timer = window.setTimeout(() =>{  void loadKeysForDb(connId, expandedDb, desired) }, SEARCH_DEBOUNCE_MS)
+    if (entry === undefined || entry.loading || (entry.match === desired && entry.typeFilter === expandedTypeFilter)) return
+    const timer = window.setTimeout(() =>{  void loadKeysForDb(connId, expandedDb, desired, expandedTypeFilter) }, SEARCH_DEBOUNCE_MS)
     return () =>{  window.clearTimeout(timer) }
-  }, [expandedDb, expandedSearch, dbLists, loadKeysForDb])
+  }, [expandedDb, expandedSearch, expandedTypeFilter, dbLists, loadKeysForDb])
 
   /** 键变更操作后同步:展开时刷新其键,收起时只刷新当前 db 总数。 */
   const syncAfterMutation = async (connId: string) => {
@@ -484,6 +779,27 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
     }
   }
 
+  /** 批量删除当前展开 db 的勾选 key:一次 db_redis_del 提交,成功后清空勾选并刷新。 */
+  const deleteSelected = async () => {
+    const connId = connRef.current
+    /* v8 ignore next -- 「删除所选」钮仅在连接后且展开 db 有勾选时渲染 */
+    if (connId === null || expandedDb === null) return
+    const keys = [...selectedFor(expandedDb)]
+    /* v8 ignore next -- 勾选为 0 时按钮不渲染,守卫生不可达 */
+    if (keys.length === 0) return
+    if (!window.confirm(`确定删除选中的 ${keys.length} 个 key?`)) return
+    try {
+      await redisDel(connId, keys)
+      notify(`已删除 ${keys.length} 个 key`)
+      setSelectedFor(expandedDb, EMPTY_SELECTED)
+      setOpenValue(cur => (cur !== null && keys.includes(cur.key) ? null : cur))
+      await refreshExpanded(connId)
+    } catch (e: unknown) {
+      /* v8 ignore next -- 宿主桥恒以 Error reject,String 兜底仅防御 */
+      notify(`删除失败:${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   const doRename = async () => {
     const connId = connRef.current
     const target = renaming
@@ -502,10 +818,10 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
     }
   }
 
-  /** 打开 FLUSHDB 二次确认弹窗:目标库 = 展开库或当前库,确认需输入 db 序号。 */
-  const askFlushDb = () => {
+  /** 打开 FLUSHDB 二次确认弹窗:目标库 = 指定 db / 展开库 / 当前库,确认需输入 db 序号。 */
+  const askFlushDb = (targetDb?: number) => {
     setFlushInput('')
-    setFlushConfirm(expandedDb ?? activeDb)
+    setFlushConfirm(targetDb ?? expandedDb ?? activeDb)
   }
 
   /**
@@ -536,8 +852,9 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
   }
 
   /** 打开新建 key 弹窗:目标 db 默认当前展开库(未展开则连接所在库),可改。 */
-  const openNewKey = () => {
-    setNewKeyDraft({ key: '', type: 'string', value: '', db: expandedDb ?? activeDb, field: '', score: '' })
+  const openNewKey = (targetDb?: number) => {
+    const db = targetDb ?? expandedDb ?? activeDb
+    setNewKeyDraft({ key: '', type: 'string', value: '', db, field: '', score: '', ttl: '' })
     setNewKeyOpen(true)
   }
 
@@ -548,9 +865,14 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
     const key = newKeyDraft.key.trim()
     /* v8 ignore next -- 空 key 时创建按钮 disabled,守卫生不可达 */
     if (key === '') return
-    const command = buildCreateKeyCommand({ ...newKeyDraft, key })
-    if (command === null) {
-      notify(newKeyDraft.type === 'hash' ? 'hash 需要填写字段名' : 'zset 需要合法的数字分值')
+    const ttl = parseNewKeyTtl(newKeyDraft.ttl)
+    if (ttl === 'invalid') {
+      notify('TTL 必须是正整数(秒),留空表示持久化')
+      return
+    }
+    const built = buildCreateKeyCommand({ ...newKeyDraft, key })
+    if (built === null) {
+      notify(newKeyDraft.type === 'hash' || newKeyDraft.type === 'stream' ? 'hash / stream 需要填写字段名' : 'zset 需要合法的数字分值')
       return
     }
     const target = newKeyDraft.db
@@ -560,11 +882,18 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
         await redisSelect(connId, target)
         setActiveDb(target)
       }
-      await redisExecute(connId, command)
+      await redisExecute(connId, built.command)
+      // 非 string 类型的创建命令不含 TTL 语义,创建成功后补 EXPIRE(string 已拼进 SET)。
+      if (built.ttl !== null && newKeyDraft.type !== 'string') {
+        await redisExecute(connId, `EXPIRE ${redisQuote(key)} ${built.ttl}`)
+      }
       setNewKeyOpen(false)
       notify('Key 已创建')
+      // 目标库与展开库不一致时,上面已把连接切到目标库——必须把展开态一起
+      // 同步过去(与 CLI SELECT 同策略),否则 UI 停在旧库而连接在新库,
+      // 之后点旧库的 key 会误读/误删目标库的同名 key。
       if (expandedDb === target) await refreshExpanded(connId)
-      else await refreshSizeForDb(connId, target)
+      else await selectAndExpandDb(connId, target)
     } catch (e: unknown) {
       notify(`创建失败:${e instanceof Error ? e.message : String(e)}`)
     }
@@ -589,22 +918,12 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
         return
       }
       try {
-        if (selectTarget !== activeDb) await redisSelect(connId, selectTarget)
-        setActiveDb(selectTarget)
-        setOpenValue(null)
+        // 与新建 key 同一条库同步路径:切连接 + 展开态跟随 + 键列表加载,
+        // 保证「UI 展示的库」恒等于「连接所在库」。
+        await selectAndExpandDb(connId, selectTarget)
         setCliOutput(`已切换到 db${selectTarget}`)
-        // 展开并加载目标 db,保证 UI 展示库与连接所在库一致(与 toggleDb 展开路径同)。
-        if (expandedDb !== selectTarget) {
-          setExpandedDb(selectTarget)
-          const cached = dbLists.get(selectTarget)
-          const match = toScanMatch(searchFor(selectTarget).trim())
-          if (cached !== undefined && cached.match === match) {
-            if (!cached.complete) void loadMoreKeysForDb(connId, selectTarget)
-          } else {
-            await Promise.all([refreshSizeForDb(connId, selectTarget), loadKeysForDb(connId, selectTarget, match)])
-          }
-        }
       } catch (e: unknown) {
+        /* v8 ignore next -- 宿主桥恒以 Error reject,String 兜底仅防御 */
         setCliOutput(`切换 DB 失败:${e instanceof Error ? e.message : String(e)}`)
       }
       // SELECT 也入历史,便于复查切库轨迹。
@@ -614,7 +933,9 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
     try {
       const res = await redisExecute(connId, command)
       setCliOutput(res.error ?? toCliText(res.result))
-      await syncAfterMutation(connId)
+      // 只读命令(GET/KEYS/HGETALL/TTL…)不改变键空间:跳过全库重扫。旧版
+      // 无脑 refreshExpanded,大库上每条只读命令都要等一次全量 SCAN。
+      if (isMutatingRedisCommand(command)) await syncAfterMutation(connId)
       pushCliHistory(command)
     } catch (e: unknown) {
       setCliOutput(e instanceof Error ? e.message : String(e))
@@ -659,6 +980,30 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
   }
 
   const openKey = useCallback((key: string, type: string) =>{  setOpenValue({ key, type }) }, [])
+
+  /**
+   * 右键「添加成员」:打开 key 并带上聚焦标志——值编辑器(按 key 重挂载)挂载
+   * 后把焦点落到「新增成员」输入行,省去成员多的集合滚到最底部的步骤。
+   */
+  const openKeyAndAdd = useCallback((key: string, type: string) => {
+    setOpenValue({ key, type, addFocus: true })
+  }, [])
+
+  /** 右键「复制 value」:按当前类型取一次值再进剪贴板(string 取原文,其余 JSON 化)。 */
+  const copyKeyValue = useCallback(async (key: string) => {
+    const connId = connRef.current
+    /* v8 ignore next -- 右键菜单仅在连接后可用 */
+    if (connId === null) return
+    try {
+      const result = await redisGetValue(connId, key)
+      const text = result.type === 'string' && typeof result.value === 'string'
+        ? result.value
+        : JSON.stringify(result.value, null, 2)
+      await copyText(text, 'value')
+    } catch (e: unknown) {
+      notify(`复制 value 失败:${e instanceof Error ? e.message : String(e)}`)
+    }
+  }, [copyText, notify])
 
   /** 展开/收起某个 db 里的键文件夹(展开集按 db 隔离,会话内持久)。 */
   const toggleKeyFolder = useCallback((db: number, path: string) => {
@@ -720,6 +1065,11 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                 <button type="button" className={css.iconButton} title="CLI" aria-label="CLI"
                   disabled={!connected} onClick={() =>{  setCliOpen(v => !v) }}><IconCodeOutlineMedium size={15} /></button>
                 <span className={css.toolbarSpacer} />
+                {expandedDb !== null && selectedFor(expandedDb).size > 0 && (
+                  <button type="button" className={css.dangerButton} data-testid="redis-delete-selected"
+                    title="批量删除勾选的 key"
+                    onClick={() => void deleteSelected()}>删除所选 ({selectedFor(expandedDb).size})</button>
+                )}
                 <button type="button" className={css.primaryButton} title="新建 Key" aria-label="新建 Key"
                   disabled={!connected} onClick={() =>{  openNewKey() }}><IconPlusOutlineMedium size={14} /> 新建 Key</button>
               </div>
@@ -730,16 +1080,17 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                   const entry = dbLists.get(db)
                   return (
                     <div className={`${css.dbNode} ${open ? css.dbNodeOpen : ''}`} key={db} role="treeitem">
-                      <div className={css.dbRow}>
-                        <button type="button" className={css.keyMain} onClick={() =>{  void toggleDb(db) }}
-                          aria-expanded={open} aria-label={`数据库 db${db}`}>
-                          <span className={css.folderChevron} aria-hidden="true">
-                            {open ? <IconChevronDownOutlineMedium size={12} /> : <IconChevronRightOutlineMedium size={12} />}
-                          </span>
-                          <span className={css.dbName}>db{db}</span>
-                          {entry !== undefined && <span className={css.folderCount}>{entry.size.toLocaleString()}</span>}
-                        </button>
-                      </div>
+                      <DbTreeRow
+                        db={db}
+                        open={open}
+                        size={entry?.size}
+                        actions={{
+                          onToggle: () =>{  void toggleDb(db) },
+                          onNewKey: () =>{  openNewKey(db) },
+                          onRefresh: () =>{  void reloadDb(db) },
+                          onFlush: () =>{  askFlushDb(db) },
+                        }}
+                      />
                       {open && (
                         <div className={css.dbChildren}>
                           <div className={css.dbSearchRow}>
@@ -755,6 +1106,12 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                               <button type="button" className={css.dbSearchClear} aria-label="清除搜索" title="清除搜索"
                                 onClick={() =>{  setSearchFor(db, '') }}><IconCloseOutlineMedium size={12} /></button>
                             )}
+                            {/* 类型过滤(按 db 隔离):非「全部」时该 db 走 scan_all 服务端过滤。 */}
+                            <select className={css.dbTypeFilter} aria-label="类型过滤" title="按类型过滤"
+                              value={typeFilterFor(db)}
+                              onChange={(e) =>{  setTypeFilterFor(db, e.target.value) }}>
+                              {REDIS_TYPE_FILTERS.map(t => <option key={t} value={t}>{t === '' ? '全部' : t}</option>)}
+                            </select>
                           </div>
                           {entry === undefined && <div className={css.dbStatus}>加载键…</div>}
                           {entry !== undefined && entry.loading && (
@@ -771,17 +1128,24 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                             </div>
                           )}
                           {entry !== undefined && !entry.loading && entry.error === null && entry.keys.length === 0 && (
-                            <div className={css.dbStatus}>{entry.match !== null && entry.match !== '' ? '搜索无匹配 key。' : '暂无 key。'}</div>
+                            <div className={css.dbStatus}>
+                              {entry.match !== null && (entry.match !== '' || entry.typeFilter !== '') ? '搜索无匹配 key。' : '暂无 key。'}
+                            </div>
                           )}
                           {entry !== undefined && entry.error === null && entry.keys.length > 0 && (
                             <>
                               <div className={css.keyList}>
                                 {keyTree.map(node => (
                                   <KeyTreeRow key={`${node.keyInfo === null ? 'f' : 'k'}:${node.path}`} node={node} depth={0} expanded={expandedFolders}
+                                    selected={selectedFor(db)}
                                     onToggle={path => void toggleKeyFolder(db, path)} onOpen={openKey}
+                                    onOpenAndAdd={openKeyAndAdd}
                                     onCopy={key => void copyText(key, 'key 名')}
+                                    onCopyValue={key => void copyKeyValue(key)}
                                     onRename={(key) => { setRenaming(key); setRenameTo(key) }}
-                                    onDelete={key => void deleteKey(key)} />
+                                    onDelete={key => void deleteKey(key)}
+                                    onToggleSelect={(key, checked) =>{  toggleKeySelected(db, key, checked) }}
+                                    onToggleFolderSelect={(node2, checked) =>{  toggleFolderSelected(db, node2, checked) }} />
                                 ))}
                               </div>
                               {/* 部分加载(停在单批上限):展示剩余量 + 按游标续传。 */}
@@ -804,39 +1168,59 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
             </div>
 
             <div className={css.main}>
-              {renaming !== null && (
-                <div className={css.renameBar}>
-                  <input className={css.searchInput} value={renameTo} aria-label="新 key 名"
-                    placeholder={renaming} onChange={(e) =>{  setRenameTo(e.target.value) }} />
-                  <button type="button" className={css.primaryButton} onClick={() => void doRename()}>确认</button>
-                  <button type="button" className={css.secondaryButton} onClick={() =>{  setRenaming(null) }}>取消</button>
-                </div>
-              )}
-              {cliOpen && (
-                <div className={css.cliBar}>
-                  <input className={css.searchInput} placeholder="redis 命令,如 GET foo(↑↓ 翻历史)" value={cliInput} aria-label="命令输入"
-                    onChange={(e) =>{  setCliInput(e.target.value); setCliHistoryIdx(null) }}
-                    onKeyDown={(e) => {
-                      if (handleCliKeyDown(e.key)) { e.preventDefault(); return }
-                      if (e.key === 'Enter') void runCli()
-                    }} />
-                  <button type="button" className={css.primaryButton} onClick={() => void runCli()}>执行</button>
-                </div>
-              )}
-              {cliOutput !== '' && <pre className={css.cliOutput}>{cliOutput}</pre>}
-              {openValue !== null && id !== null ? (
-                <RedisValueEditor
-                  key={openValue.key}
-                  connId={id}
-                  redisKey={openValue.key}
-                  keyType={openValue.type}
-                  onSaved={() => { const c = connRef.current; if (c !== null) void refreshExpanded(c) }}
-                />
+              <div className={css.mainTabs} role="tablist">
+                <button type="button" role="tab" aria-selected={mainTab === 'keys'}
+                  className={mainTab === 'keys' ? css.mainTabActive : css.mainTab}
+                  onClick={() =>{  setMainTab('keys') }}>键值</button>
+                <button type="button" role="tab" aria-selected={mainTab === 'analysis'}
+                  className={mainTab === 'analysis' ? css.mainTabActive : css.mainTab}
+                  onClick={() =>{  setMainTab('analysis') }}>分析</button>
+              </div>
+              {mainTab === 'analysis' ? (
+                <RedisAnalysisPanel connId={id} activeDb={activeDb}
+                  onOpenKey={(key, type) => {
+                    // BigKey 行点击:切回「键值」页并打开该 key(分析基于连接当前库)。
+                    setOpenValue({ key, type })
+                    setMainTab('keys')
+                  }} />
               ) : (
-                <div className={css.placeholder}>
-                  <div className={css.placeholderTitle}>未选择 Key</div>
-                  <div className={css.placeholderDesc}>在左侧展开一个 db,点击 key 查看 / 编辑</div>
-                </div>
+                <>
+                  {renaming !== null && (
+                    <div className={css.renameBar}>
+                      <input className={css.searchInput} value={renameTo} aria-label="新 key 名"
+                        placeholder={renaming} onChange={(e) =>{  setRenameTo(e.target.value) }} />
+                      <button type="button" className={css.primaryButton} onClick={() => void doRename()}>确认</button>
+                      <button type="button" className={css.secondaryButton} onClick={() =>{  setRenaming(null) }}>取消</button>
+                    </div>
+                  )}
+                  {cliOpen && (
+                    <div className={css.cliBar}>
+                      <input className={css.searchInput} placeholder="redis 命令,如 GET foo(↑↓ 翻历史)" value={cliInput} aria-label="命令输入"
+                        onChange={(e) =>{  setCliInput(e.target.value); setCliHistoryIdx(null) }}
+                        onKeyDown={(e) => {
+                          if (handleCliKeyDown(e.key)) { e.preventDefault(); return }
+                          if (e.key === 'Enter') void runCli()
+                        }} />
+                      <button type="button" className={css.primaryButton} onClick={() => void runCli()}>执行</button>
+                    </div>
+                  )}
+                  {cliOutput !== '' && <pre className={css.cliOutput}>{cliOutput}</pre>}
+                  {openValue !== null && id !== null ? (
+                    <RedisValueEditor
+                      key={openValue.key}
+                      connId={id}
+                      redisKey={openValue.key}
+                      keyType={openValue.type}
+                      focusAddOnMount={openValue.addFocus === true}
+                      onSaved={() => { const c = connRef.current; if (c !== null) void refreshExpanded(c) }}
+                    />
+                  ) : (
+                    <div className={css.placeholder}>
+                      <div className={css.placeholderTitle}>未选择 Key</div>
+                      <div className={css.placeholderDesc}>在左侧展开一个 db,点击 key 查看 / 编辑</div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -858,8 +1242,8 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
               </div>
               <input className={css.searchInput} placeholder="key 名" aria-label="key 名"
                 value={newKeyDraft.key} onChange={(e) =>{  setNewKeyDraft(d => ({ ...d, key: e.target.value })) }} />
-              {newKeyDraft.type === 'hash' && (
-                <input className={css.searchInput} placeholder="字段名" aria-label="字段名"
+              {(newKeyDraft.type === 'hash' || newKeyDraft.type === 'stream') && (
+                <input className={css.searchInput} placeholder={newKeyDraft.type === 'stream' ? '首条目的字段名' : '字段名'} aria-label="字段名"
                   value={newKeyDraft.field} onChange={(e) =>{  setNewKeyDraft(d => ({ ...d, field: e.target.value })) }} />
               )}
               {newKeyDraft.type === 'zset' && (
@@ -867,13 +1251,16 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                   spellCheck={false} value={newKeyDraft.score} onChange={(e) =>{  setNewKeyDraft(d => ({ ...d, score: e.target.value })) }} />
               )}
               <input className={css.searchInput}
-                placeholder={newKeyDraft.type === 'string' ? '值(string)' : newKeyDraft.type === 'hash' ? '值(hash)' : '首个成员'}
-                aria-label={newKeyDraft.type === 'string' ? '值(string)' : newKeyDraft.type === 'hash' ? '值(hash)' : '首个成员'}
+                placeholder={valuePlaceholder(newKeyDraft.type)}
+                aria-label={valuePlaceholder(newKeyDraft.type)}
                 value={newKeyDraft.value} onChange={(e) =>{  setNewKeyDraft(d => ({ ...d, value: e.target.value })) }} />
+              <input className={css.searchInput} placeholder="TTL(秒,空为持久化)" aria-label="TTL(秒)"
+                spellCheck={false} value={newKeyDraft.ttl}
+                onChange={(e) =>{  setNewKeyDraft(d => ({ ...d, ttl: e.target.value })) }} />
               <div className={css.modalActions}>
                 <button type="button" className={css.secondaryButton} onClick={() =>{  setNewKeyOpen(false) }}>取消</button>
                 <button type="button" className={css.primaryButton}
-                  disabled={newKeyDraft.key.trim() === '' || (newKeyDraft.type === 'hash' && newKeyDraft.field.trim() === '')}
+                  disabled={newKeyDraft.key.trim() === '' || ((newKeyDraft.type === 'hash' || newKeyDraft.type === 'stream') && newKeyDraft.field.trim() === '')}
                   onClick={() => void createKey()}>创建</button>
               </div>
             </div>

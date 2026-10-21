@@ -830,8 +830,8 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
           }))
           .filter(c => c.name !== '')
         setTableColumns(prev => ({ ...prev, [key]: cols }))
-        // SQL 补全按未限定表名(与 SQL 方言一致),同名列取后展开者。
-        setColumnsByTable(prev => ({ ...prev, [table]: cols.map(c => c.name) }))
+        // SQL 补全按「库.表」隔离缓存(与字段树同键):同名列跨库不互相覆盖。
+        setColumnsByTable(prev => ({ ...prev, [key]: cols.map(c => c.name) }))
       } catch { /* 列加载失败:保留展开态但不显示列 */ }
       finally { setTableColumnsLoading(prev => ({ ...prev, [key]: false })) }
     }
@@ -950,8 +950,13 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
         if (!d.tables.includes(table)) return d
         return { ...d, tables: d.tables.filter(t => t !== table) }
       }))
-      // 清掉该表(按库隔离)的字段缓存。
+      // 清掉该表(按库隔离)的字段缓存与 SQL 补全缓存。
       const stateKey = tableStateKey(database, table)
+      setColumnsByTable(prev => {
+        const next = { ...prev }
+        delete next[stateKey]
+        return next
+      })
       setTableColumns(prev => {
         const next = { ...prev }
         delete next[stateKey]
@@ -1008,9 +1013,10 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
   /** 建表成功:把新表并入该库节点(若已展开)并清掉列缓存。 */
   const onTableCreated = useCallback((database: string, tableName: string) => {
     const stateKey = tableStateKey(database, tableName)
+    // 补全缓存与字段树同键(「库.表」):清旧列,懒加载效应会按新表重新拉取。
     setColumnsByTable(prev => {
       const next = { ...prev }
-      delete next[tableName]
+      delete next[stateKey]
       return next
     })
     setTableColumns(prev => {
@@ -1027,29 +1033,43 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
 
   // 把已展开库的表拼成补全 schema(表名 → 列名;列名在展开时惰性拉取,
   // 经 columnsByTable state 驱动 memo 重算,列到达后立即参与补全)。
+  // 缓存键是「库.表」(tableStateKey):同一表名可存在于多个库,按裸表名键会
+  // 让后展开的库覆盖前者的列(补全补出另一个库的字段)。schema 按**当前执行
+  // 库优先**组装——SQL 在当前库上跑,`users.` 的候选列应取当前库的 users。
   const sqlSchema: SqlCompletionSchema = useMemo(() => {
     const out: SqlCompletionSchema = {}
-    for (const db of dbs) {
-      if (db.kind !== 'database') continue
-      for (const table of db.tables) out[table] = columnsByTable[table] ?? []
+    const put = (database: string): void => {
+      const db = dbs.find(d => d.kind === 'database' && d.name === database)
+      if (db === undefined || db.kind !== 'database') return
+      for (const table of db.tables) {
+        if (out[table] !== undefined) continue
+        out[table] = columnsByTable[tableStateKey(database, table)] ?? []
+      }
     }
+    if (currentDb !== '') put(currentDb)
+    for (const db of dbs) if (db.kind === 'database') put(db.name)
     return out
-  }, [dbs, columnsByTable])
-  // 展开库时懒加载列到 state(供 SQL 补全)。
+  }, [dbs, columnsByTable, currentDb])
+  // 展开库时懒加载列到 state(供 SQL 补全)。in-flight 守卫防 dbs 连续变化时
+  // 对同一张表重复发 list_columns。
+  const columnsInFlight = useRef(new Set<string>())
   useEffect(() => {
     const id = connRef.current
     if (id === null) return
     for (const db of dbs) {
       if (db.kind !== 'database') continue
       for (const table of db.tables) {
-        if (columnsByTable[table] !== undefined) continue
+        const key = tableStateKey(db.name, table)
+        if (columnsByTable[key] !== undefined || columnsInFlight.current.has(key)) continue
+        columnsInFlight.current.add(key)
         void tauriInvoke<unknown>(`${cmdPrefix}_list_columns`, {
           connId: id, table, database: db.name,
         })
           .then((cols) => {
-            setColumnsByTable(prev => ({ ...prev, [table]: extractColumnNames(cols) }))
+            columnsInFlight.current.delete(key)
+            setColumnsByTable(prev => ({ ...prev, [key]: extractColumnNames(cols) }))
           })
-          .catch(() => { /* 补全失败静默 */ })
+          .catch(() =>{  columnsInFlight.current.delete(key) /* 补全失败静默 */ })
       }
     }
     // 仅随 dbs 变化重跑;列 state 更新不重跑(避免重复请求)。

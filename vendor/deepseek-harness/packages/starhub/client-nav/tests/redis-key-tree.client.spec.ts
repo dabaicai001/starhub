@@ -3,7 +3,7 @@
  * 文件夹优先排序、多层嵌套、同名 key 与文件夹共存、计数与路径收集。
  */
 import { describe, expect, it } from 'vitest'
-import { allFolderPaths, buildKeyTree, countLeaves, type KeyTreeNode } from '../src/client/redis/key-tree.ts'
+import { allFolderPaths, buildKeyTree, countLeaves, leafKeys, type KeyTreeNode } from '../src/client/redis/key-tree.ts'
 import type { RedisKeyInfo } from '../src/client/redis/redis-service.ts'
 
 const key = (k: string, type = 'string'): RedisKeyInfo => ({ key: k, type, ttl: -1 })
@@ -58,5 +58,15 @@ describe('allFolderPaths / countLeaves', () => {
     const a = tree.find(n => n.name === 'a')
     expect(countLeaves(a!)).toBe(3)
     expect(countLeaves(a!.children.find(n => n.name === 'b')!)).toBe(2)
+  })
+
+  it('leafKeys collects every leaf key under a folder (leaf itself for leaf nodes)', () => {
+    const tree = buildKeyTree([key('a:b:c'), key('a:b:d'), key('a:e'), key('x')])
+    const a = tree.find(n => n.name === 'a')!
+    expect(leafKeys(a).sort()).toEqual(['a:b:c', 'a:b:d', 'a:e'])
+    const b = a.children.find(n => n.name === 'b')!
+    expect(leafKeys(b).sort()).toEqual(['a:b:c', 'a:b:d'])
+    const leaf = tree.find(n => n.name === 'x')!
+    expect(leafKeys(leaf)).toEqual(['x'])
   })
 })

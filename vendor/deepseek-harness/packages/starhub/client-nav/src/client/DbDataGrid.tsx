@@ -8,7 +8,8 @@
  * 批次 5 补齐:
  * - 单元格编辑:双击进入编辑,Enter/失焦提交 → dirty 集(按行分组),保存按钮
  *   按行调 db_mysql_update_rows(sets={col:new}, where=pkCols 相等),成功后重载。
- * - 行右键菜单:复制为 INSERT(剪贴板)。
+ * - 行右键菜单:复制为 INSERT / UPDATE / JSON(剪贴板),删除该行(按主键走
+ *   db_<prefix>_delete_rows,成功后重载当前页)。
  * - 列筛选:列头筛选按钮 → 弹层输入 → columnFilters 服务端过滤(db_mysql_get_table_data
  *   的 columnFilters 参数),可清除。
  * - CSV 导出:客户端生成当前页 CSV 并下载。
@@ -85,6 +86,50 @@ export function rowToInsert(table: string, columns: QueryColumn[], row: unknown[
   const cols = columns.map(c => `\`${c.name}\``).join(', ')
   const values = row.map(v => sqlLiteral(v)).join(', ')
   return `INSERT INTO \`${table}\` (${cols}) VALUES (${values});`
+}
+
+/**
+ * 把一行拼成 UPDATE 语句(按主键列定位:SET 非主键列,WHERE 主键列相等)。
+ * 无主键列时返回 null(调用方提示无法定位)。
+ * @param table - 表名。
+ * @param columns - 结果列(顺序与 row 一致)。
+ * @param row - 行数据(与 columns 对齐)。
+ * @param pkCols - 主键列名(list_columns 的 key==='PRI')。
+ * @returns UPDATE 语句;缺主键列时 null。
+ */
+export function rowToUpdate(table: string, columns: QueryColumn[], row: unknown[], pkCols: readonly string[]): string | null {
+  const sets = columns
+    .map((c, i) => ({ name: c.name, value: row[i] }))
+    .filter(c => !pkCols.includes(c.name))
+    .map(c => `\`${c.name}\` = ${sqlLiteral(c.value)}`)
+  const where = pkCols
+    .map((pk) => {
+      const idx = columns.findIndex(c => c.name === pk)
+      return idx >= 0 ? `\`${pk}\` = ${sqlLiteral(row[idx])}` : null
+    })
+    .filter((part): part is string => part !== null)
+    .join(' AND ')
+  if (where === '') return null
+  // 全主键表(无非主键列可 SET)时退化为「SET 首列 = 原值」的空操作,
+  // 保证语句合法;正常表不会走到这里。
+  const first = columns[0]
+  const setClause = sets.length > 0
+    ? sets.join(', ')
+    : first !== undefined ? `\`${first.name}\` = ${sqlLiteral(row[0])}` : ''
+  if (setClause === '') return null
+  return `UPDATE \`${table}\` SET ${setClause} WHERE ${where};`
+}
+
+/**
+ * 把一行转成 JSON 对象文本(列名为键;NULL → null,大整数/小数保持文本)。
+ * @param columns - 结果列(顺序与 row 一致)。
+ * @param row - 行数据(与 columns 对齐)。
+ * @returns 缩进 2 格的 JSON 文本。
+ */
+export function rowToJson(columns: QueryColumn[], row: unknown[]): string {
+  const obj: Record<string, unknown> = {}
+  columns.forEach((c, i) => { obj[c.name] = row[i] ?? null })
+  return JSON.stringify(obj, null, 2)
 }
 
 /** 单元格是否数字(用于右对齐)。 */
@@ -448,21 +493,82 @@ export function DbDataGrid({
     if (e.key === 'Escape') closeFilter()
   }
 
-  // ─── 行右键:复制为 INSERT ───
+  // ─── 行右键:复制为 INSERT / UPDATE / JSON,删除行 ───
   const [menuRow, setMenuRow] = useState<number>(-1)
   const rowMenuItems: readonly MenuEntry[] = [
     { id: 'copy-insert', label: '复制为 INSERT' },
+    { id: 'copy-update', label: '复制为 UPDATE' },
+    { id: 'copy-json', label: '复制为 JSON' },
+    { id: 'sep', type: 'separator' },
+    { id: 'delete-row', label: '删除该行', danger: true },
   ]
   const onRowContextMenu = (e: React.MouseEvent, rowIdx: number): void => {
     setMenuRow(rowIdx)
     menu.onContextMenu(e)
   }
+  const copyText = (text: string): void => {
+    void navigator.clipboard?.writeText(text).catch(() => {})
+  }
   const copyInsert = (rowIdx: number): void => {
     const row = rows[rowIdx]
     /* v8 ignore next -- 防御:行号来自可见行枚举,恒有对应行 */
     if (row === undefined) return
-    const sql = rowToInsert(table, columns, row)
-    void navigator.clipboard.writeText(sql).catch(() => {})
+    copyText(rowToInsert(table, columns, row))
+  }
+  const copyUpdate = (rowIdx: number): void => {
+    const row = rows[rowIdx]
+    /* v8 ignore next -- 防御:行号来自可见行枚举,恒有对应行 */
+    if (row === undefined) return
+    const sql = rowToUpdate(table, columns, row, pkCols)
+    if (sql === null) {
+      setError('表缺少主键列,无法定位行(复制为 UPDATE 需要主键)')
+      return
+    }
+    copyText(sql)
+  }
+  const copyJson = (rowIdx: number): void => {
+    const row = rows[rowIdx]
+    /* v8 ignore next -- 防御:行号来自可见行枚举,恒有对应行 */
+    if (row === undefined) return
+    copyText(rowToJson(columns, row))
+  }
+  /** 删除右键选中的行:按主键定位(db_<prefix>_delete_rows),成功后重载当前页。 */
+  const deleteRow = async (rowIdx: number): Promise<void> => {
+    const row = rows[rowIdx]
+    /* v8 ignore next -- 防御:行号来自可见行枚举,恒有对应行 */
+    if (row === undefined) return
+    if (pkCols.length === 0) {
+      setError('表缺少主键列,无法定位行删除')
+      return
+    }
+    if (!window.confirm(`确定删除该行?此操作不可恢复。`)) return
+    const pkWhere = pkCols
+      .map((pk) => {
+        const idx = columns.findIndex(c => c.name === pk)
+        return idx >= 0 ? `\`${pk}\` = ${sqlLiteral(row[idx])}` : null
+      })
+      .filter((part): part is string => part !== null)
+      .join(' AND ')
+    /* v8 ignore next -- pkCols 非空且列齐全时恒有 where;防御性早退 */
+    if (pkWhere === '') return
+    setError(null)
+    try {
+      const args: Record<string, unknown> = { connId, table, where: pkWhere }
+      if (database !== undefined && database !== '') args.database = database
+      const res = await tauriInvoke<{ rowsAffected?: number; error?: string }>(`${cmdPrefix}_delete_rows`, args)
+      if (res.error !== undefined && res.error !== '') {
+        setError(res.error)
+        return
+      }
+      if (res.rowsAffected === 0) {
+        setError('删除 0 行(行数据可能已被修改)')
+        return
+      }
+      setDirty(new Map())
+      void load(page * pageSize, pageSize, orderBy, orderDir, columnFilters, whereFilter)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   // ─── 单元格编辑 ───
@@ -706,10 +812,13 @@ export function DbDataGrid({
   }, [whereDraft])
 
   const onRowSelect = (id: string): void => {
-    // 菜单项选择分发:目前只有「复制为 INSERT」一项;menuRow 在右键时写入,
-    // 防御 menuRow 未就绪(如菜单项经程序化触发)时静默跳过。
+    // 菜单项选择分发;menuRow 在右键时写入,防御未就绪(程序化触发)时静默跳过。
     /* v8 ignore next -- 防御:menuRow 由右键前置写入,菜单项选择恒有行号 */
-    if (id === 'copy-insert' && menuRow >= 0) copyInsert(menuRow)
+    if (menuRow < 0) return
+    if (id === 'copy-insert') copyInsert(menuRow)
+    else if (id === 'copy-update') copyUpdate(menuRow)
+    else if (id === 'copy-json') copyJson(menuRow)
+    else if (id === 'delete-row') void deleteRow(menuRow)
   }
 
   return (

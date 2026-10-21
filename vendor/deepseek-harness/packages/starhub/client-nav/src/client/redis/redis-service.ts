@@ -5,6 +5,10 @@
  * 命令名 `db_redis_*`(capabilities 已授权,见 permissions/commands.toml)。
  * 浏览器预览(无 Tauri IPC)时由顶层 tauriInvoke reject,组件据此展示预览提示。
  *
+ * 分析能力(scan_all 全量带类型过滤 / slowlog / bigkey / memory_analysis)
+ * 与 Go sidecar 的 `db.redis.*` handler 一一对应,参数名即 handler 的 JSON 字段名
+ * (平铺转发,改名会被静默丢弃)。
+ *
  * @module Redis service (client)
  */
 import { tauriInvoke } from '../tauri.ts'
@@ -74,6 +78,38 @@ export interface RedisScanAccumulated {
   cursor: number
   /** 游标是否已归零(全量遍历完成)。 */
   complete: boolean
+}
+
+/** db_redis_slowlog_get 的单条慢日志(sidecar SlowlogEntry:duration 为微秒,timestamp 为 Unix 秒)。 */
+export interface RedisSlowlogEntry {
+  id: number
+  /** 命令耗时(微秒)。 */
+  duration: number
+  /** 命令执行时刻(Unix 秒)。 */
+  timestamp: number
+  /** 完整命令文本(参数以空格拼接)。 */
+  command: string
+}
+
+/** db_redis_bigkey_scan 的单条大 key:string 类型填 size(字节),集合类型填 length(成员数)。 */
+export interface RedisBigKeyEntry {
+  key: string
+  type: string
+  /** string 的字节数;集合类型为 0。 */
+  size: number
+  /** 集合类型的成员数;string 为 0。 */
+  length: number
+}
+
+/** db_redis_memory_analysis 的前缀聚合条目(前缀形如 `user:*`;无冒号 key 归入 `<no prefix>`)。 */
+export interface RedisMemoryAnalysisEntry {
+  prefix: string
+  /** 该前缀下的 key 数。 */
+  keys: number
+  /** 采样估算的总字节数(MEMORY USAGE 求和)。 */
+  memory: number
+  /** 占全部被采样 key 内存的百分比(0-100)。 */
+  percentage: number
 }
 
 /** 单页 SCAN 的最小形态(redisScan 本体;抽成入参便于纯函数单测注入)。 */
@@ -162,6 +198,60 @@ export function redisDBSize(connId: string): Promise<RedisDbSize> {
  */
 export function redisScan(connId: string, cursor?: number, match?: string, count?: number): Promise<RedisScanResult> {
   return tauriInvoke('db_redis_scan', { connId, cursor: cursor || 0, match, count })
+}
+
+/** SCAN 一次性全量遍历(服务端连续扫到游标归零,可按类型过滤)。
+ *
+ * 与 redisScan 的分页语义不同:scan_all 由 sidecar 循环 SCAN 直到游标归零,
+ * 返回固定 `{ keys, cursor: 0, total }`;类型过滤(typeFilter)也在服务端
+ * 完成(逐 key TYPE 判别),适合「只看某一类 key」的场景。代价是一次 RPC
+ * 可能扫全库,大库上慢,故只在选中类型过滤时使用。
+ * @param connId - 连接 id。
+ * @param match - 可选的 MATCH 过滤模式。
+ * @param typeFilter - 可选的类型过滤(string/hash/list/set/zset)。
+ * @returns 全量 SCAN 结果(cursor 恒为 0)。
+ */
+export function redisScanAll(connId: string, match?: string, typeFilter?: string): Promise<RedisScanResult> {
+  return tauriInvoke('db_redis_scan_all', { connId, match, typeFilter })
+}
+
+/** 取慢查询日志(SLOWLOG GET)。
+ * @param connId - 连接 id。
+ * @param count - 返回条数上限(sidecar 缺省 50)。
+ * @returns 慢日志条目(新的在前)。
+ */
+export function redisSlowlogGet(connId: string, count?: number): Promise<RedisSlowlogEntry[]> {
+  return tauriInvoke('db_redis_slowlog_get', { connId, count })
+}
+
+/** 清空慢查询日志(SLOWLOG RESET)。
+ * @param connId - 连接 id。
+ */
+export function redisSlowlogReset(connId: string): Promise<void> {
+  return tauriInvoke('db_redis_slowlog_reset', { connId })
+}
+
+/** 扫描大 key(string 按字节阈值,集合按成员数阈值;可能扫全库,手动触发)。
+ * @param connId - 连接 id。
+ * @param match - 可选的 MATCH 过滤模式。
+ * @param stringThreshold - string 字节阈值(sidecar 缺省 10240)。
+ * @param memberThreshold - 集合成员数阈值(sidecar 缺省 1000)。
+ * @returns 命中的大 key(按大小降序)。
+ */
+export function redisBigkeyScan(
+  connId: string, match?: string, stringThreshold?: number, memberThreshold?: number,
+): Promise<RedisBigKeyEntry[]> {
+  return tauriInvoke('db_redis_bigkey_scan', { connId, match, stringThreshold, memberThreshold })
+}
+
+/** 按 key 前缀聚合内存占用(MEMORY USAGE 采样;可能扫全库,手动触发)。
+ * @param connId - 连接 id。
+ * @param match - 可选的 MATCH 过滤模式。
+ * @param sampleSize - 每个前缀的采样上限(0/缺省 = 全量统计)。
+ * @returns 前缀聚合条目(按内存降序)。
+ */
+export function redisMemoryAnalysis(connId: string, match?: string, sampleSize?: number): Promise<RedisMemoryAnalysisEntry[]> {
+  return tauriInvoke('db_redis_memory_analysis', { connId, match, sampleSize })
 }
 
 /** 取一个 key 的值(按类型返回结构化数据)。

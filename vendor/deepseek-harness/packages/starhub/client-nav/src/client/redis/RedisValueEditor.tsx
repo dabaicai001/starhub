@@ -44,9 +44,13 @@
  *   标出「仅加载前 N 项(共 M 项)」;只加载了部分时删完可见项并不会清空 key,
  *   因此不再误报「保存后集合为空」。
  *
+ * string 值为合法 JSON(对象/数组)时,编辑区上方提供「原文 / 格式化」切换:
+ * 格式化视图是 pretty-print 的**只读**展示,编辑与保存始终基于原文(格式化
+ * 产物不回写,避免用户以为改了格式就改了值)。
+ *
  * @module Redis value editor (client)
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { IconCloseFillMedium, IconCloseOutlineMedium, IconCopyOutlineMedium, IconPlusOutlineMedium, IconRefreshOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   redisExecute, redisGetValue, redisQuote, redisSet,
@@ -109,6 +113,15 @@ export function rowsFromValue(type: string, value: unknown): FieldRow[] {
         field: String(index), value: toCell(item), originalField: String(index), originalValue: toCell(item), deleted: false,
       }))
     }
+    // stream 只读视图:条目 ID 作 field,字段表 JSON 化作 value(不可编辑)。
+    if (type === 'stream') {
+      return (value as unknown[]).map((item) => {
+        const obj = (item !== null && typeof item === 'object' ? item : {}) as Record<string, unknown>
+        const id = toCell(obj.ID ?? obj.id)
+        const fields = toCell(obj.Values ?? obj.values)
+        return { field: id, value: fields, originalField: id, originalValue: fields, deleted: false }
+      })
+    }
     return (value as unknown[]).map((item) => {
       // zset 对象形状 {value, score}:成员走 value 键,分数走 score 键。
       if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
@@ -131,13 +144,31 @@ export function rowsFromValue(type: string, value: unknown): FieldRow[] {
   }))
 }
 
+/**
+ * 检测 string 值是否为合法 JSON 对象/数组,是则返回 pretty-print 文本。
+ * 纯量 JSON(数字/字符串/null)不算——对它们做「格式化」没有信息量。
+ * @param text - 原始文本。
+ * @returns 缩进 2 格的格式化文本;非 JSON 或非对象/数组时返回 null。
+ */
+export function tryFormatJson(text: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return null
+  }
+}
+
 /** 值编辑器入参:工作台按当前打开的 key 传入,切换 key 时以 React key 重挂载。 */
 export interface RedisValueEditorProps {
   connId: string
   /** 当前打开的完整 key 名。 */
   redisKey: string
-  /** key 的 Redis 类型(string/hash/list/set/zset)。 */
+  /** key 的 Redis 类型(string/hash/list/set/zset/stream)。 */
   keyType: string
+  /** 「添加成员」焦点 nonce:工作台右键菜单打开 key 时 +1,编辑器聚焦新增输入行。 */
+  focusAddOnMount?: boolean
   /** 保存成功后的回调(工作台据此刷新键列表与 db 键数);缺省不通知。 */
   onSaved?: () => void
 }
@@ -196,18 +227,25 @@ export function fieldPlaceholders(type: string): { field: string; value: string;
  *   save-completed callback.
  * @returns the editor for the given key.
  */
-export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisValueEditorProps) {
+export function RedisValueEditor({ connId, redisKey, keyType, focusAddOnMount, onSaved }: RedisValueEditorProps) {
   const [model, setModel] = useState<KeyModel>(EMPTY_MODEL)
   const [ttl, setTtl] = useState<{ ttl: number; ttlInput: string }>({ ttl: -1, ttlInput: '' })
   /** 重试序号:加载失败后 bump 触发重新拉取(旧版只置 loading,不重拉,会卡死在加载态)。 */
   const [generation, setGeneration] = useState(0)
   /** 保存完成后的提示(如「集合已空,key 被 Redis 移除」)。 */
   const [savedNote, setSavedNote] = useState('')
+  /** string 值为合法 JSON 时的「格式化」只读视图开关(编辑/保存始终基于原文)。 */
+  const [jsonFormatted, setJsonFormatted] = useState(false)
   const saveButtonRef = useRef<HTMLButtonElement>(null)
 
   /** 生效类型:服务端 get_value 为准;加载中退回 SCAN 传入的 keyType。 */
   const modelType = model.type === '' ? keyType : model.type
   const isString = modelType === 'string'
+  /** stream 只读:GetValue 回传条目(ID + 字段表),编辑/写回暂不支持(XADD/XDEL
+   *  属于另一套交互),保存只应用 TTL 变更。 */
+  const isStream = modelType === 'stream'
+  /** string 值的 JSON pretty-print(非合法 JSON 对象/数组时为 null,不展示切换)。 */
+  const formattedJson = isString ? tryFormatJson(model.text) : null
   /** key 在打开前已被删除/过期(get_value 返回 type=none)。 */
   const missing = model.type === 'none'
   /** 已加载的原始条目数(不含新增行)。 */
@@ -226,6 +264,7 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
     let cancelled = false
     setModel(EMPTY_MODEL)
     setSavedNote('')
+    setJsonFormatted(false)
     redisGetValue(connId, redisKey)
       .then((result) => {
         /* v8 ignore next -- 防御:key 快速切换卸载竞态,取消后丢弃过期响应 */
@@ -261,14 +300,16 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
 
   const dirty = isString
     ? model.text !== model.originalText || ttlDirty
-    : model.rows.some(r => r.deleted || r.field !== r.originalField || r.value !== r.originalValue) || ttlDirty
+    : isStream
+      ? ttlDirty
+      : model.rows.some(r => r.deleted || r.field !== r.originalField || r.value !== r.originalValue) || ttlDirty
 
   /**
    * 保存后集合是否会被清空(Redis 对空集合自动移除 key)。仅当原本有成员、
    * 且保存后一个不剩时成立——新建的空 key 不受影响。
    */
   const willEmptyCollection = useMemo(() => {
-    if (isString) return false
+    if (isString || isStream) return false
     // 只加载了前 N 项的大集合:删完可见项并不会清空 key,不能误报。
     if (!completeCollection) return false
     const hadOriginal = model.rows.some(r => r.originalField !== '')
@@ -299,7 +340,9 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
         if (expiration !== null) setTtl({ ttl: expiration, ttlInput: String(expiration) })
         else if (ttl.ttl >= 0) setTtl({ ttl: -1, ttlInput: '' })
       } else {
-        await saveStructural(model.rows, modelType, redisKey, connId)
+        // stream 只读:没有结构写回(旧版会把条目映射成空行、保存静默无效),
+        // 仅应用 TTL 变更。
+        if (!isStream) await saveStructural(model.rows, modelType, redisKey, connId)
         // 结构类型的写回不带 TTL 语义:显式下发 EXPIRE(或清空时 PERSIST),
         // 成功后才更新本地 TTL 态(旧版乐观置位,实际从未下发)。
         // 注意:绝不下发 `EXPIRE key 0`——那会立即删除 key。
@@ -378,14 +421,36 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
       {!model.loading && model.error === '' && !missing && (
         isString
           ? (
-            <textarea className={css.area} value={model.text} spellCheck={false} placeholder="值…"
-              onChange={(e) =>{  updateModel({ text: e.target.value }) }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && dirty && !model.saving) void save() }} />
+            <>
+              {formattedJson !== null && (
+                <div className={css.jsonBar}>
+                  <button type="button" aria-label="原文视图"
+                    className={jsonFormatted ? css.jsonToggle : css.jsonToggleActive}
+                    onClick={() =>{  setJsonFormatted(false) }}>原文</button>
+                  <button type="button" aria-label="格式化视图"
+                    className={jsonFormatted ? css.jsonToggleActive : css.jsonToggle}
+                    onClick={() =>{  setJsonFormatted(true) }}>格式化</button>
+                </div>
+              )}
+              {jsonFormatted && formattedJson !== null ? (
+                // 只读展示:编辑与保存始终基于原文,格式化产物不回写。
+                <pre className={css.jsonView} data-testid="redis-json-view">{formattedJson}</pre>
+              ) : (
+                <textarea className={css.area} value={model.text} spellCheck={false} placeholder="值…"
+                  onChange={(e) =>{  updateModel({ text: e.target.value }) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && dirty && !model.saving) void save() }} />
+              )}
+            </>
           )
-          : (
-            <StructuralRows rows={model.rows} type={modelType}
-              onChange={(rows) =>{  updateModel({ rows }) }} />
-          )
+          : isStream
+            ? (
+              <StreamRows rows={model.rows} />
+            )
+            : (
+              <StructuralRows rows={model.rows} type={modelType}
+                {...(focusAddOnMount === true ? { focusAdd: true } : {})}
+                onChange={(rows) =>{  updateModel({ rows }) }} />
+            )
       )}
 
       <div className={css.footer}>
@@ -393,6 +458,9 @@ export function RedisValueEditor({ connId, redisKey, keyType, onSaved }: RedisVa
           <span className={css.hint} title="大集合只加载前若干项;保存只应用本页的增删改,未加载成员保持原样">
             {sampledLabel}
           </span>
+        )}
+        {isStream && (
+          <span className={css.hint} title="stream 的条目增删改请用 CLI(XADD / XDEL / XTRIM)">stream 只读 · 仅 TTL 可修改</span>
         )}
         {willEmptyCollection && dirty && (
           <span className={css.footerWarn}>保存后集合为空,Redis 将自动删除该 key</span>
@@ -510,15 +578,23 @@ async function runCommand(connId: string, command: string): Promise<void> {
   if (res.error) throw new Error(res.error)
 }
 
-/** 结构类型字段表(hash/list/set/zset 共用);带成员筛选(仅过滤展示,保存仍走全量行)。 */
-function StructuralRows({ rows, type, onChange }: {
+/** 结构类型字段表(hash/list/set/zset 共用);带成员筛选(仅过滤展示,保存仍走全量行)。
+ *
+ * 「新增成员」行**置顶并随滚动常驻**(sticky):旧版在表格最底部,成员多的集合
+ * 要滚到底才能加一项;输入框回车即添加并清空(焦点留在输入框,可连续追加),
+ * 右键菜单的「添加成员」经 addFocusNonce 把焦点直接送到这里。 */
+function StructuralRows({ rows, type, onChange, focusAdd }: {
   rows: FieldRow[]
   type: string
   onChange: (rows: FieldRow[]) => void
+  /** 挂载即聚焦新增行(右键「添加成员」打开 key 时)。 */
+  focusAdd?: boolean
 }) {
   const [newField, setNewField] = useState('')
   const [newValue, setNewValue] = useState('')
   const [filter, setFilter] = useState('')
+  const fieldRef = useRef<HTMLInputElement | null>(null)
+  const valueRef = useRef<HTMLInputElement | null>(null)
   const ph = fieldPlaceholders(type)
   // 筛选只决定可见性:apply 用原始下标回写全量 rows,过滤态编辑不错位。
   const visible = useMemo(() => {
@@ -530,11 +606,11 @@ function StructuralRows({ rows, type, onChange }: {
   const apply = (index: number, patch: Partial<FieldRow>) => {
     onChange(rows.map((r, i) => i === index ? { ...r, ...patch } : r))
   }
-  const add = () => {
+  const add = (): boolean => {
     // 必填项:set/list 新增只有值输入;hash/zset 必须有字段(成员)名。
     const needed = ph.single || type === 'list' ? newValue.trim() : newField.trim()
     /* v8 ignore next -- 新增按钮在必填输入空白时 disabled,空名早退分支不可达 */
-    if (needed === '') return
+    if (needed === '') return false
     // list 新增行只有值(RPUSH 追加,索引由服务端分配);set 单列成员;其余 field+value。
     const row: FieldRow = type === 'list'
       ? { field: '', value: newValue, originalField: '', originalValue: '', deleted: false }
@@ -544,10 +620,44 @@ function StructuralRows({ rows, type, onChange }: {
     onChange([...rows, row])
     setNewField('')
     setNewValue('')
+    return true
   }
   const addDisabled = ph.single || type === 'list' ? newValue.trim() === '' : newField.trim() === ''
+  /** 回车 = 添加并把焦点还给首个可编辑输入框(连续追加)。 */
+  const onAddKeyDown = (e: ReactKeyboardEvent): void => {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    if (add()) {
+      const target = ph.single || type === 'list' ? valueRef.current : fieldRef.current
+      target?.focus()
+    }
+  }
+  // 右键「添加成员」:挂载即聚焦新增行首个输入框(focusAdd 只在本次挂载为
+  // true 时生效;普通点击打开不抢焦点)。
+  useEffect(() => {
+    if (focusAdd !== true) return
+    const target = ph.single || type === 'list' ? valueRef.current : fieldRef.current
+    target?.focus()
+    // ph.single/type 在同一 key 的编辑器实例内恒定,不列入依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   return (
     <div className={css.table}>
+      {/* 新增行置顶(sticky):成员多时不必滚到底部。 */}
+      <div className={css.newRowSticky}>
+        {!(ph.single || type === 'list') && (
+          <input ref={fieldRef} className={css.cellField} placeholder={`新${ph.field}`} spellCheck={false} aria-label={`新${ph.field}`}
+            title="回车快速添加,可连续追加"
+            value={newField} onChange={(e) =>{  setNewField(e.target.value) }}
+            onKeyDown={onAddKeyDown} />
+        )}
+        <input ref={valueRef} className={css.cellValue} placeholder={ph.single ? '新成员' : type === 'list' ? '新值(RPUSH 追加)' : `新${ph.value}`}
+          spellCheck={false} aria-label="新值"
+          title="回车快速添加,可连续追加"
+          value={newValue} onChange={(e) =>{  setNewValue(e.target.value) }}
+          onKeyDown={onAddKeyDown} />
+        <button type="button" className={css.addButton} title="新增" aria-label="新增" disabled={addDisabled} onClick={add}><IconPlusOutlineMedium size={13} /></button>
+      </div>
       <div className={css.filterRow}>
         <input className={css.filterInput} value={filter} aria-label="筛选成员" spellCheck={false}
           placeholder={`筛选成员…(共 ${rows.length} 条)`}
@@ -586,15 +696,24 @@ function StructuralRows({ rows, type, onChange }: {
           <div className={css.noMatch}>{rows.length === 0 ? '暂无成员' : '无匹配成员'}</div>
         )}
       </div>
-      <div className={css.newRow}>
-        {!(ph.single || type === 'list') && (
-          <input className={css.cellField} placeholder={`新${ph.field}`} spellCheck={false} aria-label={`新${ph.field}`}
-            value={newField} onChange={(e) =>{  setNewField(e.target.value) }} />
-        )}
-        <input className={css.cellValue} placeholder={ph.single ? '新成员' : type === 'list' ? '新值(RPUSH 追加)' : `新${ph.value}`}
-          spellCheck={false} aria-label="新值"
-          value={newValue} onChange={(e) =>{  setNewValue(e.target.value) }} />
-        <button type="button" className={css.addButton} title="新增" aria-label="新增" disabled={addDisabled} onClick={add}><IconPlusOutlineMedium size={13} /></button>
+    </div>
+  )
+}
+
+/** stream 只读视图:条目 ID + 字段表(JSON)。增删改请走 CLI(XADD/XDEL/XTRIM)——
+ *  旧版把条目映射成空 field/value 行、保存静默无效,现在明确只读。 */
+function StreamRows({ rows }: { rows: FieldRow[] }) {
+  return (
+    <div className={css.table}>
+      <div className={css.streamHint}>stream 为只读视图:仅展示已加载的条目(ID + 字段);增删改请用 CLI(XADD / XDEL / XTRIM)。</div>
+      <div className={css.tableBody}>
+        {rows.map((r, index) => (
+          <div className={css.row} key={`${index}-${r.field}`}>
+            <span className={css.streamId} title={r.field}>{r.field}</span>
+            <span className={css.streamFields} title={r.value}>{r.value}</span>
+          </div>
+        ))}
+        {rows.length === 0 && <div className={css.noMatch}>暂无条目</div>}
       </div>
     </div>
   )
