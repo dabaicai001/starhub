@@ -774,4 +774,67 @@ describe('DbWorkbench', () => {
     })
   })
 
+  describe('SQL 行数上限与结果区分页(无 LIMIT 查询不再被写死 100 行)', () => {
+    /** 经查询历史把一条 SQL 写进活动标签(避开 CM6 编辑器直输),返回执行入口。 */
+    function seedSqlViaHistory(sql: string): void {
+      localStorage.setItem('starhub.sqlHistory', JSON.stringify([{ sql, db: 'app', time: Date.now() }]))
+      fireEvent.click(screen.getByRole('button', { name: '查询历史' }))
+      fireEvent.click(screen.getByText(sql))
+    }
+
+    it('执行时把工具栏选择的行数上限作为 maxRows 下发', async () => {
+      const { calls } = stubInvoke({ execute: { columns: [{ name: 'n' }], rows: [[1]], durationMs: 3 } })
+      render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+      await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
+      // 点库行设为执行库(否则执行被「未选库」拦截)。
+      fireEvent.click(screen.getByTitle('app'))
+      seedSqlViaHistory('SELECT * FROM users')
+      // 行数上限选择器默认 1000,改选 500 后执行。
+      fireEvent.change(screen.getByRole('combobox', { name: 'SQL 执行行数上限' }), { target: { value: '500' } })
+      fireEvent.click(screen.getByRole('button', { name: '执行 SQL' }))
+      await waitFor(() =>{  expect(calls.some(([cmd]) => cmd === 'db_mysql_execute')).toBe(true) })
+      const exec = calls.find(([cmd, a]) => cmd === 'db_mysql_execute' && argSql(a).includes('users'))
+      expect(exec?.[1]).toMatchObject({ sql: 'SELECT * FROM users', maxRows: 500, database: 'app' })
+    })
+
+    it('默认行数上限为 1000(sidecar 旧默认 100 的提升)', async () => {
+      const { calls } = stubInvoke({ execute: { columns: [{ name: 'n' }], rows: [[1]] } })
+      render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+      await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
+      fireEvent.click(screen.getByTitle('app'))
+      seedSqlViaHistory('SELECT * FROM users')
+      const limit = screen.getByRole('combobox', { name: 'SQL 执行行数上限' }) as HTMLSelectElement
+      expect(limit.value).toBe('1000')
+      fireEvent.click(screen.getByRole('button', { name: '执行 SQL' }))
+      await waitFor(() =>{  expect(calls.some(([cmd]) => cmd === 'db_mysql_execute')).toBe(true) })
+      const exec = calls.find(([cmd, a]) => cmd === 'db_mysql_execute' && argSql(a).includes('users'))
+      expect(exec?.[1].maxRows).toBe(1000)
+    })
+
+    it('大结果集在结果区客户端分页浏览,翻页不重新执行', async () => {
+      const rows = Array.from({ length: 250 }, (_unused, i) => [i])
+      const { calls } = stubInvoke({ execute: { columns: [{ name: 'n' }], rows, durationMs: 7 } })
+      render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+      await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
+      fireEvent.click(screen.getByTitle('app'))
+      seedSqlViaHistory('SELECT * FROM big')
+      fireEvent.click(screen.getByRole('button', { name: '执行 SQL' }))
+      // 工具条展示全量行数(不再有「仅显示前 200 行」截断)。
+      await waitFor(() =>{  expect(screen.getByText('250')).toBeTruthy() })
+      expect(screen.queryByText('仅显示前 200 行')).toBeNull()
+      // 每页 100 → 3 页;翻页只切客户端视图,execute 调用次数不变。
+      fireEvent.change(screen.getByRole('combobox', { name: '每页行数' }), { target: { value: '100' } })
+      await waitFor(() =>{  expect(screen.getByText('1 / 3 页')).toBeTruthy() })
+      const execCountBefore = calls.filter(([cmd]) => cmd === 'db_mysql_execute').length
+      fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+      await waitFor(() =>{  expect(screen.getByText('2 / 3 页')).toBeTruthy() })
+      expect(calls.filter(([cmd]) => cmd === 'db_mysql_execute').length).toBe(execCountBefore)
+      // 末页按钮禁用态随页码推进。
+      fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+      await waitFor(() =>{  expect(screen.getByText('3 / 3 页')).toBeTruthy() })
+      expect(screen.getByRole('button', { name: '下一页' }).hasAttribute('disabled')).toBe(true)
+      expect(screen.getByRole('button', { name: '上一页' }).hasAttribute('disabled')).toBe(false)
+    })
+  })
+
 })

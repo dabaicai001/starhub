@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.136.6(🐛 **数据库页两处 P0 前后端契约错位(在真实 sidecar 上直接失败,单测因沿用旧参数名而漏掉)**:① 单元格编辑保存走 `db_mysql_update_rows` 时前端仍发旧 Tauri 时代的 `whereClause`——去 Tauri 化后的 Rust 转发层是纯平铺转发、参数白名单只认 `where`,于是每次保存都被「缺少 where」拒绝,单元格编辑实际从未保存成功;② Redis key 搜索把 SCAN 的 MATCH 模式发成 `matchPattern`,sidecar 的 `db.redis.scan` 只解 `match`,搜索词被静默丢弃、返回整库 key(搜索框形同虚设)。两处均改为 sidecar 契约参数名,并补回归断言。) |
+| 当前版本 | v0.137.0(✨ **SQL 执行结果分页 + 行数上限可选**:① sidecar `db.mysql.execute`(及 clickhouse/sqlite/mssql/postgres)新增可选参数 `maxRows`——对未显式带 LIMIT 的 SELECT 强制夹到该值,**默认从写死的 100 提升到 1000**,硬上限 10 万(`ClampExecuteMaxRows` 归一化);前端 SQL 工具栏新增「行数上限」下拉(100/500/1000/5000),随执行下发。② 结果区把硬编码「只渲染前 200 行 + 仅显示前 200 行」改为**客户端分页条**(上一页/下一页 + 每页条数 100/500/1000/5000 + 「第 x–y 行 / 共 N 行」),翻页不重新执行;工具条补展示耗时。) |
 
 ## 架构一句话
 
@@ -145,4 +145,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-10-19 (v0.136.6)*
+*最后更新: 2026-10-21 (v0.137.0)*

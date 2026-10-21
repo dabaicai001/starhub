@@ -204,6 +204,18 @@
 .tdNull { color: var(--dsw-alias-label-dimmed); font-style: italic; }
 .tdNum { text-align: right; }
 .sqlResultDone { padding: 8px 12px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+/* 结果区客户端分页条(execute 一次性返回,翻页不重新执行)。 */
+.sqlResultPager { display: flex; flex: none; align-items: center; gap: 10px; padding: 5px 10px; border-top: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.sqlResultPager button { border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 3px 12px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; font-size: 12px; }
+.sqlResultPager button:hover:not(:disabled) { border-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-state-business-primary); }
+.sqlResultPager button:disabled { opacity: 0.4; cursor: default; }
+.sqlResultPager .sizeSelect { border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-size: 12px; padding: 2px 4px; }
+
+/* ─── SQL 工具栏:行数上限选择器 ─── */
+.rowLimitWrap { position: relative; display: inline-flex; flex: none; align-items: center; }
+.rowLimitIcon { position: absolute; left: 7px; color: var(--dsw-alias-label-tertiary); pointer-events: none; }
+.rowLimitSelect { height: 26px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; padding: 0 6px 0 24px; appearance: none; cursor: pointer; }
+.rowLimitSelect:focus { border-color: var(--dsw-alias-state-business-primary); outline: none; }
 
 /* ─── 监控右栏 ─── */
 .monitor { width: 340px; min-width: 280px; max-width: 420px; flex: none; overflow: hidden; display: flex; flex-direction: column; border-left: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); }

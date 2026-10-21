@@ -9,6 +9,14 @@
 
 ---
 
+## [0.137.0] - 2026-10-21
+
+### 新增
+- ✨ **SQL 执行结果分页 + 行数上限可选**:① sidecar `db.mysql.execute`(及 clickhouse/sqlite/mssql/postgres)新增可选参数 `maxRows`——对未显式带 LIMIT 的 SELECT 强制夹到该值,**默认从写死的 100 提升到 1000**,硬上限 10 万(`ClampExecuteMaxRows` 归一化);前端 SQL 工具栏新增「行数上限」下拉(100/500/1000/5000),随执行下发。② 结果区把硬编码「只渲染前 200 行 + 仅显示前 200 行」改为**客户端分页条**(上一页/下一页 + 每页条数 100/500/1000/5000 + 「第 x–y 行 / 共 N 行」),翻页不重新执行;工具条补展示耗时。
+
+### 修复
+- 🐛 **StarHub 工作台窗口弹层「透明盒子」**:数据库/Redis 工作台跑在独立 iframe 窗口(`apps/starhub-window`),其 `window-shell.css` 只 import 了 ui-theme 8 个样式表中的 3 个,**缺 `gradient-shadow-text.css`**——`--dsw-menu-backdrop-filter`(菜单毛玻璃)、`--dsw-elevation-*`(菜单投影)、`--dsw-shadow-lv*`(筛选弹层投影)全部未定义,右键菜单/列筛选弹层只剩 45%–58% 不透明填充、无模糊无阴影,叠在内容上就是一块透明框。现按 ui-theme 的 STYLES 列表补齐 `gradient-shadow-text.css`/`corner-shape.css`/`focus.css`,并在构建产物中断言令牌落地。
+
 ## [0.136.6] - 2026-10-19
 
 ### 修复

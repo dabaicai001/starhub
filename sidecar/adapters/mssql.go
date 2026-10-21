@@ -212,7 +212,8 @@ func (a *MSSQLAdapter) DropIndex(schema, table, indexName string) error {
 }
 
 // Execute 执行 SQL
-func (a *MSSQLAdapter) Execute(sqlStr string) (*QueryResult, error) {
+// maxRows: 对未显式带 LIMIT/TOP 的 SELECT 强制追加的行数上限(<=0 取默认值)。
+func (a *MSSQLAdapter) Execute(sqlStr string, maxRows int) (*QueryResult, error) {
 	start := time.Now()
 	sqlStr = strings.TrimSpace(sqlStr)
 	if sqlStr == "" {
@@ -230,8 +231,8 @@ func (a *MSSQLAdapter) Execute(sqlStr string) (*QueryResult, error) {
 
 	if isSelect {
 		if !limitRegex.MatchString(sqlStr) {
-			// 使用 TOP 100 而非 LIMIT（SQL Server 使用 TOP）
-			sqlStr = strings.Replace(sqlStr, "SELECT", "SELECT TOP 100", 1)
+			// 使用 TOP 而非 LIMIT（SQL Server 使用 TOP）
+			sqlStr = strings.Replace(sqlStr, "SELECT", fmt.Sprintf("SELECT TOP %d", ClampExecuteMaxRows(maxRows)), 1)
 		}
 		return a.executeSelect(sqlStr, nil, start)
 	}

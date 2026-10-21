@@ -48,7 +48,23 @@ import { addHistory, clearHistory, loadHistory, type SqlHistoryEntry } from './s
 import css from './DbWorkbench.module.css'
 
 /** db_mysql_execute 的返回(与 QueryResult 同构;SQL 执行结果复用)。 */
-interface SqlQueryResult { columns?: unknown; rows?: unknown; error?: string }
+interface SqlQueryResult { columns?: unknown; rows?: unknown; error?: string; durationMs?: number }
+
+/**
+ * SQL 执行的「行数上限」选项:无显式 LIMIT 的 SELECT 由 sidecar 夹到该值
+ * (db.*.execute 的 maxRows;缺省 1000,硬上限 10 万)。选小值保护大表全表
+ * 扫描,选大值一次多看数据;始终有上限,不会把超大结果集整体拉进内存。
+ */
+export const SQL_ROW_LIMITS = [100, 500, 1000, 5000] as const
+
+/** 行数上限默认值(与 sidecar 的 DefaultExecuteMaxRows 一致)。 */
+const DEFAULT_SQL_ROW_LIMIT = 1000
+
+/** SQL 结果区的每页条数选项(客户端分页,浏览 execute 已返回的结果集)。 */
+const RESULT_PAGE_SIZES = [100, 500, 1000, 5000] as const
+
+/** SQL 结果区每页条数默认值。 */
+const DEFAULT_RESULT_PAGE_SIZE = 500
 
 /**
  * 一条语句的执行结果(多语句执行时逐条保留;此前只留最后一条,
@@ -455,6 +471,9 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
   const [activeQueryId, setActiveQueryId] = useState(1)
   const nextQueryIdRef = useRef(2)
   const [sqlLoading, setSqlLoading] = useState(false)
+  // SQL 执行行数上限(随 execute 的 maxRows 下发;sidecar 对无 LIMIT 的 SELECT
+  // 夹到该值)。切换只影响后续执行,不重跑已出的结果。
+  const [sqlRowLimit, setSqlRowLimit] = useState<number>(DEFAULT_SQL_ROW_LIMIT)
   // 内容区统一 tab 条:查询标签 + 表数据标签混排(仿 Navicat/HubHex)。点表在
   // tab 条开一个表数据标签(同表复用激活);activeTableKey 非 null = 活动项为
   // 表数据标签,null = 活动项为 activeQueryId 指向的查询标签。
@@ -862,7 +881,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
       // 带上当前库:未选库时靠连接默认库;选择器/点表会更新 currentDb。
       const dbArg = currentDb !== '' ? { database: currentDb } : {}
       const collected = await collectStatementResults(statements, (stmt) =>
-        tauriInvoke<SqlQueryResult>(cmd, { connId: id, sql: stmt, ...dbArg }))
+        tauriInvoke<SqlQueryResult>(cmd, { connId: id, sql: stmt, maxRows: sqlRowLimit, ...dbArg }))
       const failed = collected.find(entry => entry.error !== null)?.error ?? null
       patchTab(tabId, {
         results: collected,
@@ -877,7 +896,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
     } finally {
       setSqlLoading(false)
     }
-  }, [activeQueryId, currentDb, cmdPrefix, dbType, patchTab])
+  }, [activeQueryId, currentDb, cmdPrefix, dbType, patchTab, sqlRowLimit])
 
   /** 查询历史弹层:打开时刷新条目;再次点击关闭。 */
   const toggleHistory = (): void => {
@@ -1297,6 +1316,19 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
                         </span>
                       )}
                       <span className={css.spacer} />
+                      {/* 行数上限:无 LIMIT 的 SELECT 由 sidecar 夹到该值(maxRows)。 */}
+                      <span className={css.rowLimitWrap}>
+                        <span className={css.rowLimitIcon} aria-hidden="true"><IconDataOutlineMedium size={12} /></span>
+                        <select
+                          className={css.rowLimitSelect}
+                          value={sqlRowLimit}
+                          onChange={(event) =>{  setSqlRowLimit(Number(event.target.value)) }}
+                          title="SQL 执行行数上限:无 LIMIT 的查询由服务端夹到该值"
+                          aria-label="SQL 执行行数上限"
+                        >
+                          {SQL_ROW_LIMITS.map(n => <option key={n} value={n}>{n} 行</option>)}
+                        </select>
+                      </span>
                       {sqlLoading && <span className={css.sqlExecuting}>执行中…</span>}
                       <div className={css.sqlBarGroup}>
                         <button type="button" className={css.sqlBarBtn} onClick={formatCurrentSql} title="格式化 SQL" aria-label="格式化 SQL"><IconCodeOutlineMedium size={13} /></button>
@@ -1530,16 +1562,28 @@ export default DbWorkbench
 
 /**
  * 渲染一次 SQL 执行的原始结果(execute 返回全量 QueryResult),填充底部数据栏:
- * 一行渲染列头,数据行直接展示,NULL 灰显、数字右对齐;rowCount 上限防爆。SQL 结果
- * 不走服务端分页(execute 一次性返回),因此不做虚拟滚动。onClose 关闭后回到空态。
+ * 一行渲染列头,数据行直接展示,NULL 灰显、数字右对齐。execute 是一次性返回
+ * (服务端已按行数上限夹取),因此结果区做**客户端分页**:页大小可选,翻页不
+ * 再重新执行;总行数与耗时在工具条展示。onClose 关闭后回到空态。
  */
 function SqlQueryResultView({ result, onClose }: { result: SqlQueryResult; onClose: () => void }) {
   const columns = Array.isArray(result.columns)
     ? (result.columns as Array<{ name?: string; type?: string; nullable?: boolean }>)
     : []
   const rows = Array.isArray(result.rows) ? (result.rows as unknown[][]) : []
-  const display = rows.slice(0, 200)
-  const truncated = rows.length > display.length
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_RESULT_PAGE_SIZE)
+  // prop 变化时调整 state(React 官方模式):新执行 / 切换结果集标签 → 分页
+  // 回到第一页(页大小保留用户选择);渲染期内同步,无中间帧。
+  const [loadedFor, setLoadedFor] = useState(result)
+  if (loadedFor !== result) {
+    setLoadedFor(result)
+    setPage(0)
+  }
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize))
+  // 行数收缩(新执行结果更小)时把当前页夹回末页内。
+  const safePage = Math.min(page, pageCount - 1)
+  const display = rows.slice(safePage * pageSize, safePage * pageSize + pageSize)
   return (
     <div className={css.sqlResult}>
       <div className={css.sqlResultBar}>
@@ -1549,38 +1593,57 @@ function SqlQueryResultView({ result, onClose }: { result: SqlQueryResult; onClo
           {rows.length > 0 && <>{` · `}<b>{rows.length}</b>{` 行`}</>}
         </span>
         <span className={css.spacer} />
+        {result.durationMs !== undefined && <span className={css.hint}>{result.durationMs} ms</span>}
         <button type="button" className={css.sqlBarBtn} onClick={onClose} title="关闭执行结果" aria-label="关闭执行结果">关闭结果</button>
       </div>
       {columns.length === 0 ? (
         <div className={css.sqlResultDone}>完成{rows.length > 0 ? `,影响 ${rows.length} 行` : ''}</div>
       ) : (
-        <div className={css.sqlTableWrap}>
-          <table className={css.sqlTable}>
-            <thead>
-              <tr>{columns.map((c, i) => <th key={c.name ?? i}>{c.name}</th>)}</tr>
-            </thead>
-            <tbody>
-              {display.map((row, ri) => (
-                <tr key={ri}>
-                  {columns.map((_c, ci) => (
-                    <td
-                      key={ci}
-                      className={
-                        row[ci] === null || row[ci] === undefined
-                          ? css.tdNull
-                          : isNumericCell(row[ci]) ? css.tdNum : undefined
-                      }
-                    >
-                      {cellText(row[ci])}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className={css.sqlTableWrap}>
+            <table className={css.sqlTable}>
+              <thead>
+                <tr>{columns.map((c, i) => <th key={c.name ?? i}>{c.name}</th>)}</tr>
+              </thead>
+              <tbody>
+                {display.map((row, ri) => (
+                  <tr key={safePage * pageSize + ri}>
+                    {columns.map((_c, ci) => (
+                      <td
+                        key={ci}
+                        className={
+                          row[ci] === null || row[ci] === undefined
+                            ? css.tdNull
+                            : isNumericCell(row[ci]) ? css.tdNum : undefined
+                        }
+                      >
+                        {cellText(row[ci])}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* 客户端分页条:行数超过一页时展示,翻页不重新执行 SQL。 */}
+          <div className={css.sqlResultPager}>
+            <button type="button" disabled={safePage === 0} onClick={() =>{  setPage(p => Math.max(0, p - 1)) }}>上一页</button>
+            <span>{safePage + 1} / {pageCount} 页</span>
+            <button type="button" disabled={safePage >= pageCount - 1} onClick={() =>{  setPage(p => p + 1) }}>下一页</button>
+            <select
+              className={css.sizeSelect}
+              value={pageSize}
+              onChange={(e) =>{  setPageSize(Number(e.target.value)); setPage(0) }}
+              aria-label="每页行数"
+            >
+              {RESULT_PAGE_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <span className={css.hint}>
+              第 {safePage * pageSize + 1}–{Math.min(rows.length, (safePage + 1) * pageSize)} 行 / 共 {rows.length} 行
+            </span>
+          </div>
+        </>
       )}
-      {truncated && <div className={css.hint}>仅显示前 200 行</div>}
     </div>
   )
 }

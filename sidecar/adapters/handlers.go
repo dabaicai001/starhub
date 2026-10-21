@@ -224,7 +224,9 @@ type relationalAdapter interface {
 	ListIndexes(string, string) ([]IndexInfo, error)
 	CreateIndex(string, string, string, []string, bool, string) error
 	DropIndex(string, string, string) error
-	Execute(string) (*QueryResult, error)
+	// Execute 的 maxRows:未显式带 LIMIT 的 SELECT 强制追加的行数上限,
+	// <=0 取 DefaultExecuteMaxRows。
+	Execute(string, int) (*QueryResult, error)
 	Explain(string) (*QueryResult, error)
 	GetTableDDL(string, string) (string, error)
 	GetTableData(string, string, int, int, string, string, string, string, map[string]string) (*QueryResult, error)
@@ -405,6 +407,9 @@ func handleMySQLExecute(mgr *pool.Manager) Handler {
 			ConnID   string `json:"connId"`
 			Database string `json:"database,omitempty"`
 			SQL      string `json:"sql"`
+			// MaxRows 行数上限(可选):UI 的 SQL 编辑器按用户选择下发;
+			// 缺失/<=0 时适配器取默认值。
+			MaxRows int `json:"maxRows,omitempty"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -419,7 +424,7 @@ func handleMySQLExecute(mgr *pool.Manager) Handler {
 			dbName = adapter.DefaultNamespace()
 		}
 		sql = adapter.ScopeSQL(sql, dbName)
-		return adapter.Execute(sql)
+		return adapter.Execute(sql, p.MaxRows)
 	}
 }
 
@@ -876,6 +881,8 @@ func handleClickHouseExecute(mgr *pool.Manager) Handler {
 			ConnID   string `json:"connId"`
 			Database string `json:"database,omitempty"`
 			SQL      string `json:"sql"`
+			// MaxRows 行数上限(可选):与 MySQL execute 同契约。
+			MaxRows int `json:"maxRows,omitempty"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -884,7 +891,7 @@ func handleClickHouseExecute(mgr *pool.Manager) Handler {
 		if err != nil {
 			return nil, err
 		}
-		return adapter.Execute(p.SQL)
+		return adapter.Execute(p.SQL, p.MaxRows)
 	}
 }
 

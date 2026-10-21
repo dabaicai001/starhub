@@ -228,7 +228,8 @@ func (a *SQLiteAdapter) DropIndex(_, _, indexName string) error {
 }
 
 // Execute 执行 SQL
-func (a *SQLiteAdapter) Execute(sqlStr string) (*QueryResult, error) {
+// maxRows: 对未显式带 LIMIT 的 SELECT 强制追加的行数上限(<=0 取默认值)。
+func (a *SQLiteAdapter) Execute(sqlStr string, maxRows int) (*QueryResult, error) {
 	start := time.Now()
 	sqlStr = strings.TrimSpace(sqlStr)
 	if sqlStr == "" {
@@ -244,7 +245,7 @@ func (a *SQLiteAdapter) Execute(sqlStr string) (*QueryResult, error) {
 
 	if isSelect {
 		if !limitRegex.MatchString(sqlStr) && !strings.HasPrefix(upper, "PRAGMA") {
-			sqlStr = sqlStr + " LIMIT 100"
+			sqlStr = sqlStr + fmt.Sprintf(" LIMIT %d", ClampExecuteMaxRows(maxRows))
 		}
 		return a.executeSelect(sqlStr, nil, start)
 	}

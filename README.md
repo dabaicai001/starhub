@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.136.6-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.137.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,13 +59,9 @@
 
 ## 当前版本
 
-### v0.136.6 (2026-10-19)
-- 🐛 🐛 **数据库页两处 P0 前后端契约错位(在真实 sidecar 上直接失败,单测因沿用旧参数名而漏掉)**:① 单元格编辑保存走 `db_mysql_update_rows` 时前端仍发旧 Tauri 时代的 `whereClause`——去 Tauri 化后的 Rust 转发层是纯平铺转发、参数白名单只认 `where`,于是每次保存都被「缺少 where」拒绝,单元格编辑实际从未保存成功;② Redis key 搜索把 SCAN 的 MATCH 模式发成 `matchPattern`,sidecar 的 `db.redis.scan` 只解 `match`,搜索词被静默丢弃、返回整库 key(搜索框形同虚设)。两处均改为 sidecar 契约参数名,并补回归断言。
-- 🐛 🐛 **数据工作台跨库同名表串数据**:字段树展开态/列详情只按表名缓存,`app.users` 与 `other.users` 共用一份列;删表会把所有库里的同名表一起从树里抹掉。现在缓存键改为「库.表」,删表只作用目标库,并关闭该表的打开标签页。
-- 🐛 🐛 **Redis 值编辑器类型与采样**:① 以服务端 `get_value` 的 type 为准——被删/过期的 key 不再渲染成文本 `null` 且可保存(凭空重建 key),而是明确「Key 不存在」并禁用保存/TTL;缓存类型过期(如 string 实为 hash)时按真实类型渲染。② 大集合只回传前 N 项时提示「仅加载前 N 项(共 M 项)」,不再把这些可见项删完误报「保存后集合为空」。③ key `a` 与同名文件夹 `a`(来自 `a:b`)共存时渲染 key 重复,补节点种类前缀。
-- 🐛 🐛 **DB 工作台交互**:清空当前打开的表后网格不刷新(仍显示旧行);点库行不设为执行库(与库行 title/选择器提示不符);非安全上下文无剪贴板时点 DDL「复制」会对 undefined 取 `.then` 抛错;Redis 连接失败错误条只有「返回」,只能关窗重开——现在可原地重试。
-- 🐛 🐛 **DB 监控面板错过连接就绪**:面板在连接建立前挂载(连接中切「监控」)时,旧 effect 只看 connId/dbType,connected=false→true 不触发加载,指标永远停在初始值。
-- 🔧 🔧 **数据库页细节完善**:结果网格行号改为全局偏移(第 2 页从 101 起),空页显示空态并区分「当前页没有数据 / 当前筛选没有匹配的行」;Redis 连接失败可原地「重试」;删表时自动关闭该表的数据标签。
+### v0.137.0 (2026-10-21)
+- ✨ ✨ **SQL 执行结果分页 + 行数上限可选**:① sidecar `db.mysql.execute`(及 clickhouse/sqlite/mssql/postgres)新增可选参数 `maxRows`——对未显式带 LIMIT 的 SELECT 强制夹到该值,**默认从写死的 100 提升到 1000**,硬上限 10 万(`ClampExecuteMaxRows` 归一化);前端 SQL 工具栏新增「行数上限」下拉(100/500/1000/5000),随执行下发。② 结果区把硬编码「只渲染前 200 行 + 仅显示前 200 行」改为**客户端分页条**(上一页/下一页 + 每页条数 100/500/1000/5000 + 「第 x–y 行 / 共 N 行」),翻页不重新执行;工具条补展示耗时。
+- 🐛 🐛 **StarHub 工作台窗口弹层「透明盒子」**:数据库/Redis 工作台跑在独立 iframe 窗口(`apps/starhub-window`),其 `window-shell.css` 只 import 了 ui-theme 8 个样式表中的 3 个,**缺 `gradient-shadow-text.css`**——`--dsw-menu-backdrop-filter`(菜单毛玻璃)、`--dsw-elevation-*`(菜单投影)、`--dsw-shadow-lv*`(筛选弹层投影)全部未定义,右键菜单/列筛选弹层只剩 45%–58% 不透明填充、无模糊无阴影,叠在内容上就是一块透明框。现按 ui-theme 的 STYLES 列表补齐 `gradient-shadow-text.css`/`corner-shape.css`/`focus.css`,并在构建产物中断言令牌落地。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

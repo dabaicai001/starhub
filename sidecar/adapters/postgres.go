@@ -187,7 +187,10 @@ func (a *PostgresAdapter) ListIndexes(schema, table string) ([]IndexInfo, error)
 	return indexes, nil
 }
 
-func (a *PostgresAdapter) Execute(sqlText string) (*QueryResult, error) {
+// Execute 执行 SQL
+// maxRows: 对未显式带 LIMIT 的 SELECT/WITH/VALUES 强制追加的行数上限
+// (<=0 取默认值);TABLE / EXPLAIN 等不适用 LIMIT 的前缀不追加。
+func (a *PostgresAdapter) Execute(sqlText string, maxRows int) (*QueryResult, error) {
 	start := time.Now()
 	trimmed := strings.TrimSpace(sqlText)
 	if trimmed == "" {
@@ -196,6 +199,13 @@ func (a *PostgresAdapter) Execute(sqlText string) (*QueryResult, error) {
 	prefix := strings.ToUpper(strings.Fields(trimmed)[0])
 	if prefix == "SELECT" || prefix == "SHOW" || prefix == "WITH" ||
 		prefix == "VALUES" || prefix == "TABLE" || prefix == "EXPLAIN" {
+		// 与 MySQL 对齐的安全上限:无显式 LIMIT 的查询夹到 maxRows,
+		// 避免一次执行把超大结果集整体拉进内存。TABLE / EXPLAIN 的语法
+		// 不接受尾部 LIMIT,保持原样。
+		if (prefix == "SELECT" || prefix == "WITH" || prefix == "VALUES") &&
+			!limitRegex.MatchString(trimmed) {
+			trimmed += fmt.Sprintf(" LIMIT %d", ClampExecuteMaxRows(maxRows))
+		}
 		return a.executeSelect(trimmed, nil, start)
 	}
 	result, err := a.db.Exec(trimmed)

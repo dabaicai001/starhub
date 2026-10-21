@@ -2,9 +2,21 @@
  * not run here, so the token sheets are imported directly and the resolved
  * theme (light/dark) is applied on <body> in App mount() from the opener's
  * `dark` hint. Without these sheets every var(--dsw-alias-*) is unresolved
- * and the window renders unstyled white. */
+ * and the window renders unstyled white.
+ *
+ * The sheet set mirrors ui-theme's STYLES list (client/ui-theme/src/client/
+ * styles.ts). `gradient-shadow-text.css` is load-bearing for popups: it
+ * defines `--dsw-menu-backdrop-filter` (MenuSurface frosted material),
+ * `--dsw-shadow-lv*` and the `--dsw-elevation-*` tokens. Without it every
+ * context menu / filter popover in the DB and Redis workbenches loses its
+ * blur and shadow and renders as a flat see-through box. `corner-shape.css`
+ * and `focus.css` complete the token surface; shiki.css is CodeMirror-only
+ * highlighting this window does not use, and onboarding.css is shell chrome. */
 @import '@deepseek-ai/dsh-client-ui-theme/styles/base.css';
+@import '@deepseek-ai/dsh-client-ui-theme/styles/corner-shape.css';
 @import '@deepseek-ai/dsh-client-ui-theme/styles/design-platform.css';
+@import '@deepseek-ai/dsh-client-ui-theme/styles/focus.css';
+@import '@deepseek-ai/dsh-client-ui-theme/styles/gradient-shadow-text.css';
 @import '@deepseek-ai/dsh-client-ui-theme/styles/scrollbar.css';
 
 html, body, #root {
