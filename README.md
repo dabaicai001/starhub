@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.139.2-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.140.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,9 +59,10 @@
 
 ## 当前版本
 
-### v0.139.2 (2026-10-21)
-- 🐛 🐛 **SQLite / MSSQL 的「右键库 → 新建表」必然失败**:DDL 生成器只覆盖 MySQL / PostgreSQL / ClickHouse 三种方言,而 DbWorkbench 把 sqlite/mssql 都折算成 `mysql` 方言——生成的 `CREATE TABLE \`db\`.\`t\` (...) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`(反引号 + ENGINE)在 SQLite / T-SQL 上直接语法报错。现在按方言收敛入口(与「编辑列/索引仅 MySQL」同式),这两种类型的库右键只剩「刷新表列表」。
-- 🐛 🐛 **改列对话框关闭时清错补全缓存**:ColumnListDialog 的 onClose 用**裸表名**删 `columnsByTable`,跨库同名表会把另一个库的补全列清掉(或清不掉目标库的)。改为「库.表」键(与 v0.138.0 的补全缓存隔离同源,这条漏网)。
+### v0.140.0 (2026-10-21)
+- 🔧 ♻️ **AI SSH 操作连接模型重写:AI 不再自建连接,复用用户终端已连接的会话(主壳 AI 与 SSH 助手同规则)**:旧模型里每个 AI 会话各有一条自有连接(`dsh:<assetId>:ssh`),堡垒机资产首次命令要弹「MFA 验证卡 + 选机器实时终端」、用户在一张 AI 私有的 pty 里亲手选机器再点「执行 AI 命令」——同一台机器用户已经连过、选过,AI 却要再来一遍。现在 `ui.ssh_connect` 下发 `assetId`,sidecar 按资产解析**用户终端页已连接的会话**(同资产多窗口取第一个存活者):普通主机走同一连接的 exec 通道(不打扰用户终端),堡垒机把命令写入用户终端的同一条 pty(输出经新增的 pty 广播 tap 哨兵回采,采集期不持会话锁,用户的 resize/断开/SFTP 不被阻塞)。**未连接时 AI 不擅自建连**,工具返回「请先连接」引导由模型转告;连接级失败不再自动重连(连接归用户,断了由用户在终端里重建)。随之退役:`ai_conn_id`/`ensure_ssh_session`/`exec_via_bastion_pty`/`bastion_shell` 复用通道/`pending_bastion`/`ui.ssh_bastion_response`(方法面 205)、助手面板连接验证卡与 `active-conns` 路由、壳内 `StarHubConnCard`、`AssistantBastionTerminal`。AI 执行遥测改由域工具路径广播 `ssh:exec-done`(sessionId = 终端会话 id),「SSH 执行记录」视图继续工作且不再混入用户的 cwd 探测。
+- 🔧 🔒 **AI 自主操作限只读,写操作由 AI 给命令、人工交回后执行**:助手人设重写为「复用用户连接 / 没连就提示去连 / 自主只读 / 任何修改删除安装重启先以文本给出命令等人来跑或明确交回 / 命令写在用户 shell 里用户可见」;审批卡(写/风险恒 ask,approval-bridge 风险门不变)就是人工交回点。工具描述同步改版(ssh_exec/ssh_exec_background/ssh_session_status/sftp_*/open_connection/focus_terminal)。
+- 🔧 🧪 **验收链补强**:`test-sftp` stub 服务器新增 pty/shell 支持(迷你交互 shell),`verify_sidecar_ssh.py` 改按新模型验收(未连接引导 → 真连终端会话 → AI 复用执行 → SFTP 复用 → exec-done 遥测);`verify_bridge_compat.mjs` 的方法面总数断言修正(196→205,此前一直是陈旧值),「清单不带密钥」断言改为现行契约(UI 清单按 2026-10-10 起的有意行为合并密钥,模型面仍不含)。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

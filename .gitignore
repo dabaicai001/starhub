@@ -107,3 +107,5 @@ test-sftp/__pycache__/
 test-sftp/host_key.pem
 # exec_server.py 的 SFTP 根目录(服务器首启自动创建并写入 hello.txt)
 test-sftp/sftp-root/
+# 验收脚本跑出来的审计存储(默认落在 cwd;本地产物,不入库)
+starhub-audit.json

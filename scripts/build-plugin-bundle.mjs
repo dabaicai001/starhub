@@ -122,8 +122,8 @@ const PLUGINS = [
     short: 'ssh-assistant', row: 'starhub-ssh-assistant',
     entry: 'lib/types/index.js', title: { zh: 'StarHub SSH AI 助手', en: 'StarHub SSH AI assistant' },
     description: {
-      zh: 'SSH 终端页 AI 助手:每终端页一个 agent 作用域会话,复用 dsh 模型连接,审批与 MFA/堡垒机验证卡都在面板内完成。',
-      en: 'SSH terminal AI assistant: one agent-scoped session per terminal page, reusing the dsh model route, with approvals and MFA/bastion cards inside the panel.',
+      zh: 'SSH 终端页 AI 助手:每终端页一个 agent 作用域会话,复用 dsh 模型连接;AI 不自建连接,命令跑在用户已连接的终端会话上,自主只读、写操作经审批卡交回人工,审批在面板内完成。',
+      en: 'SSH terminal AI assistant: one agent-scoped session per terminal page, reusing the dsh model route; the AI owns no connection and runs commands on the user\'s connected terminal session, staying read-only on its own with writes handed back through the approval card.',
     },
   },
 ]
