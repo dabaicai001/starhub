@@ -13,12 +13,12 @@
 //! Domain events (SSH data / MFA prompts / SFTP transfer progress) are
 //! forwarded to the peer as `starhub/domain-event` notifications **the moment
 //! the domain emits them**. That immediacy is what makes interactive prompts
-//! work at all: the host key / keyboard-interactive / bastion prompts are
-//! delivered while the connect request that waits for the answer is still in
-//! flight, and the answer rides back on the same stdin the reader thread is
-//! still consuming. Queuing them behind a request (the pre-2026-10-10
-//! behaviour) deadlocked every first connection to an unknown host: the peer
-//! could not answer a prompt it only saw after the answer deadline
+//! work at all: the host key / keyboard-interactive prompts are delivered
+//! while the connect request that waits for the answer is still in flight,
+//! and the answer rides back on the same stdin the reader thread is still
+//! consuming. Queuing them behind a request (the pre-2026-10-10 behaviour)
+//! deadlocked every first connection to an unknown host: the peer could not
+//! answer a prompt it only saw after the answer deadline
 //! (see docs/踩坑记录.md).
 //!
 //! The same notification channel carries the bridge contract notifications

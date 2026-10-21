@@ -9,7 +9,7 @@ rem
 rem Usage:
 rem   scripts\cargo-sidecar.bat check -p starhub-live -j 2
 rem   scripts\cargo-sidecar.bat test -p starhub-live -j 2
-rem   scripts\cargo-sidecar.bat fmt --all --manifest-path ..\sidecar-rust\Cargo.toml
+rem   scripts\cargo-sidecar.bat fmt --all --check
 
 if "%STARHUB_VCVARS%"=="" set "STARHUB_VCVARS=D:\c++1\VC\Auxiliary\Build\vcvars64.bat"
 call "%STARHUB_VCVARS%" >nul 2>&1

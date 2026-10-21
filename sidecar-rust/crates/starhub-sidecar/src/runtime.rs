@@ -141,17 +141,10 @@ impl SshRuntime {
         }
     }
 
-    /// 确保 AI exec SSH 会话存在(connId 与前端一致,复用已建会话)。
-    pub async fn ensure_ssh_session(&self, asset_id: &str) -> Result<String, String> {
-        starhub_domain_ssh::tools::ensure_ssh_session(&self.context(), asset_id).await
-    }
-
-    /// 丢弃一个(死)SSH 会话(map 条目 + 代次 + pending 通道一并清理)。
-    pub async fn drop_ssh_session(&self, conn_id: &str) {
-        starhub_domain_ssh::tools::drop_ssh_session(&self.context(), conn_id).await;
-    }
-
     /// 执行 ssh_exec / ssh_exec_background / ssh_wait_task。
+    ///
+    /// 命令在用户终端已连接的会话上执行(同资产多窗口取第一个存活者);
+    /// 未连接时返回引导文案,AI 不擅自建连(v0.140.0 新模型)。
     pub async fn execute_ssh(
         &self,
         name: &str,
@@ -277,19 +270,51 @@ mod tests {
     #[tokio::test]
     async fn ssh_tools_report_missing_asset_without_touching_the_network() {
         let (runtime, dir) = runtime_in_temp("empty");
-        // 未知资产:ensure_ssh_session 在解析资产配置处失败,文案与 Tauri 版一致
+        // 未知资产:resolve_user_session 在解析资产配置处失败,文案与 Tauri 版一致
         let err = runtime
             .execute_ssh("ssh_exec", "ghost", &serde_json::json!({ "command": "ls" }))
             .await
             .unwrap_err();
         assert_eq!(err, "资产不存在: ghost");
-
-        // 状态查询不触发连接:无会话 → 引导文案
-        let status = runtime.execute_ssh_status("ghost").await.unwrap();
-        assert!(status.contains("SSH 会话未建立(资产 ghost)"), "{status}");
+        // 状态查询同样不肯为未知资产编造会话状态
+        let err = runtime.execute_ssh_status("ghost").await.unwrap_err();
+        assert_eq!(err, "资产不存在: ghost");
 
         // 空资产库的清单
         assert_eq!(runtime.assets().list_assets_text(None).unwrap(), "[]");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ssh_tools_ask_the_user_to_connect_instead_of_connecting() {
+        // 新模型(v0.140.0):资产存在但用户终端未连接——AI 不得自建连接,
+        // 返回引导文案,由模型提示用户去连接。
+        let (runtime, dir) = runtime_in_temp("unconnected");
+        runtime
+            .assets()
+            .upsert(
+                "a1",
+                "ssh",
+                "验收机",
+                serde_json::json!({ "host": "10.0.0.1", "port": 22, "username": "root", "password": "pw" }),
+                None,
+                vec![],
+                false,
+            )
+            .expect("建资产");
+        let hint = runtime
+            .execute_ssh("ssh_exec", "a1", &serde_json::json!({ "command": "ls" }))
+            .await
+            .expect("未连接是软引导,不是错误");
+        assert!(hint.contains("尚未连接"), "{hint}");
+        assert!(hint.contains("复用你的连接"), "{hint}");
+        let status = runtime.execute_ssh_status("a1").await.unwrap();
+        assert!(status.contains("SSH 终端尚未连接(资产 a1)"), "{status}");
+        let sftp = runtime
+            .execute_sftp("sftp_list", "a1", &serde_json::json!({ "path": "/tmp" }))
+            .await
+            .expect("未连接是软引导,不是错误");
+        assert!(sftp.contains("尚未连接"), "{sftp}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

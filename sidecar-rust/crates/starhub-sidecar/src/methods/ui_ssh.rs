@@ -70,14 +70,31 @@ fn notify_registry_sync(ssh: &SshRuntime, live_ids: &std::collections::HashSet<S
 // ── SSH 交互会话 ─────────────────────────────────────────────
 
 /// `ui.ssh_connect`:建立带 PTY 的交互会话(interactive=true)。
+///
+/// `assetId`(可选)是会话归属的 StarHub 资产:AI 域工具据此复用本会话执行
+/// 命令,不再自建连接(v0.140.0 新模型)。缺省时会话不参与 AI 复用。
 pub async fn ssh_connect(ssh: &SshRuntime, params: &Value) -> Result<Value, RpcError> {
     let id = required_str(params, "id")?;
+    let asset_id = params
+        .get("assetId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let config: SshConfig =
         serde_json::from_value(params.get("config").cloned().unwrap_or(Value::Null))
             .map_err(|error| RpcError::invalid_params(format!("config 解析失败: {error}")))?;
-    let info = connect_session(ssh.manager(), ssh.transfers(), id, config, ssh.sink(), true)
-        .await
-        .map_err(RpcError::internal)?;
+    let info = connect_session(
+        ssh.manager(),
+        ssh.transfers(),
+        id,
+        config,
+        asset_id,
+        ssh.sink(),
+        true,
+    )
+    .await
+    .map_err(RpcError::internal)?;
     Ok(json!(info))
 }
 
@@ -166,11 +183,10 @@ pub async fn ssh_disconnect(ssh: &SshRuntime, params: &Value) -> Result<Value, R
         manager
             .remove_write_channel_for_attempt(&id, invalidated_generation.wrapping_sub(1))
             .await;
-        // 丢弃仍在等待前端输入的 MFA / 主机密钥 / 堡垒机选机器应答通道,
+        // 丢弃仍在等待前端输入的 MFA / 主机密钥应答通道,
         // 否则 in-flight connect 会阻塞到 360s 超时
         manager.pending_kb.lock().await.remove(&id);
         manager.pending_hostkey.lock().await.remove(&id);
-        manager.pending_bastion.lock().await.remove(&id);
     }
     if ssh.registry().remove_session(&id).is_some() {
         let live_ids = {
@@ -219,7 +235,6 @@ pub async fn ssh_exec(ssh: &SshRuntime, params: &Value) -> Result<Value, RpcErro
         .map(str::to_string);
     let output = ssh_exec_core(
         ssh.manager(),
-        ssh.sink(),
         &id,
         &command,
         timeout_sec,
@@ -266,22 +281,6 @@ pub async fn ssh_hostkey_response(ssh: &SshRuntime, params: &Value) -> Result<Va
     sender
         .send((allowed, persist))
         .map_err(|_| RpcError::internal("Failed to send hostkey response (handler dropped)"))?;
-    Ok(Value::Null)
-}
-
-/// `ui.ssh_bastion_response`:堡垒机「选机器」回复(空串 = 用户放弃)。
-pub async fn ssh_bastion_response(ssh: &SshRuntime, params: &Value) -> Result<Value, RpcError> {
-    let id = required_str(params, "id")?;
-    let selection = required_str(params, "selection")?;
-    let sender = {
-        let mut map = ssh.manager().pending_bastion.lock().await;
-        map.remove(&id).ok_or_else(|| {
-            RpcError::internal(format!("No pending bastion prompt for session {id}"))
-        })?
-    };
-    sender
-        .send(selection)
-        .map_err(|_| RpcError::internal("Failed to send bastion response (handler dropped)"))?;
     Ok(Value::Null)
 }
 
@@ -775,10 +774,6 @@ mod tests {
         .await
         .expect_err("无待应答");
         assert_eq!(error.message, "No pending hostkey prompt for session s1");
-        let error = ssh_bastion_response(&ssh, &json!({ "id": "s1", "selection": "" }))
-            .await
-            .expect_err("无待应答");
-        assert_eq!(error.message, "No pending bastion prompt for session s1");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

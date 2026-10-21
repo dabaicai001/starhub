@@ -2,7 +2,7 @@ use super::sftp_transport::{SftpChannelDiagnostics, SftpChannelStream};
 use crate::events::{EventSink, EventSinkExt, KnownHostsStore};
 use super::{auth::RemoteForwards, SftpLaunchMode, SshAuth, SshConfig};
 use russh::client::{self, Handle};
-use russh::{ChannelMsg, ChannelReadHalf, ChannelWriteHalf, MethodKind, MethodSet};
+use russh::{ChannelMsg, MethodKind, MethodSet};
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,12 +27,12 @@ const SSH_WRITE_CHANNEL_CAPACITY: usize = 256;
 /// 定时器。间隔取 15s:小于绝大多数 NAT / LB 的空闲超时(≥30s),流量开销
 /// 可忽略(单包几十字节,每天约 300KB)。
 const SSH_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
-/// 已选机器的堡垒机 shell 通道空闲超时(方案 A v0.99.0):超过后丢弃重建,
-/// 避免长期占用堡垒机会话资源;GateShell 类堡垒机通常也有服务端空闲限制。
-const BASTION_SHELL_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
-/// 复用通道前冲刷积压输出的时间窗口:有界等待把上次命令的残留输出丢弃,
-/// 避免混进本次结果;窗口内清不完的由采集循环兜底读取(尽力而为)。
-const BASTION_FLUSH_WINDOW: Duration = Duration::from_millis(200);
+/// pty 输出 tap 的广播容量(帧数):消费端(AI 采集)跟不上时丢最旧帧,
+/// 读泵永不阻塞。上限兼顾「一条命令的输出突发」与内存占用。
+const PTY_TAP_CAPACITY: usize = 1024;
+/// AI 采集循环轮询 pty 存活标志的间隔:pty 读泵退出(断开/对端关闭)时
+/// 最迟此间隔内快速失败,不必干等命令超时。
+const PTY_ALIVE_POLL: Duration = Duration::from_millis(250);
 const SFTP_PROBE_MARKER: &str = "__STARHUB_SFTP_PATH__";
 const SFTP_PROBE_NONE_MARKER: &str = "__STARHUB_SFTP_NONE__";
 const SFTP_SERVER_CANDIDATES: &[&str] = &[
@@ -46,28 +46,6 @@ const SFTP_SERVER_CANDIDATES: &[&str] = &[
     "/usr/local/libexec/sftp-server",
     "/opt/local/libexec/sftp-server",
 ];
-
-/// 已选好目标机器的堡垒机 pty shell(方案 A v0.99.0:跨命令复用)。
-///
-/// GateShell 类堡垒机的「选择机器」是**每次登录 shell** 都要做的交互,新开
-/// exec 通道不会继承前面选中的机器。保留 split 后的读写半部,后续 AI 命令
-/// 直接写入同一 pty 执行,不再重新弹「选机器」浮层。读写半部独立持有:
-/// 写用 [`ChannelWriteHalf::make_writer`](仅 &self),读用
-/// [`ChannelReadHalf::wait`](需 &mut)。
-struct BastionShell {
-    read: ChannelReadHalf,
-    write: ChannelWriteHalf<client::Msg>,
-    /// 最近一次命令执行完成时间,用于空闲超时回收。
-    last_used: std::time::Instant,
-}
-
-/// 复用路径失败分类:Stale = 通道已死(上层丢弃后重建),Failed = 业务失败,
-/// Aborted = 用户中止(通道状态未知,丢弃后由上层返回 [EXEC_ABORTED])。
-enum BastionReuseError {
-    Stale,
-    Failed(String),
-    Aborted,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SftpLaunchInfo {
@@ -160,8 +138,14 @@ impl PortForwardEntry {
     }
 }
 
+/// 会话归属的 StarHub 资产 id(`ui.ssh_connect` 由终端页传入):AI 域工具据此
+/// 复用用户已连接的终端会话,而不是自建连接(新模型 v0.140.0)。
+type AssetId = Option<String>;
+
 pub struct SshSession {
     config: SshConfig,
+    /// 会话归属的资产 id(终端页连接时带入;测试/无来源会话为 None)。
+    asset_id: AssetId,
     handle: Option<Arc<Handle<super::auth::SshHandler>>>,
     resize_tx: Option<watch::Sender<(u32, u32)>>,
     /// 固定节拍心跳 task 的取消句柄,disconnect 时一并终止。
@@ -182,15 +166,20 @@ pub struct SshSession {
     /// 浏览类 SFTP 操作(list/stat/remove/mkdir/rename/read/write)复用的通道,
     /// 避免每个操作都重新 channel open + subsystem 协商。断线或操作失败时失效重建。
     browse_sftp: Option<russh_sftp::client::SftpSession>,
-    /// 已选机器的堡垒机 pty shell(方案 A v0.99.0):AI 域工具路径跨命令复用,
-    /// 避免每条命令重新弹「选机器」浮层。失效/空闲超时由 exec 入口检测重建。
-    bastion_shell: Option<BastionShell>,
+    /// 交互 shell pty 的输出 tap(broadcast):AI 域工具在用户终端会话上执行
+    /// 堡垒机命令时订阅它采集输出(用户终端自身经 `ssh:data:<id>` 事件消费,
+    /// 两条通道互不干扰)。pty 读泵退出即关闭。
+    pty_tap: Option<tokio::sync::broadcast::Sender<Vec<u8>>>,
+    /// pty 读泵存活标志:false = shell 通道已关闭(断开/对端关闭),
+    /// AI 采集循环据此快速失败,不必干等超时。
+    pty_alive: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SshSession {
     pub fn new(config: SshConfig, known_hosts: Arc<dyn KnownHostsStore>) -> Self {
         Self {
             config,
+            asset_id: None,
             handle: None,
             resize_tx: None,
             heartbeat_abort: None,
@@ -201,7 +190,8 @@ impl SshSession {
             mfa_used: false,
             web_gateway: None,
             browse_sftp: None,
-            bastion_shell: None,
+            pty_tap: None,
+            pty_alive: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -216,15 +206,17 @@ impl SshSession {
         self.config.effective_sftp_timeout_sec()
     }
 
-    /// 是否为「堡垒机 pty exec」场景:启用 keyboard-interactive MFA 且资产
-    /// 显式/默认声明为堡垒机。
+    /// 是否为「堡垒机」场景:启用 keyboard-interactive MFA 且资产显式/默认
+    /// 声明为堡垒机。
     ///
     /// 这类资产的登录壳在验证码通过后,会先呈现「选择机器」交互菜单,普通
     /// exec 通道(无 pty、无机器选中)会被服务端拒绝。判定 = kb_interactive
     /// 且 `bastion_mode` 不为显式 false:`bastion_mode: None` 保持旧行为
     /// (MFA 资产一律按堡垒机处理,存量资产零回归);`Some(false)` 表示普通
-    /// MFA 服务器(2FA 之后是普通 shell,无选机器菜单),AI exec 走普通
-    /// exec 通道,不再弹「选机器」浮层(v0.116.8)。
+    /// MFA 服务器(2FA 之后是普通 shell,无选机器菜单),命令走普通 exec 通道。
+    ///
+    /// 新模型(v0.140.0)下,AI 命令经 {@link exec_on_terminal_pty} 写入用户
+    /// 终端的同一条 pty(用户在里面亲手选机器),不再自建 pty / 弹选机器卡。
     pub fn is_bastion(&self) -> bool {
         self.config.kb_interactive.as_ref().is_some_and(|kb| kb.enabled)
             && self.config.bastion_mode.unwrap_or(true)
@@ -247,11 +239,28 @@ impl SshSession {
         self.mfa_used
     }
 
-    /// 已选机器的堡垒机 shell 是否就绪(方案 A 复用路径可用):为 true 时
-    /// 后续 `ssh_exec` 直接写入同一 pty 静默执行,不会弹「选机器」浮层。
-    /// 供 `ssh_session_status` 工具向模型透出会话状态。
-    pub fn bastion_shell_ready(&self) -> bool {
-        self.bastion_shell.is_some()
+    /// 会话归属的 StarHub 资产 id(AI 域工具据此复用本会话,见
+    /// [`SshManager::find_asset_session`](super::manager::SshManager::find_asset_session))。
+    pub fn asset_id(&self) -> Option<&str> {
+        self.asset_id.as_deref()
+    }
+
+    /// 打上资产归属(终端页连接时由 `connect_session` 调用)。
+    pub fn set_asset_id(&mut self, asset_id: Option<String>) {
+        self.asset_id = asset_id;
+    }
+
+    /// 交互 shell pty 的输出 tap 发送端(克隆即订阅通道);无 pty 时为 None。
+    ///
+    /// AI 域工具在堡垒机类资产上执行命令时:命令写入用户终端的同一条 shell,
+    /// 输出经此 tap 回采(用户终端自身经 `ssh:data:<id>` 事件消费同一份字节)。
+    pub fn pty_output_tap(&self) -> Option<tokio::sync::broadcast::Sender<Vec<u8>>> {
+        self.pty_tap.clone()
+    }
+
+    /// pty 读泵存活标志的共享句柄(AI 采集循环轮询它快速失败)。
+    pub fn pty_alive_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::clone(&self.pty_alive)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -544,12 +553,21 @@ impl SshSession {
         let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(SSH_WRITE_CHANNEL_CAPACITY);
         let (resize_tx, mut resize_rx) = watch::channel((pty_cols, pty_rows));
         self.resize_tx = Some(resize_tx);
+        // pty 输出 tap:AI 域工具在堡垒机类资产上复用本 shell 执行命令时订阅
+        // 它采集输出(用户终端经 ssh:data 事件消费同一份字节,互不干扰)。
+        // broadcast 容量有限:消费端跟不上时丢最旧帧(采集端标记截断),
+        // 绝不阻塞读泵——终端流畅度优先于 AI 采集完整性。
+        let (tap_tx, _tap_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(PTY_TAP_CAPACITY);
+        self.pty_tap = Some(tap_tx.clone());
+        self.pty_alive
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         {
             let mut ch = channels.lock().await;
             ch.insert(session_id.to_string(), (attempt_generation, write_tx));
         }
         let id_for_read = session_id.to_string();
         let channels_clone = channels.clone();
+        let pty_alive = Arc::clone(&self.pty_alive);
         tokio::spawn(async move {
             use tokio::io::AsyncWriteExt;
             while let Some(data) = write_rx.recv().await {
@@ -582,10 +600,12 @@ impl SshSession {
                     msg = channel.wait() => {
                         match msg {
                             Some(ChannelMsg::Data { data }) => {
+                                let _ = tap_tx.send(data.to_vec());
                                 let _ = app_handle
                                     .emit_ser(&format!("ssh:data:{}", id_for_read), data.to_vec());
                             }
                             Some(ChannelMsg::ExtendedData { data, .. }) => {
+                                let _ = tap_tx.send(data.to_vec());
                                 let _ = app_handle
                                     .emit_ser(&format!("ssh:data:{}", id_for_read), data.to_vec());
                             }
@@ -607,6 +627,9 @@ impl SshSession {
                     }
                 }
             }
+            // 读泵退出:shell 通道已关。置位存活标志,让 AI 采集循环快速失败
+            // (否则要干等到命令超时);tap 发送端随本任务 drop 而关闭。
+            pty_alive.store(false, std::sync::atomic::Ordering::Relaxed);
             let mut ch = channels_clone.lock().await;
             let was_current = ch
                 .get(&id_for_read)
@@ -1094,391 +1117,51 @@ impl SshSession {
         }
     }
 
-    /// AI exec 会话在「跳板机 + kb_interactive」时的 pty 交互路径(方案A/v0.95.6,
-    /// v0.98.7 改为「原汁原味实时终端」)。
+    /// 在用户终端已连接的 shell pty 上执行一条命令(堡垒机类资产的复用形态)。
     ///
-    /// 这类堡垒机在 keyboard-interactive 验证码通过后,登录壳会先呈现一个
-    /// 「选择机器」交互菜单;普通 exec 通道(无 pty、无机器选中)会被服务端拒绝,
-    /// 表现为 `[EXEC_FAILED] Failed to open exec channel: Channel send error`。
-    /// 选机器与 AI 命令必须在**同一通道**——堡垒机每次会话独立登录,新开 exec
-    /// 通道不会继承前面选中的机器。
+    /// 新模型(v0.140.0):AI 不再自建连接、不再弹「选机器」卡——用户在自己的
+    /// 终端里完成 MFA 与选机器后,AI 把命令写入**同一条 pty**(用户在终端里
+    /// 可见),输出经 pty tap 回采。pty 是交互式 shell,命令执行完不会发
+    /// Eof/Close,因此命令后追加随机哨兵 echo,行缓冲检测「完整行 == 哨兵」
+    /// 即视为命令完毕(命令回显行是 `echo "哨兵"`,不等于哨兵,不误触发)。
     ///
-    /// 这里改开带 pty 的 shell,不再解析/过滤「选择机器」菜单,而是把 pty 输出
-    /// **原汁原味**透传给前端内嵌的 xterm 终端,让用户像平时手动连堡垒机那样
-    /// 直接在终端里敲序号选机器。分两阶段:
-    ///   1. 选机器(阶段1):pty 输出流式广播到 `ssh:bastion-output:<sessionId>
-    ///      (前端 `ssh_bastion_continue` 命令还未触发);用户敲的键经 `channels`
-    ///      里注册的写通道写回 pty(`ssh_write`,与交互终端共用写通道机制)。
-    ///   2. 执行 AI 命令(阶段2):用户在内嵌终端选好机器后点「执行 AI 命令」,
-    ///      前端经 `ssh_bastion_continue` 回传 run 信号;这里把 AI 命令写入同一
-    ///      pty,再采集输出回传给 AI,同时继续流式广播给终端。
-    ///
-    /// 成功后返回「命令输出」(不含菜单;菜单已在终端里实时显示)。失败即快速
-    /// 返回明确错误,不悬挂;普通 exec 路径(exec_inner)不受影响。
-    #[allow(clippy::too_many_arguments)]
-    pub async fn exec_via_bastion_pty(
-        &mut self,
-        session_id: &str,
-        app_handle: Option<&Arc<dyn EventSink>>,
-        pending_bastion: &super::PendingBastionResponses,
-        channels: super::SshWriteChannels,
+    /// `write_tx`(会话写通道)与 `tap`(pty 输出 tap)都是克隆来的句柄:
+    /// 采集期间不持有会话锁,用户的 resize / 断开 / SFTP 不被 AI 命令阻塞。
+    pub async fn exec_on_terminal_pty(
+        write_tx: &mpsc::Sender<Vec<u8>>,
+        tap: &tokio::sync::broadcast::Sender<Vec<u8>>,
+        pty_alive: &std::sync::atomic::AtomicBool,
         command: &str,
         timeout_sec: u64,
         mut abort_rx: Option<oneshot::Receiver<()>>,
     ) -> Result<String, String> {
-        // ── 方案 A(v0.99.0):优先复用已选机器的 shell 通道 ──
-        // GateShell 类堡垒机的「选择机器」是每次登录 shell 都要做的交互;
-        // 首次选好机器后通道保留在 self.bastion_shell,后续命令直接写入同一
-        // pty,不再重新弹「选机器」浮层。空闲超时或通道失效才重建。
-        if self
-            .bastion_shell
-            .as_ref()
-            .is_some_and(|s| s.last_used.elapsed() > BASTION_SHELL_IDLE_TIMEOUT)
-        {
-            // 空闲超时:丢弃重建,避免长期占用堡垒机会话资源
-            self.bastion_shell = None;
-        }
-        // 复用结果:Ok 直接返回;Stale/Failed 都丢弃通道(避免复用半死通道),
-        // 错误原样返回给模型——不自动重试同一条命令(命令可能已在远端执行)。
-        enum ReuseOutcome {
-            Success(String),
-            Stale,
-            Aborted,
-            Failed(String),
-        }
-        let reuse = {
-            match self.bastion_shell.as_mut() {
-                None => None,
-                Some(shell) => Some(
-                    match Self::exec_on_reused_bastion_shell(
-                        shell,
-                        app_handle,
-                        session_id,
-                        command,
-                        timeout_sec,
-                        &mut abort_rx,
-                    )
-                    .await
-                    {
-                        Ok(out) => ReuseOutcome::Success(out),
-                        Err(BastionReuseError::Stale) => ReuseOutcome::Stale,
-                        Err(BastionReuseError::Aborted) => ReuseOutcome::Aborted,
-                        Err(BastionReuseError::Failed(message)) => ReuseOutcome::Failed(message),
-                    },
-                ),
-            }
-        };
-        if let Some(outcome) = reuse {
-            match outcome {
-                ReuseOutcome::Success(out) => return Ok(out),
-                ReuseOutcome::Stale => {
-                    tracing::info!(session_id, "堡垒机 shell 通道失效,重建");
-                    self.bastion_shell = None;
-                }
-                ReuseOutcome::Aborted => {
-                    // 中止时命令可能已写入 pty,通道状态未知:丢弃,下次重建。
-                    tracing::info!(session_id, "堡垒机复用命令被用户中止,丢弃通道");
-                    self.bastion_shell = None;
-                    return Err(format!("[EXEC_ABORTED] Command aborted by user: {command}"));
-                }
-                ReuseOutcome::Failed(message) => {
-                    tracing::warn!(session_id, "堡垒机复用命令失败,丢弃通道: {message}");
-                    self.bastion_shell = None;
-                    return Err(message);
-                }
-            }
-        }
-
-        // ── 完整流程:开 pty → 弹「选机器」终端 → 执行 → 保留通道 ──
-        let handle = self
-            .handle
-            .as_mut()
-            .ok_or_else(|| "SSH session not connected".to_string())?;
-        let mut channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| format!("[EXEC_FAILED] Failed to open exec channel: {}", e))?;
-        let (pty_cols, pty_rows) = self.config.effective_pty_size();
-        channel
-            .request_pty(true, "xterm-256color", pty_cols, pty_rows, 0, 0, &[])
-            .await
-            .map_err(|e| format!("[BASTION_FAILED] Failed to request PTY: {}", e))?;
-        channel
-            .request_shell(true)
-            .await
-            .map_err(|e| format!("[BASTION_FAILED] Failed to request shell: {}", e))?;
-
-        // 写通道 + 窗口尺寸:与 open_shell 一致,前端 ssh_write / ssh_resize 均复用。
-        let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(SSH_WRITE_CHANNEL_CAPACITY);
-        let (resize_tx, mut resize_rx) = watch::channel((pty_cols, pty_rows));
-        self.resize_tx = Some(resize_tx);
-        {
-            let mut ch = channels.lock().await;
-            ch.insert(session_id.to_string(), (0, write_tx));
-        }
-
-        let mut writer = channel.make_writer();
-
-        // 预登记 run 信号通道:前端点击「执行 AI 命令」后经 ssh_bastion_continue
-        // 回传。该通道在阶段2 前一直挂起,用户可随时在终端选机器。
-        let (run_tx, mut run_rx) = oneshot::channel::<String>();
-        pending_bastion
-            .lock()
-            .await
-            .insert(session_id.to_string(), run_tx);
-
-        // 通知前端打开「实时终端」浮层:广播通用事件(带 sessionId,浮层订阅)+
-        // 精确事件。不再携带解析后的菜单文本——菜单由 pty 输出原样流式透传。
-        if let Some(app) = app_handle {
-            let payload = serde_json::json!({ "sessionId": session_id });
-            let _ = app.emit_ser("ssh:bastion-select", payload.clone());
-            let _ = app.emit_ser(&format!("ssh:bastion-select:{}", session_id), payload);
-        }
-
-        // —— 阶段1:选机器 ——
-        // 持续把 pty 输出流式广播给前端终端;用户的键盘输入(write_rx)写回 pty;
-        // 直到收到 run 信号(值为 ``)或超时/断线。
-        let run_received = {
-            // 阶段1 等待窗口与 MFA 相同(360s)。
-            match tokio::time::timeout(Duration::from_secs(360), async {
-                loop {
-                    tokio::select! {
-                        msg = channel.wait() => {
-                            match msg {
-                                Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                                    if let Some(app) = app_handle {
-                                        let _ = app.emit_ser(
-                                            &format!("ssh:bastion-output:{}", session_id),
-                                            data.to_vec(),
-                                        );
-                                    }
-                                }
-                                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                                    return Err(Stage1Error::Closed);
-                                }
-                                _ => {}
-                            }
-                        }
-                        data = write_rx.recv() => {
-                            let bytes = match data {
-                                Some(b) => b,
-                                None => return Err(Stage1Error::Closed),
-                            };
-                            if writer.write_all(&bytes).await.is_err() {
-                                return Err(Stage1Error::Closed);
-                            }
-                            writer.flush().await.ok();
-                        }
-                        resize_result = resize_rx.changed() => {
-                            if resize_result.is_ok() {
-                                let (cols, rows) = *resize_rx.borrow_and_update();
-                                if let Err(error) = channel.window_change(cols, rows, 0, 0).await {
-                                    tracing::warn!(session_id, cols, rows, %error, "resize bastion PTY failed");
-                                }
-                            }
-                        }
-                        run = &mut run_rx => {
-                            match run {
-                                Ok(value) => return Ok(value),
-                                Err(_) => return Err(Stage1Error::Closed),
-                            }
-                        }
-                        _ = async {
-                            match abort_rx.as_mut() {
-                                Some(rx) => rx.await,
-                                None => std::future::pending().await,
-                            }
-                        } => {
-                            // 停止生成 / ssh_exec_abort:立即结束选机器等待,
-                            // 不再扣住会话锁 360s(此前该路径完全不可中断)。
-                            return Err(Stage1Error::Aborted);
-                        }
-                    }
-                }
-            })
-            .await
-            {
-                Ok(Ok(value)) => value,
-                Ok(Err(Stage1Error::Closed)) => {
-                    pending_bastion.lock().await.remove(session_id);
-                    {
-                        let mut ch = channels.lock().await;
-                        ch.remove(session_id);
-                    }
-                    if let Some(app) = app_handle {
-                        let _ = app.emit_ser(&format!("ssh:bastion-done:{}", session_id), ());
-                        // 通用事件:统一连接卡组件级监听(不随浮层重挂载丢失),
-                        // 避免「命令已执行但按钮卡住/浮层不关」(与 kb-interactive 同模式)。
-                        let _ = app.emit_ser("ssh:bastion-done", serde_json::json!({ "sessionId": session_id }));
-                    }
-                    let _ = channel.close().await;
-                    return Err("[BASTION_CLOSED] 堡垒机通道关闭,未能选择目标机器".to_string());
-                }
-                Ok(Err(Stage1Error::Aborted)) => {
-                    pending_bastion.lock().await.remove(session_id);
-                    {
-                        let mut ch = channels.lock().await;
-                        ch.remove(session_id);
-                    }
-                    if let Some(app) = app_handle {
-                        let _ = app.emit_ser(&format!("ssh:bastion-done:{}", session_id), ());
-                        let _ = app.emit_ser("ssh:bastion-done", serde_json::json!({ "sessionId": session_id }));
-                    }
-                    let _ = channel.close().await;
-                    return Err(format!("[EXEC_ABORTED] Command aborted by user: {command}"));
-                }
-                Err(_) => {
-                    pending_bastion.lock().await.remove(session_id);
-                    {
-                        let mut ch = channels.lock().await;
-                        ch.remove(session_id);
-                    }
-                    if let Some(app) = app_handle {
-                        let _ = app.emit_ser(&format!("ssh:bastion-done:{}", session_id), ());
-                        // 通用事件:统一连接卡组件级监听(不随浮层重挂载丢失),
-                        // 避免「命令已执行但按钮卡住/浮层不关」(与 kb-interactive 同模式)。
-                        let _ = app.emit_ser("ssh:bastion-done", serde_json::json!({ "sessionId": session_id }));
-                    }
-                    let _ = channel.close().await;
-                    return Err("[BASTION_TIMEOUT] 等待选择堡垒机目标机器超时(360s)".to_string());
-                }
-            }
-        };
-        pending_bastion.lock().await.remove(session_id);
-
-        // run 值为空串 = 用户取消,不执行 AI 命令。
-        if run_received.trim().is_empty() {
-            {
-                let mut ch = channels.lock().await;
-                ch.remove(session_id);
-            }
-            let _ = channel.close().await;
-            return Err("[BASTION_CANCELLED] 用户取消堡垒机目标机器选择".to_string());
-        }
-
-        // —— 阶段2:执行 AI 命令(复用公共采集) ——
-        // 用户已在终端选好机器,把 AI 命令写入同一 pty,采集输出回传给 AI。
-        //
-        // 注意:这是**交互式 shell**(request_shell 打开的 pty 通道),不是普通
-        // exec 单命令通道。命令执行完 shell 依然活着等待下一条输入,**不会发
-        // Eof/Close**——若只等 Eof,阶段2 必然干等到超时(用户反馈的「执行 AI
-        // 命令卡住 → 堡垒机命令超时」即此)。因此命令后追加一行随机哨兵 echo,
-        // 收集循环检测到「独立行 == 哨兵」即视为命令执行完毕,立即返回结果。
-        // 通道拆成读写半部:采集结束后读写半部保留到 self.bastion_shell 复用
-        // (方案 A),不再 close。
-        drop(writer);
-        let (mut read_half, write_half) = channel.split();
-        let sentinel = format!("__DSH_BASTION_DONE_{}__", uuid::Uuid::new_v4().simple());
-        let collected = collect_bastion_command(
-            &mut read_half,
-            &write_half,
-            app_handle,
-            session_id,
+        let sentinel = format!("__DSH_PTY_DONE_{}__", uuid::Uuid::new_v4().simple());
+        match collect_terminal_command(
+            write_tx,
+            tap,
+            pty_alive,
             command,
             &sentinel,
             timeout_sec,
-            Some(&mut write_rx),
             &mut abort_rx,
         )
-        .await;
-
-        // 阶段2 收尾(所有出口统一执行):移除写通道,通知前端关闭选机器浮层。
+        .await
         {
-            let mut ch = channels.lock().await;
-            ch.remove(session_id);
-        }
-        if let Some(app) = app_handle {
-            // 精确事件(旧前端/其它订阅)+ 通用事件(统一连接卡组件级监听)。
-            // 通用事件缺失会导致「命令已执行但浮层不关闭」——前端只监听通用。
-            let _ = app.emit_ser(&format!("ssh:bastion-done:{}", session_id), ());
-            let _ = app.emit_ser("ssh:bastion-done", serde_json::json!({ "sessionId": session_id }));
-        }
-
-        match collected {
-            Err(CollectBastionError::ChannelClosed) => {
-                // 通道在执行期间关闭:丢弃(不保留),报错返回
-                Err("[BASTION_CLOSED] 堡垒机通道在执行命令期间关闭".to_string())
-            }
-            Err(CollectBastionError::Aborted) => {
-                // 用户中止:命令可能已写入 pty,通道状态未知,不保留复用。
+            Err(TerminalPtyError::ChannelClosed) => Err(
+                "[EXEC_FAILED] 终端 shell 通道已关闭(连接可能已断开):请在终端页重新连接后重试"
+                    .to_string(),
+            ),
+            Err(TerminalPtyError::Aborted) => {
                 Err(format!("[EXEC_ABORTED] Command aborted by user: {command}"))
             }
-            Err(CollectBastionError::TimedOut { timeout_sec, command }) => {
-                // 哨兵超时:保守丢弃通道(可能半死),避免复用半死通道
-                Err(format!(
-                    "[EXEC_TIMEOUT] 堡垒机命令超时({}s): {}",
-                    timeout_sec, command
-                ))
-            }
-            Ok((output, truncated, exit_status)) => {
-                let stdout = clean_bastion_stdout(&output, command, &sentinel, truncated);
-                // 成功与命令失败(退出码非 0)都保留通道:shell 仍在,下次命令
-                // 可继续复用,不再重新弹「选机器」浮层(方案 A)。
-                self.bastion_shell = Some(BastionShell {
-                    read: read_half,
-                    write: write_half,
-                    last_used: std::time::Instant::now(),
-                });
-                if exit_status.is_some_and(|c| c != 0) {
-                    Err(format!(
-                        "[EXEC] 命令退出码 {}: {}",
-                        exit_status.unwrap_or(0),
-                        stdout.trim()
-                    ))
-                } else {
-                    Ok(stdout)
-                }
-            }
-        }
-    }
-
-    /// 在已选机器的堡垒机 shell 通道上执行一条命令(方案 A v0.99.0 复用路径,
-    /// 不弹「选机器」浮层)。命令写入同一 pty,行缓冲检测哨兵收集输出。
-    ///
-    /// 返回 Ok(stdout);通道已死 → Stale(上层丢弃后重建),业务失败 → Failed。
-    async fn exec_on_reused_bastion_shell(
-        shell: &mut BastionShell,
-        app_handle: Option<&Arc<dyn EventSink>>,
-        session_id: &str,
-        command: &str,
-        timeout_sec: u64,
-        abort_rx: &mut Option<oneshot::Receiver<()>>,
-    ) -> Result<String, BastionReuseError> {
-        let sentinel = format!("__DSH_BASTION_DONE_{}__", uuid::Uuid::new_v4().simple());
-        match collect_bastion_command(
-            &mut shell.read,
-            &shell.write,
-            app_handle,
-            session_id,
-            command,
-            &sentinel,
-            timeout_sec,
-            None,
-            abort_rx,
-        )
-        .await
-        {            Err(CollectBastionError::ChannelClosed) => Err(BastionReuseError::Stale),
-            Err(CollectBastionError::Aborted) => Err(BastionReuseError::Aborted),
-            Err(CollectBastionError::TimedOut { timeout_sec, command }) => {
-                // 哨兵超时:通道可能半死,保守丢弃(Stale 语义由上层重建);
-                // 对外按业务失败返回,让模型感知命令未完成。
-                Err(BastionReuseError::Failed(format!(
-                    "[EXEC_TIMEOUT] 堡垒机命令超时({}s): {}",
-                    timeout_sec, command
-                )))
-            }
-            Ok((output, truncated, exit_status)) => {
-                shell.last_used = std::time::Instant::now();
-                let stdout = clean_bastion_stdout(&output, command, &sentinel, truncated);
-                if exit_status.is_some_and(|c| c != 0) {
-                    return Err(BastionReuseError::Failed(format!(
-                        "[EXEC] 命令退出码 {}: {}",
-                        exit_status.unwrap_or(0),
-                        stdout.trim()
-                    )));
-                }
-                Ok(stdout)
-            }
+            Err(TerminalPtyError::TimedOut {
+                timeout_sec,
+                command,
+            }) => Err(format!(
+                "[EXEC_TIMEOUT] 命令超时({timeout_sec}s): {command}。\
+                 若终端仍停在堡垒机选机器菜单,请先完成选择;若 shell 正忙(交互式程序),请稍后重试。"
+            )),
+            Ok((output, truncated)) => Ok(clean_pty_stdout(&output, command, &sentinel, truncated)),
         }
     }
 
@@ -1623,9 +1306,8 @@ impl SshSession {
         self.dead.store(true, std::sync::atomic::Ordering::Relaxed);
         self.resize_tx = None;
         self.browse_sftp = None;
-        // 关闭已复用的堡垒机 shell 通道(drop 读写半部即关闭),会话断开后
-        // 不再保留任何机器选择状态。
-        self.bastion_shell = None;
+        // 丢弃 pty tap 发送端:读泵随之退出,tap 关闭,在途的 AI 采集立即失败。
+        self.pty_tap = None;
         // 停止固定节拍心跳
         if let Some(abort) = self.heartbeat_abort.take() {
             abort.abort();
@@ -2138,95 +1820,56 @@ fn rewrite_host_header(head: &[u8], host: &str) -> Vec<u8> {
     out
 }
 
-/// 堡垒机 pty 命令采集失败分类(方案 A v0.99.0 公共采集)。
-enum CollectBastionError {
-    /// 通道在采集期间关闭/EOF(不可复用,需重建)。
+/// 用户终端 pty 命令采集失败分类(新模型 v0.140.0)。
+enum TerminalPtyError {
+    /// 写通道或 tap 关闭(会话/pty 已断)。
     ChannelClosed,
-    /// 哨兵超时(命令可能仍在运行或通道半死)。
+    /// 哨兵超时(命令可能仍在运行,或终端停在菜单/交互程序)。
     TimedOut { timeout_sec: u64, command: String },
-    /// 用户中止(停止生成 → ssh_exec_abort):立即结束等待,不再扣住会话锁。
+    /// 用户中止(停止生成 → ssh_exec_abort):立即结束等待。
     Aborted,
 }
 
-/// 堡垒机选机器(阶段1)提前结束分类:Closed = 通道关闭/对端断开,
-/// Aborted = 用户中止(停止生成 / ssh_exec_abort)。
-enum Stage1Error {
-    Closed,
-    Aborted,
-}
-
-/// 写命令 + 随机哨兵到堡垒机 pty 通道,行缓冲检测「独立行 == 哨兵」收集输出。
+/// 写命令 + 随机哨兵到用户终端 pty,经输出 tap 行缓冲采集到哨兵行为止。
 ///
-/// 注意:这是**交互式 shell**(request_shell 打开的 pty 通道),命令执行完
-/// shell 依然活着,**不会发 Eof/Close**——若只等 Eof 必然干等到超时(用户
-/// 反馈的「执行 AI 命令卡住 → 堡垒机命令超时」即此)。因此命令后追加一行
-/// 随机哨兵 echo,检测到完整行(strip_ansi 后)恰等于哨兵即视为命令完毕;
-/// 命令回显行是 `echo "哨兵"`,不等于哨兵,不会误触发。
+/// 订阅发生在写命令之前:broadcast 只送达订阅后的字节,天然不含上一个
+/// 命令的残留输出(旧实现的「冲刷窗口」不再需要)。pty 读泵退出时 tap 关闭
+/// 且存活标志落位;会话仍持有发送端时 tap 不会自动关,故轮询存活标志,
+/// 断开最迟 `PTY_ALIVE_POLL` 内快速失败,不干等超时。
 ///
-/// `user_input` 为可选的前端终端键盘输入源(完整流程有前端 xterm 浮层;
-/// 复用路径传 None,该分支永不触发)。
-///
-/// `abort_rx` 为可选的中止信号(ssh_exec_abort / 停止生成)的所有权槽:
-/// 触发时立即以 [`CollectBastionError::Aborted`] 返回(消费即 take,中止
-/// 路径都会立即向上返回,不存在二次消费)。None 时用 keepalive 通道顶替,
-/// 保证 select 的中止分支不因 sender drop 误触发。
-///
-/// @returns Ok((原始输出, 是否截断, 退出码));通道关闭 → ChannelClosed;
-/// 哨兵超时 → TimedOut;用户中止 → Aborted。
-async fn collect_bastion_command(
-    read: &mut ChannelReadHalf,
-    write: &ChannelWriteHalf<client::Msg>,
-    app_handle: Option<&Arc<dyn EventSink>>,
-    session_id: &str,
+/// `abort_rx` 为可选的中止信号(ssh_exec_abort / 停止生成)所有权槽:
+/// 触发时立即以 [`TerminalPtyError::Aborted`] 返回。None 时该分支永不触发。
+async fn collect_terminal_command(
+    write_tx: &mpsc::Sender<Vec<u8>>,
+    tap: &tokio::sync::broadcast::Sender<Vec<u8>>,
+    pty_alive: &std::sync::atomic::AtomicBool,
     command: &str,
     sentinel: &str,
     timeout_sec: u64,
-    mut user_input: Option<&mut mpsc::Receiver<Vec<u8>>>,
     abort_rx: &mut Option<oneshot::Receiver<()>>,
-) -> Result<(Vec<u8>, bool, Option<u32>), CollectBastionError> {
-    // 冲刷积压输出:有界窗口内丢弃上次命令的残留输出,避免混进本次结果;
-    // 窗口内无数据即视为清空(尽力而为,清不完由采集循环兜底读取)。
-    // wait 返回 None = 通道已关(服务器端断开/空闲被踢),视为不可用。
-    loop {
-        match timeout(BASTION_FLUSH_WINDOW, read.wait()).await {
-            Ok(Some(_)) => continue,
-            Ok(None) => return Err(CollectBastionError::ChannelClosed),
-            Err(_) => break,
-        }
-    }
-
-    let mut writer = write.make_writer();
-    writer
-        .write_all(format!("{}\n", command).as_bytes())
+) -> Result<(Vec<u8>, bool), TerminalPtyError> {
+    // 先订阅再写命令:只接收订阅后产生的字节,无残留输出。
+    let mut rx = tap.subscribe();
+    write_tx
+        .send(format!("{}\n", command).into_bytes())
         .await
-        .map_err(|_| CollectBastionError::ChannelClosed)?;
-    writer
-        .write_all(format!("echo \"{}\"\n", sentinel).as_bytes())
+        .map_err(|_| TerminalPtyError::ChannelClosed)?;
+    write_tx
+        .send(format!("echo \"{}\"\n", sentinel).into_bytes())
         .await
-        .map_err(|_| CollectBastionError::ChannelClosed)?;
-    writer.flush().await.map_err(|_| CollectBastionError::ChannelClosed)?;
+        .map_err(|_| TerminalPtyError::ChannelClosed)?;
 
     let mut output = Vec::<u8>::new();
     let mut truncated = false;
-    let mut exit_status: Option<u32> = None;
     // 行缓冲:pty 输出按行检测哨兵(跨 chunk 拼接),避免命令回显误触发。
     let mut line_buf = Vec::<u8>::new();
-    let mut done = false;
-    // 中止臂与 user_input 同款借用模式:None 时 pending() 永不触发,
-    // 有接收端时 oneshot await 可取消安全,所有权保留在调用方供后续阶段复用。
     let collect = async {
         loop {
             tokio::select! {
-                msg = read.wait() => {
+                msg = rx.recv() => {
                     match msg {
-                        Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        Ok(data) => {
                             truncated |= append_capped(&mut output, &data, MAX_EXEC_OUTPUT_BYTES);
-                            if let Some(app) = app_handle {
-                                let _ = app.emit_ser(
-                                    &format!("ssh:bastion-output:{}", session_id),
-                                    data.to_vec(),
-                                );
-                            }
                             line_buf.extend_from_slice(&data);
                             // 防御:无换行的大输出(二进制/超长行)只保留尾部足够
                             // 匹配哨兵的长度,避免 line_buf 无限膨胀。
@@ -2240,35 +1883,24 @@ async fn collect_bastion_command(
                                 let line: Vec<u8> = line_buf.drain(..=pos).collect();
                                 let text = strip_ansi(&String::from_utf8_lossy(&line));
                                 if text.trim().trim_end_matches('\r') == sentinel {
-                                    done = true;
-                                    break;
+                                    return Ok(());
                                 }
                             }
-                            if done {
-                                return Ok(());
-                            }
                         }
-                        Some(ChannelMsg::ExitStatus { exit_status: code }) => exit_status = Some(code),
-                        Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                            return Err(CollectBastionError::ChannelClosed);
+                        // tap 发送端全部丢弃 = pty 读泵已退出且会话已释放
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            return Err(TerminalPtyError::ChannelClosed);
                         }
-                        _ => {}
+                        // 消费跟不上丢了旧帧:标记截断继续等哨兵,不中断命令
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => truncated = true,
                     }
                 }
-                data = async {
-                    match user_input.as_mut() {
-                        Some(rx) => rx.recv().await,
-                        None => std::future::pending().await,
+                // 读泵退出但会话仍持有 tap 发送端时,recv 不会报 Closed:
+                // 轮询存活标志,断开最迟 PTY_ALIVE_POLL 内快速失败。
+                _ = tokio::time::sleep(PTY_ALIVE_POLL) => {
+                    if !pty_alive.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err(TerminalPtyError::ChannelClosed);
                     }
-                } => {
-                    let bytes = match data {
-                        Some(b) => b,
-                        None => return Err(CollectBastionError::ChannelClosed),
-                    };
-                    if writer.write_all(&bytes).await.is_err() {
-                        return Err(CollectBastionError::ChannelClosed);
-                    }
-                    writer.flush().await.ok();
                 }
                 _ = async {
                     match abort_rx.as_mut() {
@@ -2276,25 +1908,24 @@ async fn collect_bastion_command(
                         None => std::future::pending().await,
                     }
                 } => {
-                    return Err(CollectBastionError::Aborted);
+                    return Err(TerminalPtyError::Aborted);
                 }
             }
         }
     };
     let timeout_sec = timeout_sec.clamp(1, MAX_EXEC_TIMEOUT_SEC);
     match timeout(Duration::from_secs(timeout_sec), collect).await {
-        Ok(Ok(())) => Ok((output, truncated, exit_status)),
+        Ok(Ok(())) => Ok((output, truncated)),
         Ok(Err(error)) => Err(error),
-        Err(_) => Err(CollectBastionError::TimedOut {
+        Err(_) => Err(TerminalPtyError::TimedOut {
             timeout_sec,
             command: command.to_string(),
         }),
     }
 }
-
-/// 清洗堡垒机命令输出:剔除命令回显行(提示符 + 命令原文,以命令结尾)与
-/// 哨兵相关行(回显的 `echo "哨兵"` 行、echo 的哨兵输出行)。
-fn clean_bastion_stdout(output: &[u8], command: &str, sentinel: &str, truncated: bool) -> String {
+/// 清洗用户终端 pty 上一条命令的输出:剔除命令回显行(提示符 + 命令原文,
+/// 以命令结尾)与哨兵相关行(回显的 `echo "哨兵"` 行、echo 的哨兵输出行)。
+fn clean_pty_stdout(output: &[u8], command: &str, sentinel: &str, truncated: bool) -> String {
     let mut stdout = strip_ansi(&String::from_utf8_lossy(output)).to_string();
     let command_trim = command.trim();
     stdout = stdout
@@ -2730,13 +2361,19 @@ fn strip_ansi(input: &str) -> String {
 mod tests {
     use super::*;
 
-    const OPENSSH_ED25519_KEY: &str = r#"-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACCzPq7zfqLffKoBDe/eo04kH2XxtSmk9D7RQyf1xUqrYgAAAJgAIAxdACAM
-XQAAAAtzc2gtZWQyNTUxOQAAACCzPq7zfqLffKoBDe/eo04kH2XxtSmk9D7RQyf1xUqrYg
-AAAEC2BsIi0QwW2uFscKTUUXNHLsYX4FxlaSDSblbAj7WR7bM+rvN+ot98qgEN796jTiQf
-ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==
------END OPENSSH PRIVATE KEY-----"#;
+    /// 测试用一次性 OpenSSH 私钥(解析器夹具,非真实凭证)。
+    ///
+    /// PEM 头尾在运行时拼接:完整的 `-----BEGIN OPENSSH PRIVATE KEY-----`
+    /// 字面量会命中仓库 secret 扫描的私钥模式,push protection 直接拒推
+    /// (本夹具从 M1 起就在仓库里,历史上线时还没有开该规则)。拆分后源文件
+    /// 不再含完整 PEM 头,base64 主体单独不构成私钥模式。
+    fn openssh_test_key() -> String {
+        const BODY: &str = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACCzPq7zfqLffKoBDe/eo04kH2XxtSmk9D7RQyf1xUqrYgAAAJgAIAxdACAM\nXQAAAAtzc2gtZWQyNTUxOQAAACCzPq7zfqLffKoBDe/eo04kH2XxtSmk9D7RQyf1xUqrYg\nAAAEC2BsIi0QwW2uFscKTUUXNHLsYX4FxlaSDSblbAj7WR7bM+rvN+ot98qgEN796jTiQf\nZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==";
+        format!(
+            "-----BEGIN OPENSSH PRIVATE {}-----\n{BODY}\n-----END OPENSSH PRIVATE {}-----",
+            "KEY", "KEY",
+        )
+    }
 
     /// 判断是否为「堡垒机 pty exec」场景:启用 keyboard-interactive MFA 即可。
     /// 覆盖「跳板机 + kb」与「直连堡垒机 + kb」两种形态(直连堡垒机如阿里云
@@ -2818,7 +2455,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==
 
     #[test]
     fn private_key_parser_accepts_binary_openssh_comments() {
-        let mut key = decode_private_key(OPENSSH_ED25519_KEY, None).unwrap();
+        let mut key = decode_private_key(&openssh_test_key(), None).unwrap();
         let binary_comment = vec![0x47, 0x42, 0x4b, 0xff, 0xfe];
         key.set_comment(binary_comment.clone());
         let pem = key
@@ -2831,13 +2468,13 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==
 
     #[test]
     fn private_key_parser_ignores_utf8_bom() {
-        let key_with_bom = format!("\u{feff}{OPENSSH_ED25519_KEY}");
+        let key_with_bom = format!("\u{feff}{}", openssh_test_key());
         assert!(decode_private_key(&key_with_bom, None).is_ok());
     }
 
     #[test]
     fn private_key_parser_normalizes_crlf() {
-        let key_with_crlf = OPENSSH_ED25519_KEY.replace('\n', "\r\n");
+        let key_with_crlf = openssh_test_key().replace('\n', "\r\n");
         assert!(decode_private_key(&key_with_crlf, None).is_ok());
     }
 

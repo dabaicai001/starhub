@@ -16,24 +16,20 @@ use crate::events::{EventSink, EventSinkExt, KnownHostsStore};
 use crate::session::SshSession;
 use crate::sftp::transfer::TransferManager;
 use crate::{
-    PendingBastionResponses, PendingHostKeyResponses, PendingKeyboardResponses, SshConfig,
-    SshSessionInfo, SshWriteChannels,
+    PendingHostKeyResponses, PendingKeyboardResponses, SshConfig, SshSessionInfo, SshWriteChannels,
 };
 
 /// SSH 会话管理器:会话实体唯一所有者 + 代次守卫 + 在途 exec 取消句柄。
 ///
-/// 域工具执行器(sidecar 的 `ssh_*` 方法面 / Tauri 的 `harness/domain.rs`)
-/// 与本命令面共用同一张会话表,因此 AI 执行器与交互终端可复用同一会话
-/// (connId `dsh:{asset_id}:ssh` 与前端一致)。
+/// 域工具执行器(sidecar 的 `ssh_*` 方法面)与本命令面共用同一张会话表:
+/// AI 域工具不再自建连接,而是经 {@link find_asset_session} 复用终端页
+/// (`ui.ssh_connect` 带入 asset_id)已连接的会话。
 pub struct SshManager {
     pub sessions: Arc<Mutex<HashMap<String, Arc<Mutex<SshSession>>>>>,
     /// 会话写通道(session_id → (代次, 发送端));交互终端 resize / 断开清理用。
     pub channels: SshWriteChannels,
     pub pending_kb: PendingKeyboardResponses,
     pub pending_hostkey: PendingHostKeyResponses,
-    /// 堡垒机 AI exec 的「选择机器」待应答通道(session_id → 用户选择的机器)。
-    /// 方案A(v0.95.6):AI exec 走带 pty 的 shell 时,先由用户在这里选机器。
-    pub pending_bastion: PendingBastionResponses,
     attempts: Arc<Mutex<HashMap<String, u64>>>,
     /// 在途 exec 命令的中断句柄:exec_id → 发送端。
     /// 放在 manager 层而不是 SshSession 里:exec 期间 session 锁被持有,
@@ -51,7 +47,6 @@ impl SshManager {
             channels: Arc::new(Mutex::new(HashMap::new())),
             pending_kb: Arc::new(Mutex::new(HashMap::new())),
             pending_hostkey: Arc::new(Mutex::new(HashMap::new())),
-            pending_bastion: Arc::new(Mutex::new(HashMap::new())),
             attempts: Arc::new(Mutex::new(HashMap::new())),
             exec_aborts: Arc::new(Mutex::new(HashMap::new())),
             known_hosts,
@@ -126,11 +121,36 @@ impl SshManager {
         self.invalidate_attempt(id).await;
         self.pending_kb.lock().await.remove(id);
         self.pending_hostkey.lock().await.remove(id);
-        self.pending_bastion.lock().await.remove(id);
+    }
+
+    /// 解析资产当前复用的用户终端会话(新模型 v0.140.0:AI 不自建连接)。
+    ///
+    /// 同资产多个终端窗口时,按会话 id 序取**第一个存活者**——确定性选择,
+    /// 用户新开/关闭窗口后自然顺延。死会话(心跳判死/已断开)跳过。
+    /// @returns 会话 id;无存活会话时 None(调用方提示用户去连接)。
+    pub async fn find_asset_session(&self, asset_id: &str) -> Option<String> {
+        let mut entries: Vec<(String, Arc<Mutex<SshSession>>)> = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .iter()
+                .map(|(id, arc)| (id.clone(), Arc::clone(arc)))
+                .collect()
+        };
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (id, arc) in entries {
+            let session = arc.lock().await;
+            if session.is_alive() && session.asset_id() == Some(asset_id) {
+                return Some(id);
+            }
+        }
+        None
     }
 }
 
 /// 建立 SSH 会话(interactive=true 开 PTY shell,false 为一次性 exec 通道)。
+///
+/// `asset_id` 是会话归属的 StarHub 资产(终端页连接时带入):AI 域工具据此
+/// 复用本会话执行命令,不再自建连接(v0.140.0 新模型)。
 ///
 /// 事件经 `sink` 送出(Tauri 侧是 Emitter,sidecar 侧是 JSON-RPC 通知);
 /// 主机密钥策略取自 manager 注入的 [`KnownHostsStore`]。
@@ -139,6 +159,7 @@ pub async fn connect_session(
     transfer_manager: &TransferManager,
     id: String,
     config: SshConfig,
+    asset_id: Option<String>,
     sink: &Arc<dyn EventSink>,
     interactive: bool,
 ) -> Result<SshSessionInfo, String> {
@@ -151,6 +172,7 @@ pub async fn connect_session(
     // 所有其他 SSH 操作(resize / disconnect / 新 connect),导致第二个 tab
     // 永远卡在 "Connecting to"。
     let mut session = SshSession::new(config.clone(), Arc::clone(&manager.known_hosts));
+    session.set_asset_id(asset_id);
     session
         .connect(
             &id,
@@ -233,20 +255,23 @@ pub async fn connect_session(
 }
 
 /// ssh_exec 的进程内核心(命令面与域工具执行器共用)。
-/// `bastion_interactive` = true 时(AI 域工具路径):资产启用 kb_interactive
-/// MFA(堡垒机,含直连堡垒机与跳板机两种形态)时改走带 pty 的 shell,
-/// 先由用户选机器再执行命令。
+/// `bastion_interactive` = true 时(AI 域工具路径):堡垒机类资产
+/// (kb_interactive MFA,普通 exec 通道会被服务端拒绝)改走用户终端 pty —
+/// 命令写入用户已连接的同一条 shell,输出经 pty tap 回采(v0.140.0 新模型:
+/// AI 不自建连接、不弹「选机器」卡,选机器由用户在自己的终端里完成)。
+///
+/// `ssh:exec-done` 广播不在这里:该事件是 AI 域工具独有的执行遥测(主壳
+/// 执行记录面板的数据源),由 `tools::exec_ssh_command` 在 AI 路径成功后
+/// 发射——UI 路径(`ui.ssh_exec` 的 cwd 探测等)不广播,避免混进记录。
 pub async fn ssh_exec_core(
     manager: &SshManager,
-    sink: &Arc<dyn EventSink>,
     id: &str,
     command: &str,
     timeout_sec: Option<u64>,
     exec_id: Option<&str>,
     bastion_interactive: bool,
 ) -> Result<String, String> {
-    // 执行主体包一层:成功后统一广播执行结果(主壳迷你面板展示最近一次
-    // 命令输出,普通 SSH 资产与堡垒机首次/复用路径全覆盖)。
+    // 执行主体:见上方契约注释。
     let result = async {
         // 先从 sessions map 中取出 Arc(只持有主锁一瞬间),然后释放主锁,
         // 再对单个 session 加锁执行命令。这样不同 session 的 exec 和 connect
@@ -259,9 +284,8 @@ pub async fn ssh_exec_core(
                 .ok_or_else(|| format!("SSH session {} not found", id))?
         };
 
-        let mut session = session_arc.lock().await;
-        // 注册在途取消句柄:普通 exec 与堡垒机 pty 路径统一支持停止生成中断
-        // (此前堡垒机路径不可中断,阶段1 等选机器最长扣住会话锁 360s)。
+        let session = session_arc.lock().await;
+        // 注册在途取消句柄:普通 exec 与终端 pty 路径统一支持停止生成中断。
         let abort_rx = match exec_id {
             Some(eid) => {
                 let (abort_tx, abort_rx) = tokio::sync::oneshot::channel();
@@ -275,21 +299,48 @@ pub async fn ssh_exec_core(
             None => None,
         };
         // 堡垒机 pty 路径:启用 kb_interactive MFA(直连堡垒机或跳板机)时,普通
-        // exec 通道被服务端拒绝(Channel send error),需先经 pty 让用户选机器。
-        // 仅 AI 域工具路径启用。
-        let result = if bastion_interactive && session.is_bastion() {
-            session
-                .exec_via_bastion_pty(
-                    id,
-                    Some(sink),
-                    &manager.pending_bastion,
-                    manager.channels.clone(),
-                    command,
-                    timeout_sec.unwrap_or(10),
-                    abort_rx,
-                )
-                .await
+        // exec 通道被服务端拒绝(Channel send error),命令改写在用户终端的
+        // pty 上执行。仅 AI 域工具路径启用(bastion_interactive=true)。
+        //
+        // 采集期间**不持有会话锁**:tap 发送端与写通道句柄都克隆自会话,
+        // 用户的 resize / 断开 / SFTP 操作不被 AI 命令阻塞(锁在采集前释放)。
+        let bastion_pty = bastion_interactive && session.is_bastion();
+        let tap = if bastion_pty {
+            session.pty_output_tap()
         } else {
+            None
+        };
+        let pty_alive = if bastion_pty {
+            Some(session.pty_alive_handle())
+        } else {
+            None
+        };
+        drop(session);
+        let result = if let (Some(tap), Some(pty_alive)) = (tap, pty_alive) {
+            let write_tx = {
+                let channels = manager.channels.lock().await;
+                channels.get(id).map(|(_, tx)| tx.clone())
+            };
+            match write_tx {
+                Some(write_tx) => {
+                    SshSession::exec_on_terminal_pty(
+                        &write_tx,
+                        &tap,
+                        &pty_alive,
+                        command,
+                        timeout_sec.unwrap_or(10),
+                        abort_rx,
+                    )
+                    .await
+                }
+                None => Err(
+                    "[EXEC_FAILED] 终端 shell 写通道不在位(连接可能已断开):请在终端页重新连接后重试"
+                        .to_string(),
+                ),
+            }
+        } else {
+            // 普通 exec 通道(与交互终端同一条 SSH 连接,互不干扰)。
+            let mut session = session_arc.lock().await;
             match abort_rx {
                 Some(abort_rx) => {
                     session
@@ -307,16 +358,6 @@ pub async fn ssh_exec_core(
     }
     .await;
 
-    if let Ok(output) = &result {
-        sink.emit_ser(
-            "ssh:exec-done",
-            serde_json::json!({
-                "sessionId": id,
-                "command": command,
-                "output": output.chars().take(4000).collect::<String>(),
-            }),
-        );
-    }
     result
 }
 
@@ -381,5 +422,40 @@ mod tests {
         assert_eq!(manager.current_attempt("asset-a").await, Some(2));
         // 无记录的 id:current 为 None
         assert_eq!(manager.current_attempt("asset-b").await, None);
+    }
+
+    // ---------- find_asset_session(AI 复用用户终端会话,v0.140.0) ----------
+
+    /// 插一条带 asset_id 的会话条目(未连接:handle 为 None,is_alive()=false)。
+    async fn insert_session(manager: &SshManager, id: &str, asset_id: Option<&str>) {
+        let config: crate::SshConfig = serde_json::from_str(
+            r#"{"host":"h","port":22,"username":"u","auth":{"Password":"p"}}"#,
+        )
+        .unwrap();
+        let mut session = SshSession::new(config, Arc::new(MemoryKnownHostsStore::default()));
+        session.set_asset_id(asset_id.map(str::to_string));
+        manager
+            .sessions
+            .lock()
+            .await
+            .insert(id.to_string(), Arc::new(Mutex::new(session)));
+    }
+
+    #[tokio::test]
+    async fn find_asset_session_returns_none_without_sessions() {
+        let manager = SshManager::new(Arc::new(MemoryKnownHostsStore::default()));
+        assert_eq!(manager.find_asset_session("asset-a").await, None);
+    }
+
+    #[tokio::test]
+    async fn find_asset_session_skips_other_assets_and_dead_sessions() {
+        let manager = SshManager::new(Arc::new(MemoryKnownHostsStore::default()));
+        insert_session(&manager, "asset-b__x1", Some("asset-b")).await;
+        // 同资产但未连接(is_alive=false:无连接句柄)——AI 不得复用死会话
+        insert_session(&manager, "asset-a__x1", Some("asset-a")).await;
+        insert_session(&manager, "no-asset", None).await;
+        assert_eq!(manager.find_asset_session("asset-a").await, None);
+        assert_eq!(manager.find_asset_session("asset-b").await, None);
+        assert_eq!(manager.find_asset_session("ghost").await, None);
     }
 }

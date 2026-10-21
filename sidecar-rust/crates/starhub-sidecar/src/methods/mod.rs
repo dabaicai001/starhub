@@ -218,7 +218,6 @@ pub fn registry_with_domains(
             "ui.ssh_exec" => crate::methods::ui_ssh::ssh_exec,
             "ui.ssh_kb_response" => crate::methods::ui_ssh::ssh_kb_response,
             "ui.ssh_hostkey_response" => crate::methods::ui_ssh::ssh_hostkey_response,
-            "ui.ssh_bastion_response" => crate::methods::ui_ssh::ssh_bastion_response,
             "ui.ssh_get_trusted_host_key" => crate::methods::ui_ssh::ssh_get_trusted_host_key,
             "ui.test_ssh_connection" => crate::methods::ui_ssh::test_ssh_connection,
             "ui.sftp_ensure_session" => crate::methods::ui_ssh::sftp_ensure_session,

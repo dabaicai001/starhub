@@ -13,28 +13,27 @@
 //!   执行体对宿主零特判。
 //!
 //! 结果文本格式与前端 `src/services/dshToolExecutor.ts` 对齐(模型可读文本),
-//! **文本是契约,不许漂移**;connId 规则(`dsh:{asset_id}:ssh`)、连接级失败
-//! 重建一次、长 sleep 软引导、后台任务命令拼装全部原样保持。
+//! **文本是契约,不许漂移**;长 sleep 软引导、后台任务命令拼装全部原样保持。
+//!
+//! **连接模型(v0.140.0 起)**:AI 不再自建连接(旧 `dsh:{asset_id}:ssh` AI exec
+//! 会话已退役)——{@link resolve_user_session} 复用终端页 `ui.ssh_connect`
+//! 建立的用户会话(同资产多窗口取第一个存活者);未连接时返回引导文案,
+//! 由模型提示用户去连接。连接级失败不再自动重连:连接归用户,断了由用户在
+//! 终端里重建。
 
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use crate::events::{EventSink, StoreFuture};
-use crate::manager::{connect_session, ssh_exec_core, SshManager};
+use crate::events::{EventSink, EventSinkExt, StoreFuture};
+use crate::manager::{ssh_exec_core, SshManager};
 use crate::sftp::transfer::TransferManager;
 use crate::SshConfig;
 
-/// connId 前缀:与前端 dshToolExecutor 的 `dsh:{assetId}:ssh` 保持一致,
-/// 可复用前端已建立的 AI exec 会话(避免重复连接)。
-pub fn ai_conn_id(asset_id: &str) -> String {
-    format!("dsh:{asset_id}:ssh")
-}
-
 /// 连接级失败判定:exec 通道都打不开 / 会话句柄不在位——命令一定没有在远端
-/// 开始执行,丢弃会话重建后重试是安全的。业务级失败(退出码非 0 /
-/// [EXEC_TIMEOUT] / [EXEC_ABORTED])不在此列,原样返回由模型决策。
+/// 开始执行。业务级失败(退出码非 0 / [EXEC_TIMEOUT] / [EXEC_ABORTED])不在此列,
+/// 原样返回由模型决策。新模型下不再自动重连,仅用于给错误附人工重连引导。
 pub fn is_connection_level_failure(error: &str) -> bool {
     error.starts_with("[EXEC_FAILED]")
         || error.starts_with("[CONN_FAILED]")
@@ -217,37 +216,43 @@ pub async fn drop_ssh_session(ctx: &ToolContext<'_>, conn_id: &str) {
     ctx.manager.drop_session(conn_id).await;
 }
 
-/// 确保 AI exec SSH 会话存在(connId 与前端一致,复用已建会话)。
-/// 返回 connId。死会话自动丢弃重建(网络断开 / 被服务端踢掉时自愈)。
-pub async fn ensure_ssh_session(ctx: &ToolContext<'_>, asset_id: &str) -> Result<String, String> {
-    let conn_id = ai_conn_id(asset_id);
-    {
-        let session_arc = ctx.manager.sessions.lock().await.get(&conn_id).cloned();
-        match session_arc {
-            Some(arc) if arc.lock().await.is_alive() => return Ok(conn_id),
-            Some(_) => {
-                // 死会话:丢弃后走下方建连路径重建(MFA 资产重建会重新弹验证卡,
-                // 属于人工配合的必要环节)。
-                drop_ssh_session(ctx, &conn_id).await;
-            }
-            None => {}
-        }
-    }
-    // 无会话:按资产配置建立(密码/密钥由 AssetSource 合并)
-    let (_name, config) = ctx.assets.asset_ssh_config(asset_id).await?;
-    connect_session(
-        ctx.manager,
-        ctx.transfers,
-        conn_id.clone(),
-        config,
-        ctx.sink,
-        false,
+/// 解析 AI 命令复用的用户终端会话(新模型 v0.140.0:AI 不自建连接)。
+///
+/// - `Ok(Some(会话 id))`:终端页已连接该资产(同资产多窗口取第一个存活者);
+/// - `Ok(None)`:尚未连接——调用方把 {@link not_connected_hint} 作为工具
+///   结果返回给模型,由模型提示用户去连接;
+/// - `Err`:资产不存在等硬错误。
+pub async fn resolve_user_session(
+    ctx: &ToolContext<'_>,
+    asset_id: &str,
+) -> Result<Option<String>, String> {
+    // 资产存在性校验(资产不存在是硬错误,文案与旧路径一致)
+    ctx.assets.asset_ssh_config(asset_id).await?;
+    Ok(ctx.manager.find_asset_session(asset_id).await)
+}
+
+/// 未连接引导文案:AI 复用用户连接,没有连接就提示用户去连(不擅自建连)。
+pub fn not_connected_hint(asset_id: &str) -> String {
+    format!(
+        "尚未连接:请先在 SSH 终端页连接资产 {asset_id}(堡垒机需完成 MFA 验证并选择目标机器),\
+         AI 将复用你的连接执行命令;连接后重试同一命令即可。"
     )
-    .await?;
-    Ok(conn_id)
+}
+
+/// 连接级失败附人工重连引导:连接归用户,断了由用户在终端里重建,AI 不自动重连。
+fn connection_failure_hint(error: String) -> String {
+    if is_connection_level_failure(&error) {
+        format!("{error}\n[提示] 连接已断开:请在 SSH 终端页重新连接该资产后重试。")
+    } else {
+        error
+    }
 }
 
 /// 带 exec_id 的进程内执行,登记在途取消句柄(停止生成时中断)。
+///
+/// 成功后广播 `ssh:exec-done`(AI 域工具独有的执行遥测,主壳执行记录面板
+/// 的数据源):新模型下命令跑在用户终端会话上,sessionId 即该终端会话 id;
+/// UI 路径(`ui.ssh_exec`)不广播,用户的 cwd 探测不会混进记录。
 async fn exec_ssh_command(
     ctx: &ToolContext<'_>,
     conn_id: &str,
@@ -258,7 +263,6 @@ async fn exec_ssh_command(
     ctx.tracker.register(&exec_id, conn_id);
     let result = ssh_exec_core(
         ctx.manager,
-        ctx.sink,
         conn_id,
         command,
         Some(timeout_sec),
@@ -267,31 +271,23 @@ async fn exec_ssh_command(
     )
     .await;
     ctx.tracker.unregister(&exec_id);
+    if let Ok(output) = &result {
+        ctx.sink.emit_ser(
+            "ssh:exec-done",
+            json!({
+                "sessionId": conn_id,
+                "command": command,
+                "output": output.chars().take(4000).collect::<String>(),
+            }),
+        );
+    }
     result
 }
 
-/// 执行一条 AI SSH 命令;连接级失败时丢弃死会话、重建一次并重试——
-/// 连接级失败意味着命令尚未在远端开始执行,重试安全。业务级失败原样返回,
-/// 由模型决策下一步。
-async fn exec_with_reconnect(
-    ctx: &ToolContext<'_>,
-    asset_id: &str,
-    conn_id: &str,
-    command: &str,
-    timeout_sec: u64,
-) -> Result<String, String> {
-    match exec_ssh_command(ctx, conn_id, command, timeout_sec).await {
-        Ok(output) => Ok(output),
-        Err(error) if is_connection_level_failure(&error) => {
-            drop_ssh_session(ctx, conn_id).await;
-            let fresh_conn = ensure_ssh_session(ctx, asset_id).await?;
-            exec_ssh_command(ctx, &fresh_conn, command, timeout_sec).await
-        }
-        Err(error) => Err(error),
-    }
-}
-
 /// 执行 ssh_exec / ssh_exec_background / ssh_wait_task。
+///
+/// 命令在**用户终端已连接的会话**上执行(同资产多窗口取第一个);未连接时
+/// 返回引导文案,不擅自建连。连接级失败附人工重连引导,不自动重试。
 pub async fn execute_ssh(
     ctx: &ToolContext<'_>,
     name: &str,
@@ -301,7 +297,10 @@ pub async fn execute_ssh(
     if asset_id.is_empty() {
         return Err("缺少 assetId,无法执行 SSH 工具".to_string());
     }
-    let conn_id = ensure_ssh_session(ctx, asset_id).await?;
+    let conn_id = match resolve_user_session(ctx, asset_id).await? {
+        Some(id) => id,
+        None => return Ok(not_connected_hint(asset_id)),
+    };
     if name == "ssh_wait_task" {
         let task_id = as_str(args.get("task_id").unwrap_or(&Value::Null))
             .trim()
@@ -310,14 +309,14 @@ pub async fn execute_ssh(
             return Ok("[Error] 无效的 task_id".to_string());
         }
         let wait_sec = clamp_task_wait_seconds(args.get("wait_seconds"));
-        let output = exec_with_reconnect(
+        let output = exec_ssh_command(
             ctx,
-            asset_id,
             &conn_id,
             &build_task_poll_command(&task_id, wait_sec),
             wait_sec + 15,
         )
-        .await?;
+        .await
+        .map_err(connection_failure_hint)?;
         return Ok(if output.is_empty() {
             "(无输出)".to_string()
         } else {
@@ -351,7 +350,9 @@ pub async fn execute_ssh(
     } else {
         command.clone()
     };
-    let output = exec_with_reconnect(ctx, asset_id, &conn_id, &final_command, 30).await?;
+    let output = exec_ssh_command(ctx, &conn_id, &final_command, 30)
+        .await
+        .map_err(connection_failure_hint)?;
     if is_background {
         Ok(format!(
             "{output}\n后台任务已启动,task_id: {task_id};请调用 ssh_wait_task(task_id=\"{task_id}\") 查询进度与结果。"
@@ -365,43 +366,46 @@ pub async fn execute_ssh(
     }
 }
 
-/// 查询当前绑定资产 SSH 会话状态(功能①:给模型透出「已选中机器」等状态)。
+/// 查询当前绑定资产的用户终端会话状态(功能①:给模型透出会话状态)。
 ///
-/// **不触发连接**:只读 `SshManager.sessions`,让模型在发命令前判断是否会
-/// 弹「选机器」浮层 / 命令是否静默执行。
+/// **不触发连接**:只读 `SshManager.sessions`(经 {@link resolve_user_session}
+/// 解析用户终端会话),让模型在发命令前判断是否要先提示用户连接。
 pub async fn execute_ssh_status(ctx: &ToolContext<'_>, asset_id: &str) -> Result<String, String> {
-    let conn_id = ai_conn_id(asset_id);
+    let conn_id = match resolve_user_session(ctx, asset_id).await? {
+        Some(id) => id,
+        None => {
+            return Ok(format!(
+                "SSH 终端尚未连接(资产 {asset_id}):请先在终端页连接(堡垒机需完成 MFA 验证并选择目标机器);AI 复用你的连接执行命令,不会自建连接。"
+            ))
+        }
+    };
     let session_arc = {
         let sessions = ctx.manager.sessions.lock().await;
         sessions.get(&conn_id).cloned()
     };
     let Some(session_arc) = session_arc else {
         return Ok(format!(
-            "SSH 会话未建立(资产 {asset_id}):首次命令会自动连接,堡垒机会依次弹出 MFA 验证卡与「选机器」终端,需要一次人工配合;之后会话复用,命令静默执行。"
+            "SSH 终端尚未连接(资产 {asset_id}):请先在终端页连接(堡垒机需完成 MFA 验证并选择目标机器);AI 复用你的连接执行命令,不会自建连接。"
         ));
     };
     let session = session_arc.lock().await;
     if !session.is_alive() {
         return Ok(format!(
-            "SSH 会话已断开(资产 {asset_id}):连接已死亡(网络断开或被服务端踢掉),下一条命令会自动重建连接;堡垒机资产重建时会重新弹出 MFA 验证与选机器流程。"
+            "SSH 终端连接已断开(资产 {asset_id}):请在终端页重新连接后重试,AI 不会自动重连。"
         ));
     }
-    if session.bastion_shell_ready() {
+    if session.is_bastion() {
         Ok(format!(
-            "SSH 会话已就绪(资产 {asset_id}):堡垒机已选中目标机器,后续命令直接静默执行,不会弹窗。"
-        ))
-    } else if session.is_bastion() {
-        Ok(format!(
-            "SSH 会话已连接(资产 {asset_id},堡垒机):尚未选择目标机器,下一条命令会弹出「选机器」实时终端,请准备在终端里输入序号选择。"
+            "SSH 终端已连接(资产 {asset_id},堡垒机):命令将写入你的终端 shell 执行(你可在终端里看到);若仍停在选机器菜单,请先完成选择。"
         ))
     } else {
         Ok(format!(
-            "SSH 会话已连接(资产 {asset_id}),命令将直接执行,不会弹窗。"
+            "SSH 终端已连接(资产 {asset_id}):命令经同一连接的执行通道运行,不会打扰你的终端。"
         ))
     }
 }
 
-/// 执行 sftp_list / sftp_stat / sftp_upload / sftp_download(复用 SSH 会话)。
+/// 执行 sftp_list / sftp_stat / sftp_upload / sftp_download(复用用户终端会话)。
 pub async fn execute_sftp(
     ctx: &ToolContext<'_>,
     name: &str,
@@ -411,7 +415,10 @@ pub async fn execute_sftp(
     if asset_id.is_empty() {
         return Err("缺少 assetId,无法执行 SFTP 工具".to_string());
     }
-    let conn_id = ensure_ssh_session(ctx, asset_id).await?;
+    let conn_id = match resolve_user_session(ctx, asset_id).await? {
+        Some(id) => id,
+        None => return Ok(not_connected_hint(asset_id)),
+    };
 
     // 确保 SFTP 通道已注册(惰性建立)
     if !ctx.transfers.has_session(&conn_id).await {
@@ -757,10 +764,26 @@ mod tests {
         assert!(required_remote_path(None).is_err());
     }
 
-    // ---------- connId 规则 ----------
+    // ---------- 连接模型(v0.140.0:复用用户终端会话) ----------
 
     #[test]
-    fn ai_conn_id_matches_the_frontend_key() {
-        assert_eq!(ai_conn_id("asset-1"), "dsh:asset-1:ssh");
+    fn not_connected_hint_guides_the_user_to_connect() {
+        let hint = not_connected_hint("asset-1");
+        assert!(hint.contains("尚未连接"), "{hint}");
+        assert!(hint.contains("asset-1"), "{hint}");
+        assert!(hint.contains("MFA"), "{hint}");
+        // 关键语义:AI 不擅自建连,明确「复用你的连接」
+        assert!(hint.contains("复用你的连接"), "{hint}");
+    }
+
+    #[test]
+    fn connection_failure_hint_only_decorates_transport_errors() {
+        let decorated = connection_failure_hint(
+            "[EXEC_FAILED] Failed to open exec channel: Channel send error".to_string(),
+        );
+        assert!(decorated.contains("重新连接"), "{decorated}");
+        // 业务级失败原样返回(退出码非 0 是命令自己的事,与连接无关)
+        let plain = "Command exited with code 1: no such file".to_string();
+        assert_eq!(connection_failure_hint(plain.clone()), plain);
     }
 }

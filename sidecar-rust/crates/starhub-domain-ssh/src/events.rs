@@ -4,9 +4,9 @@
 //! host-agnostic; two host capabilities are injected instead of imported:
 //!
 //! - [`EventSink`] receives the domain's event stream (`ssh:data`,
-//!   `ssh:bastion-*`, `sftp://transfer-*`, …). The Tauri shell implements it
-//! over `tauri::Emitter`; the sidecar implements it as JSON-RPC
-//!   notifications.
+//!   `ssh:close`, `ssh:exec-done`, `sftp://transfer-*`, …). The Tauri shell
+//!   implements it over `tauri::Emitter`; the sidecar implements it as
+//!   JSON-RPC notifications.
 //! - [`KnownHostsStore`] persists the TOFU host-key policy. The Tauri shell
 //!   implements it over the SQLite `known_hosts` table; the sidecar
 //!   implements it over its own durable store.
@@ -160,7 +160,7 @@ mod tests {
     fn emit_ser_serializes_and_degrades() {
         let collector = Collector(Default::default());
         collector.emit_ser("ssh:data:x", vec![1u8, 2, 3]);
-        collector.emit_ser("ssh:bastion-done:x", ());
+        collector.emit_ser("ssh:close:x", ());
         let events = collector.0.lock().unwrap();
         assert_eq!(events[0].0, "ssh:data:x");
         assert_eq!(events[0].1, serde_json::json!([1, 2, 3]));

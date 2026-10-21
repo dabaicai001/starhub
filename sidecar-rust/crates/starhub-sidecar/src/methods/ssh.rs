@@ -187,14 +187,27 @@ mod tests {
     #[tokio::test]
     async fn session_status_answers_without_connecting() {
         let (runtime, dir) = runtime_in_temp("status");
-        let result = ssh_session_status_method(&runtime, &json!({ "assetId": "ghost" }))
+        // 存在资产但无终端会话:状态查询不触发连接,返回「尚未连接」引导
+        runtime
+            .assets()
+            .upsert(
+                "a1",
+                "ssh",
+                "验收机",
+                serde_json::json!({ "host": "10.0.0.1", "port": 22, "username": "root", "password": "pw" }),
+                None,
+                vec![],
+                false,
+            )
+            .expect("建资产");
+        let result = ssh_session_status_method(&runtime, &json!({ "assetId": "a1" }))
             .await
             .expect("状态查询不解析资产存在性");
         assert!(
             result["text"]
                 .as_str()
                 .unwrap()
-                .contains("SSH 会话未建立(资产 ghost)"),
+                .contains("SSH 终端尚未连接(资产 a1)"),
             "{result}"
         );
         let _ = std::fs::remove_dir_all(&dir);

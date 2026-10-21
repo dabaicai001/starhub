@@ -347,15 +347,15 @@ fn ssh_exec_with_unknown_asset_reports_the_asset_store_error() {
 }
 
 #[test]
-fn ssh_session_status_answers_before_any_connection() {
+fn ssh_session_status_reports_unknown_asset_as_a_hard_error() {
+    // 新模型(v0.140.0):状态查询先校验资产存在性——未知资产不编造会话状态
     let mut sidecar = Sidecar::spawn();
     let response = sidecar.roundtrip(
         r#"{"jsonrpc":"2.0","id":12,"method":"ssh_session_status","params":{"assetId":"ghost"}}"#,
     );
     let value: serde_json::Value = serde_json::from_str(&response).expect("response parses");
-    assert!(value["error"].is_null(), "{response}");
-    let text = value["result"]["text"].as_str().expect("text");
-    assert!(text.contains("SSH 会话未建立(资产 ghost)"), "{text}");
+    assert_eq!(value["error"]["code"], -32603, "{response}");
+    assert_eq!(value["error"]["message"], "资产不存在: ghost");
 }
 
 #[test]
@@ -599,7 +599,6 @@ fn capabilities_lists_the_android_method_surface() {
         "ui.ssh_exec",
         "ui.ssh_kb_response",
         "ui.ssh_hostkey_response",
-        "ui.ssh_bastion_response",
         "ui.ssh_get_trusted_host_key",
         "ui.test_ssh_connection",
         "ui.ssh_open_web_window",
@@ -687,7 +686,9 @@ fn capabilities_lists_the_android_method_surface() {
     // - 1 UI 面(`ui.db_es_count`,前端无消费方,随本次死代码清理移除)= 206
     // M4 定稿:AI 浏览器整体删除(16 个 browser_* 工具 + 4 个 ui.browser_* 设置),
     // 上游 dsh 原生提供 browser-use。
-    assert_eq!(methods.len(), 206, "方法面总数: {methods:?}");
+    // - 1 UI 面(`ui.ssh_bastion_response`,AI 连接模型改复用用户终端会话,
+    // 选机器卡机制整体退役,v0.140.0)= 205
+    assert_eq!(methods.len(), 205, "方法面总数: {methods:?}");
 }
 
 /// Android 方法面 roundtrip(不触设备的分支):未授权写操作硬错误;
@@ -1178,14 +1179,6 @@ fn ui_ssh_methods_roundtrip_through_the_real_binary() {
     let value: serde_json::Value = serde_json::from_str(&response).expect("response parses");
     assert_eq!(
         value["error"]["message"], "No pending hostkey prompt for session ghost",
-        "{response}"
-    );
-    let response = sidecar.roundtrip(
-        r#"{"jsonrpc":"2.0","id":"b-14","method":"ui.ssh_bastion_response","params":{"id":"ghost","selection":""}}"#,
-    );
-    let value: serde_json::Value = serde_json::from_str(&response).expect("response parses");
-    assert_eq!(
-        value["error"]["message"], "No pending bastion prompt for session ghost",
         "{response}"
     );
 
