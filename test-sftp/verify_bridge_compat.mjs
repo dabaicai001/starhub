@@ -267,7 +267,10 @@ async function main() {
     check('get_assets 列出新建资产',
       Array.isArray(listed) && listed.length === 2 && listed.some(a => a.name === '验收机'),
       `${String(listed.length)} 项`)
-    check('清单不带密钥', !JSON.stringify(listed).includes('s3cret'))
+    // UI 清单按契约合并密钥(2026-10-10 起:工作台从 asset.config 取密码建连,
+    // 见 ui.rs get_assets 注释);模型面的 starhub_list_assets 摘要仍不含敏感
+    // 字段(第 [2] 节已断言)。此处断言 hydration 确实发生,防止回退成空密码。
+    check('UI 清单按契约合并密钥(模型面仍不含)', JSON.stringify(listed).includes('s3cret'))
 
     const updated = await ui.request('update_asset', {
       id: 'acc-1', type: 'ssh', name: '新名', config: { host: '10.0.0.2' },
@@ -290,8 +293,8 @@ async function main() {
     // ── 9. UI 面 B 组(交互会话):ui.ssh_* / ui.sftp_*(connId 面) ──
     console.log('\n[9] UI 面 B 组交互会话(ui.ssh_* / ui.sftp_*)')
     const methodSurface = await transport.request('starhub/capabilities', {})
-    check('方法面覆盖 B 组(总数 196)',
-      Array.isArray(methodSurface?.methods) && methodSurface.methods.length === 196
+    check('方法面覆盖 B 组(总数 205)',
+      Array.isArray(methodSurface?.methods) && methodSurface.methods.length === 205
       && methodSurface.methods.includes('ui.ssh_connect') && methodSurface.methods.includes('ui.sftp_start_upload'),
       `${String(methodSurface?.methods?.length)} 个方法`)
 
@@ -397,8 +400,8 @@ async function main() {
     check('白名单内 kind 走 broker.{kind}.{verb}', String(kafka).includes('broker.kafka.overview'), String(kafka))
 
     const methodSurface = await go.transport.request('starhub/capabilities', {})
-    check('方法面覆盖 C 组(总数 196)',
-      Array.isArray(methodSurface?.methods) && methodSurface.methods.length === 196
+    check('方法面覆盖 C 组(总数 205)',
+      Array.isArray(methodSurface?.methods) && methodSurface.methods.length === 205
       && methodSurface.methods.includes('ui.db_mysql_connect')
       && methodSurface.methods.includes('ui.docker_exec_session_read'),
       `${String(methodSurface?.methods?.length)} 个方法`)
@@ -551,8 +554,8 @@ async function main() {
     check('版本号返回明确占位', (await ho.request('plugin:app|version', {})) === '版本归 Electron 壳(M2 占位)')
 
     const hostSurface = await host.transport.request('starhub/capabilities', {})
-    check('方法面覆盖密钥/宿主(总数 196)',
-      Array.isArray(hostSurface?.methods) && hostSurface.methods.length === 196
+    check('方法面覆盖密钥/宿主(总数 205)',
+      Array.isArray(hostSurface?.methods) && hostSurface.methods.length === 205
       && hostSurface.methods.includes('ui.local_shell_exec')
       && hostSurface.methods.includes('ui.plugin:app|version'),
       `${String(hostSurface?.methods?.length)} 个方法`)
@@ -645,8 +648,8 @@ async function main() {
       String(badDesktop).includes('M3 定稿仅 android'), String(badDesktop))
 
     const liveSurface = await live.transport.request('starhub/capabilities', {})
-    check('方法面覆盖 M3 直播面(总数 196)',
-      Array.isArray(liveSurface?.methods) && liveSurface.methods.length === 196
+    check('方法面覆盖 M3 直播面(总数 205)',
+      Array.isArray(liveSurface?.methods) && liveSurface.methods.length === 205
       && liveSurface.methods.includes('ui.live_open')
       && liveSurface.methods.includes('starhub/live.endpoint'),
       `${String(liveSurface?.methods?.length)} 个方法`)

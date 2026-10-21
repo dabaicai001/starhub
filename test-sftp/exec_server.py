@@ -117,12 +117,50 @@ class ExecServer(paramiko.ServerInterface):
             return True
         return False
 
+    def check_channel_pty_request(self, channel, term, width, height, pixelwidth, pixelheight, modes):
+        # v0.140.0 新模型:AI 复用用户终端会话,验收脚本必须先真连一条
+        # 交互 shell(ui.ssh_connect)——stub 需要放行 pty + shell 请求。
+        return True
+
+    def check_channel_shell_request(self, channel):
+        threading.Thread(target=handle_shell, args=(channel,), daemon=True).start()
+        return True
+
     def check_channel_exec_request(self, channel, command):
         # exec 请求自带命令正文:起线程执行并把输出回写同一通道
         threading.Thread(
             target=handle_channel, args=(channel, command), daemon=True
         ).start()
         return True
+
+
+def handle_shell(channel):
+    """迷你交互 shell:按行执行命令并回显提示符(供 ui.ssh_connect 验收)。"""
+    try:
+        channel.sendall(b"stub$ ")
+        buffer = b""
+        while True:
+            data = channel.recv(1024)
+            if not data:
+                break
+            buffer += data
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                command = line.decode("utf-8", "replace").strip()
+                if command in ("exit", "logout"):
+                    channel.close()
+                    return
+                if command:
+                    output, _code = run_command(command)
+                    channel.sendall(output.encode("utf-8", "replace"))
+                channel.sendall(b"stub$ ")
+    except Exception:
+        pass
+    finally:
+        try:
+            channel.close()
+        except Exception:
+            pass
 
 
 def run_command(command):

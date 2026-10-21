@@ -1,12 +1,13 @@
 """端到端验证:starhub-sidecar-rust 的 ssh_exec / sftp_list 打到真 SSH 服务器。
 
-流程:
+流程(v0.140.0 新模型:AI 复用用户终端会话,不自建连接):
 1. 启动 test-sftp/exec_server.py(127.0.0.1:2224,testuser/testpass);
-2. 用 paramiko 取宿主机密钥 → 写 known_hosts(TOFU 预信任,M1 的
-   AI 会话路径不弹交互确认);
+2. 用 paramiko 取宿主机密钥 → 写 known_hosts(TOFU 预信任,终端连接不弹交互确认);
 3. 写 assets.json(一条 ssh 资产,密码走内存密钥存储——本脚本用明文 config
    内联,与踩坑记录 §305 的无人值守冒烟配方一致);
-4. spawn sidecar 二进制,按 JSON-RPC 逐条发请求并打印应答。
+4. spawn sidecar 二进制:先 `ui.ssh_connect` 真连一条交互终端会话(带 assetId),
+   再发 AI 工具请求——ssh_exec / sftp_list 复用该会话执行,验证「AI 不自建
+   连接、未连接时返回引导文案」的新契约。
 
 用法:python test-sftp/verify_sidecar_ssh.py [sidecar 可执行路径]
 """
@@ -176,8 +177,9 @@ def main():
                 if not condition:
                     failures.append(label)
 
-            # 1) 能力表带全方法面
-            reply = call("cap", "starhub_list_capabilities", {})
+            # 1) 能力表带全方法面(方法数组在桥方法 starhub/capabilities;
+            #    starhub_list_capabilities 是模型面文本,不带 methods)
+            reply = call("cap", "starhub/capabilities", {})
             methods = reply["result"]["methods"]
             check("capabilities", "ssh_exec" in methods and "sftp_list" in methods, f"{len(methods)} methods")
 
@@ -186,19 +188,36 @@ def main():
             assets = json.loads(reply["result"]["text"])
             check("list_assets", len(assets) == 1 and assets[0]["id"] == "stub-ssh", reply["result"]["text"])
 
-            # 3) 会话状态(未连接)
+            # 3) 会话状态(终端未连接):AI 不得自建连接,返回引导文案
             reply = call("status-0", "ssh_session_status", {"assetId": "stub-ssh"})
-            check("status_before", "SSH 会话未建立" in reply["result"]["text"], reply["result"]["text"])
+            check("status_before", "尚未连接" in reply["result"]["text"], reply["result"]["text"])
 
-            # 4) 真连 + 真执行
+            # 3b) 未连接时 ssh_exec 不触网:同样返回引导文案
+            reply = call("exec-offline", "ssh_exec", {"assetId": "stub-ssh", "command": "echo should-not-run"})
+            check("exec_without_session", "尚未连接" in reply["result"]["text"], reply["result"]["text"])
+
+            # 3c) 真连一条交互终端会话(带 assetId)——AI 后续复用的就是它
+            reply = call("connect", "ui.ssh_connect", {
+                "id": "verify-term",
+                "assetId": "stub-ssh",
+                "config": {
+                    "host": HOST, "port": PORT, "username": USERNAME,
+                    "auth": {"Password": PASSWORD},
+                    "pty_cols": 80, "pty_rows": 24,
+                },
+            })
+            info = reply.get("result", {})
+            check("terminal_connect", info.get("connected") is True and info.get("id") == "verify-term", reply)
+
+            # 4) 真连 + 真执行(AI 复用终端会话,走同一连接的 exec 通道)
             reply = call("exec", "ssh_exec", {"assetId": "stub-ssh", "command": "echo hello-from-sidecar"})
             print("   raw reply:", json.dumps(reply, ensure_ascii=False))
             text = reply.get("result", {}).get("text", "")
             check("ssh_exec", "hello-from-sidecar" in text, repr(text))
 
-            # 5) 会话状态(已连接)
+            # 5) 会话状态(终端已连接)
             reply = call("status-1", "ssh_session_status", {"assetId": "stub-ssh"})
-            check("status_after", "SSH 会话已连接" in reply["result"]["text"], reply["result"]["text"])
+            check("status_after", "SSH 终端已连接" in reply["result"]["text"], reply["result"]["text"])
 
             # 6) SFTP 列表
             reply = call("sftp", "sftp_list", {"assetId": "stub-ssh", "path": "/"})
