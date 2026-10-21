@@ -339,6 +339,23 @@ describe('DbWorkbench', () => {
     unmount()
   })
 
+  it('hides 新建表 for dialects the DDL generator does not cover (SQLite / MSSQL)', async () => {
+    // DDL 生成器只覆盖 MySQL / PG / ClickHouse;SQLite / MSSQL 走 MySQL 语法
+    // (反引号 + ENGINE)必然执行失败,入口收敛后右键菜单只剩「刷新表列表」。
+    for (const dbType of ['sqlite', 'mssql']) {
+      stubInvoke({})
+      const asset = dbType === 'sqlite'
+        ? { ...dbAsset, config: { ...dbAsset.config, dbType, filePath: '/data/app.db' } }
+        : { ...dbAsset, config: { ...dbAsset.config, dbType } }
+      const { unmount } = render(<DbWorkbench asset={asset} onClose={vi.fn()} />)
+      await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
+      fireEvent.contextMenu(screen.getByTitle('app'))
+      await waitFor(() =>{  expect(screen.getByText('刷新表列表')).toBeTruthy() })
+      expect(screen.queryByText('新建表')).toBeNull()
+      unmount()
+    }
+  })
+
   it('right-clicks a table to edit columns and applies changes', async () => {
     const { calls } = stubInvoke({ columns: [
       { name: 'id', type: 'BIGINT', dataType: 'bigint', nullable: 'NO', key: 'PRI', defaultValue: null, extra: '', comment: '', ordinalPosition: 1 },

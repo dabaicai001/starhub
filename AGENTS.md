@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.139.1(🎨 **Redis 删除 key 改用自制确认弹窗**(替代原生 `window.confirm`):单个删除与批量删除(勾选)共用同一弹窗——清单在打开时锁定,批量时预览前若干个 key(超出 8 个折叠为「…等 N 个」),取消即放弃、失败不清勾选可重试;至此 Redis 工作台内所有破坏性操作(删 key / 清空 DB)都是同款弹窗,与 FLUSHDB、新建 Key 的模态风格一致。) |
+| 当前版本 | v0.139.2(🐛 **SQLite / MSSQL 的「右键库 → 新建表」必然失败**:DDL 生成器只覆盖 MySQL / PostgreSQL / ClickHouse 三种方言,而 DbWorkbench 把 sqlite/mssql 都折算成 `mysql` 方言——生成的 `CREATE TABLE \`db\`.\`t\` (...) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`(反引号 + ENGINE)在 SQLite / T-SQL 上直接语法报错。现在按方言收敛入口(与「编辑列/索引仅 MySQL」同式),这两种类型的库右键只剩「刷新表列表」。) |
 
 ## 架构一句话
 
@@ -145,4 +145,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-10-21 (v0.139.1)*
+*最后更新: 2026-10-21 (v0.139.2)*

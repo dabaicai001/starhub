@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.139.1-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.139.2-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,8 +59,9 @@
 
 ## 当前版本
 
-### v0.139.1 (2026-10-21)
-- 🔧 🎨 **Redis 删除 key 改用自制确认弹窗**(替代原生 `window.confirm`):单个删除与批量删除(勾选)共用同一弹窗——清单在打开时锁定,批量时预览前若干个 key(超出 8 个折叠为「…等 N 个」),取消即放弃、失败不清勾选可重试;至此 Redis 工作台内所有破坏性操作(删 key / 清空 DB)都是同款弹窗,与 FLUSHDB、新建 Key 的模态风格一致。
+### v0.139.2 (2026-10-21)
+- 🐛 🐛 **SQLite / MSSQL 的「右键库 → 新建表」必然失败**:DDL 生成器只覆盖 MySQL / PostgreSQL / ClickHouse 三种方言,而 DbWorkbench 把 sqlite/mssql 都折算成 `mysql` 方言——生成的 `CREATE TABLE \`db\`.\`t\` (...) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`(反引号 + ENGINE)在 SQLite / T-SQL 上直接语法报错。现在按方言收敛入口(与「编辑列/索引仅 MySQL」同式),这两种类型的库右键只剩「刷新表列表」。
+- 🐛 🐛 **改列对话框关闭时清错补全缓存**:ColumnListDialog 的 onClose 用**裸表名**删 `columnsByTable`,跨库同名表会把另一个库的补全列清掉(或清不掉目标库的)。改为「库.表」键(与 v0.138.0 的补全缓存隔离同源,这条漏网)。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

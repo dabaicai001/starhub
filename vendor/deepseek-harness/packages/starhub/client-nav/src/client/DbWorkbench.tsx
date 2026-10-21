@@ -269,19 +269,22 @@ interface DbRowActions {
 }
 
 /** 单个库行:点击=展开/收起,右键=菜单(新建表 / 刷新表列表)。 */
-function DatabaseRow({ node, isCurrent, tableCount, children, actions }: {
+function DatabaseRow({ node, isCurrent, tableCount, supportsCreateTable, children, actions }: {
   node: Extract<TreeNode, { kind: 'database' }>
   /** 是否为当前执行库(SQL 工具栏选中项):高亮 + 左色条。 */
   isCurrent: boolean
   /** 已加载表数(未展开/未加载时不显示)。 */
   tableCount?: number
+  /** 是否支持「新建表」:DDL 生成器只覆盖 MySQL / PG / ClickHouse 三种方言,
+      SQLite / MSSQL 走 MySQL 语法必然执行失败,入口直接收敛(与 supportsAlter 同式)。 */
+  supportsCreateTable: boolean
   /** 展开时渲染的已有表列表(由父组件注入,避免在模块级闭包引用组件状态)。 */
   children?: ReactNode
   actions: DbRowActions
 }) {
   const menu = useContextMenu()
   const items: readonly MenuEntry[] = [
-    { id: 'new-table', label: '新建表' },
+    ...(supportsCreateTable ? [{ id: 'new-table', label: '新建表' }] : []),
     { id: 'refresh', label: '刷新表列表' },
   ]
   return (
@@ -624,6 +627,9 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
   const dialect: CreateTableDbType = dbType === 'postgresql' ? 'postgresql' : dbType === 'clickhouse' ? 'clickhouse' : 'mysql'
   // 改列/索引为 MySQL 方言语法(与 Vue 端一致),仅 MySQL 显示这两项。
   const supportsAlter = dbType === 'mysql'
+  // 建表 DDL 生成器只覆盖 MySQL / PG / ClickHouse 三种方言;SQLite / MSSQL
+  // 若走 MySQL 语法(反引号 + ENGINE/CHARSET)必然执行失败,入口收敛。
+  const supportsCreateTable = dbType === 'mysql' || dbType === 'postgresql' || dbType === 'clickhouse'
 
   const dbTypeLabel = dbType === 'postgresql' ? 'PostgreSQL' : dbType === 'mssql' ? 'SQL Server' : dbType === 'sqlite' ? 'SQLite' : dbType.toUpperCase()
 
@@ -1100,6 +1106,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
         <DatabaseRow
           node={{ ...node, expanded: searching || node.expanded }}
           isCurrent={node.name === currentDb}
+          supportsCreateTable={supportsCreateTable}
           {...(node.tables.length > 0 ? { tableCount: node.tables.length } : {})}
           actions={{
             onToggle: () =>{  selectCurrentDb(node.name); void toggleDb(node) },
@@ -1532,7 +1539,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
             </div>
           </div>
         )}
-        {dialog !== null && dialog.kind === 'new-table' && (
+        {dialog !== null && dialog.kind === 'new-table' && supportsCreateTable && (
           <NewTableDialog
             connId={connId}
             database={dialog.database}
@@ -1549,10 +1556,11 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
             onClose={() => {
               const stateKey = tableStateKey(dialog.database, dialog.table)
               setDialog(null)
-              // 列定义可能被改过:补全缓存与字段树缓存都要失效,重新展开时重拉。
+              // 列定义可能被改过:补全缓存与字段树缓存都要失效,重新展开时重拉
+              // (补全缓存按「库.表」键,裸表名会清错库的条目)。
               setColumnsByTable(prev => {
                 const next = { ...prev }
-                delete next[dialog.table]
+                delete next[stateKey]
                 return next
               })
               setTableColumns(prev => {

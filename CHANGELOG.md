@@ -9,6 +9,12 @@
 
 ---
 
+## [0.139.2] - 2026-10-21
+
+### 修复
+- 🐛 **SQLite / MSSQL 的「右键库 → 新建表」必然失败**:DDL 生成器只覆盖 MySQL / PostgreSQL / ClickHouse 三种方言,而 DbWorkbench 把 sqlite/mssql 都折算成 `mysql` 方言——生成的 `CREATE TABLE \`db\`.\`t\` (...) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`(反引号 + ENGINE)在 SQLite / T-SQL 上直接语法报错。现在按方言收敛入口(与「编辑列/索引仅 MySQL」同式),这两种类型的库右键只剩「刷新表列表」。
+- 🐛 **改列对话框关闭时清错补全缓存**:ColumnListDialog 的 onClose 用**裸表名**删 `columnsByTable`,跨库同名表会把另一个库的补全列清掉(或清不掉目标库的)。改为「库.表」键(与 v0.138.0 的补全缓存隔离同源,这条漏网)。
+
 ## [0.139.1] - 2026-10-21
 
 ### 变更
