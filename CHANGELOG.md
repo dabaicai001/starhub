@@ -9,6 +9,12 @@
 
 ---
 
+## [0.140.3] - 2026-10-23
+
+### 变更
+- 🔧 **SSH AI 命令一律走 exec 通道:堡垒机「选机器」pty 分支与 `bastionMode` 勾选框整体退役**:v0.140.0~v0.140.2 对堡垒机类资产(kb-interactive MFA)把 AI 命令写入用户终端 pty 并经 tap 哨兵回采,配资产级「堡垒机(登录后需选择目标机器)」勾选框。在阿里云 BastionHost 上实测(不断线,复用终端页「监控」面板的 exec 采集做探针,三页三数据集对账):用户选完目标机后 **exec 通道可用,且落在该连接所选的机器上**;历史那条「Channel send error」是旧模型 AI 自建连接停在选机器菜单时开 exec 所致,不是 exec 不被支持。现在 `ssh_exec_core` 去掉 `bastion_interactive` 参数与整条 pty 分支(AI 与 UI 路径共用同一执行体),删除 `SshSession::is_bastion()`、`SshConfig.bastion_mode`、`asset_config` 的 `bastionMode` 解析、随之死亡的 pty tap 机器(`pty_tap`/`pty_alive`/`exec_on_terminal_pty`/`collect_terminal_command`/`clean_pty_stdout`/`strip_ansi` 等)与 `ssh_session_status` 的堡垒机文案分支;前端连接表单删勾选框/状态/配置字段,`ui.ssh_connect` 不再下发 `bastion_mode`;`ssh_exec`/`ssh_session_status` 工具描述与助手 persona 改述为「同一连接的 exec 通道,不打扰用户终端」。存量资产 config 里残留的 `bastionMode` 键被两端忽略,零回归。
+- 🔧 **live-context 注入改会话级收敛:AI 只看见自己会话产生的执行**:此前 `starhub-live-context` 的 pre-step 注入是全局级——`[Recent AI execs]` 按资产缓存「最近一次 AI 工具执行 + ≤2KB 输出尾」,不区分是哪个 agent 会话发起的,主壳会话因此能看见 SSH 终端页助手刚跑过的命令(命令级,非对话原文)。现在 sidecar 的 `after_tool_success` 把发起会话 id(`starhub/tool.execute` 信封里的 `sessionId`,桥摊平后注入工具参数)写进领域事件(`DomainEvent.sessionId`)与 recentExecs(`RecentExec.sessionId`),live-context 注入时只放行**当前 agent 会话自己产生**的执行与 AI 起源事件;用户起源事件(终端连接/断开)是资产事实,无会话归属,全局保留;工具直调形态(无 sessionId)的执行无法归属,按「非本会话」不注入。主壳与 SSH 助手两个方向的「上下文串味」同时消除。
+
 ## [0.140.2] - 2026-10-23
 
 ### 变更

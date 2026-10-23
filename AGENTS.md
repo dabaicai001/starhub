@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.140.2(🔧 **SSH AI 助手对话归到「默认工作区」,不再落「未分组」**:助手会话的 cwd 此前打的是 StarHub 自有目录 `~/.starhub/ssh-assistant`,而 dsh 会话列表按 cwd 归组——每台服务器一个的助手对话全部堆在侧栏「未分组」里,历史会话既不好找也和普通对话割裂。现在打开助手时解析 `workspaceRegistry` 里标题为默认工作区目录名(`default-workspace`,GUI 显示为「默认工作区」)的工作区:会话 cwd 取其规范路径,建会话后再经 `attachSession` 记入该工作区账户(归组双条件:账户里有该会话 + 会话头 cwd 等于工作区路径),对话因此列在该工作区分组下。没有默认工作区(被用户改名/删除,或组合里没有 workspace 家族)时回落 StarHub 自有目录,行为同旧版;注册表尚未就绪或 attach 被拒(工作区目录漂移)只告警,不打断助手打开。标题钉服务器名、资产绑定、工具面收敛、审批流程其余行为一律不变。) |
+| 当前版本 | v0.140.3(🔧 **SSH AI 命令一律走 exec 通道:堡垒机「选机器」pty 分支与 `bastionMode` 勾选框整体退役**:v0.140.0~v0.140.2 对堡垒机类资产(kb-interactive MFA)把 AI 命令写入用户终端 pty 并经 tap 哨兵回采,配资产级「堡垒机(登录后需选择目标机器)」勾选框。在阿里云 BastionHost 上实测(不断线,复用终端页「监控」面板的 exec 采集做探针,三页三数据集对账):用户选完目标机后 **exec 通道可用,且落在该连接所选的机器上**;历史那条「Channel send error」是旧模型 AI 自建连接停在选机器菜单时开 exec 所致,不是 exec 不被支持。现在 `ssh_exec_core` 去掉 `bastion_interactive` 参数与整条 pty 分支(AI 与 UI 路径共用同一执行体),删除 `SshSession::is_bastion()`、`SshConfig.bastion_mode`、`asset_config` 的 `bastionMode` 解析、随之死亡的 pty tap 机器(`pty_tap`/`pty_alive`/`exec_on_terminal_pty`/`collect_terminal_command`/`clean_pty_stdout`/`strip_ansi` 等)与 `ssh_session_status` 的堡垒机文案分支;前端连接表单删勾选框/状态/配置字段,`ui.ssh_connect` 不再下发 `bastion_mode`;`ssh_exec`/`ssh_session_status` 工具描述与助手 persona 改述为「同一连接的 exec 通道,不打扰用户终端」。存量资产 config 里残留的 `bastionMode` 键被两端忽略,零回归。) |
 
 ## 架构一句话
 
@@ -145,4 +145,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-10-23 (v0.140.2)*
+*最后更新: 2026-10-23 (v0.140.3)*
