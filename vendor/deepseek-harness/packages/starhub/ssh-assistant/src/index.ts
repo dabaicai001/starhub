@@ -9,10 +9,12 @@
  * 桥 `starhub/bind.asset` 绑定资产(sidecar 的 `resolve_asset_id` 因此自动
  * 路由;命令执行在用户终端页已连接的会话上,AI 不自建连接,v0.140.0)。
  *
- * 会话打上 StarHub 自有的本地 cwd(Config `sessionCwd`):没有 cwd 的会话
- * 拼不出系统提示的 {{cwd}} 段(回合在第 1 步静默失败、面板无响应),且被
- * dsh 会话列表按 not-found 拒绝;打开后经 sessionTitle 服务把显示名钉成
- * 服务器名(纯资产名,user 来源同时压住自动标题)。
+ * 会话打上本地 cwd:没有 cwd 的会话拼不出系统提示的 {{cwd}} 段(回合在第 1
+ * 步静默失败、面板无响应),且被 dsh 会话列表按 not-found 拒绝。v0.140.2 起
+ * cwd 优先取**默认工作区**的规范路径,并经 `attachSession` 把会话记进该
+ * 工作区账户——助手对话因此列在工作区分组下,不再落「未分组」;没有默认
+ * 工作区时回落 StarHub 自有目录(Config `sessionCwd`,旧行为)。打开后经
+ * sessionTitle 服务把显示名钉成服务器名(纯资产名,user 来源同时压住自动标题)。
  *
  * 面板(壳内工作台 React 应用,无 dsh client runtime)经同源
  * `/starhub/api/assistant/*` 路由驱动:open/prompt/stop/close/model/approval
@@ -33,6 +35,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
+import { DEFAULT_WORKSPACE_DIRECTORY } from '@deepseek-ai/dsh-api-workspace-controller/default-workspace'
 import type { JsonRpcTransportPeer } from '@deepseek-ai/dsh-sdk-protocol'
 import { SessionId } from '@deepseek-ai/dsh-session'
 // Type-only: declares the `sessionTitle` service on Context (assistant 标题钉名)。
@@ -41,7 +44,7 @@ import type {} from '@deepseek-ai/dsh-session-title'
 // and the `llm` service (model catalog for the panel picker).
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-llm'
-import { AssistantRegistry } from './registry.ts'
+import { AssistantRegistry, type AssistantWorkspace } from './registry.ts'
 import {
   ASSISTANT_ROUTES,
   approvalHandler,
@@ -70,15 +73,34 @@ const BIND_ASSET_METHOD = 'starhub/bind.asset'
 const SDK_TRANSPORT_SERVICE = 'sdk-transport'
 const AGENT_DEFAULT_MODEL_SERVICE = 'agentDefaultModel'
 const SESSION_TITLE_SERVICE = 'sessionTitle'
-
-/** 助手会话的默认本地 cwd:StarHub 自有目录,不属于任何 workspace。 */
-const DEFAULT_SESSION_CWD = join(homedir(), '.starhub', 'ssh-assistant')
+// Optional like the three above: a composition without the workspace family
+// (it ships in the web-app bundle, not the minimal ones) keeps the ungrouped
+// fallback instead of failing the plugin's activation.
+const WORKSPACE_REGISTRY_SERVICE = 'workspaceRegistry'
 
 /**
- * 插件配置。sessionCwd 是助手会话打上的本地工作目录(部署变化项,按上游
+ * 助手会话的兜底本地 cwd:没有默认工作区时使用,StarHub 自有目录,不属于任何
+ * workspace(会话列表 therefore 归「未分组」)。
+ */
+const DEFAULT_SESSION_CWD = join(homedir(), '.starhub', 'ssh-assistant')
+
+/** `workspaceRegistry` 服务用到的投影面(结构式读取,不引入包依赖)。 */
+interface WorkspaceProjection {
+  readonly path: string
+  readonly title: string
+  attachSession(sessionId: SessionId): Promise<void>
+}
+
+/** `workspaceRegistry.list()` 的投影面。 */
+interface WorkspaceRegistryProjection {
+  list(): readonly WorkspaceProjection[]
+}
+
+/**
+ * 插件配置。sessionCwd 是助手会话的兜底本地工作目录(部署变化项,按上游
  * 「No hardcoded tunables」规约走 Config):没有 cwd 的会话拼不出系统提示的
  * {{cwd}} 段——回合在第 1 步静默失败(面板无响应),且被会话列表按
- * not-found 拒绝。
+ * not-found 拒绝。默认工作区存在时会话 cwd 取该工作区路径,本字段不参与。
  */
 export const Config: z<{ sessionCwd?: string }> = z.object({
   sessionCwd: z.string().default(DEFAULT_SESSION_CWD),
@@ -87,6 +109,46 @@ export const Config: z<{ sessionCwd?: string }> = z.object({
 /** apply 收到的已解析配置(可选字段,缺省见 DEFAULT_SESSION_CWD)。 */
 export interface AssistantConfig {
   sessionCwd?: string
+}
+
+/**
+ * 解析助手会话的归属工作区(v0.140.2)。
+ *
+ * 取注册表里标题等于默认工作区目录名(`default-workspace`,GUI 按读者语言
+ * 显示为「默认工作区」)的工作区——与 `workspaceDisplayTitle` 的判定同源;
+ * 用户改名后不再匹配,回落兜底 cwd。注册表缺席、尚未完成初始化(`list()`
+ * 抛错)或没有该工作区时返回 undefined。每次打开助手现解析,不缓存:用户
+ * 新建/删除/改名工作区对之后打开的助手生效。
+ * @param ctx - plugin context (workspace registry is an optional service).
+ * @returns the workspace to join, or undefined to keep the ungrouped fallback.
+ */
+function resolveAssistantWorkspace(ctx: Context): AssistantWorkspace | undefined {
+  const registry = ctx.get(WORKSPACE_REGISTRY_SERVICE) as WorkspaceRegistryProjection | undefined
+  if (registry === undefined) return undefined
+  let workspaces: readonly WorkspaceProjection[]
+  try {
+    workspaces = registry.list()
+  } catch {
+    // 注册表初始化中(存储域未打开):按无默认工作区处理,助手照常打开。
+    return undefined
+  }
+  const workspace = workspaces.find(entry => entry.title === DEFAULT_WORKSPACE_DIRECTORY)
+  if (workspace === undefined) return undefined
+  return {
+    path: workspace.path,
+    attach: async (sessionId: string) => {
+      try {
+        await workspace.attachSession(SessionId(sessionId))
+      } catch (error) {
+        // 目录消失/改名等竞态下 membership 校验会拒:归组失败只影响列表
+        // 展示,告警后不打断助手。
+        ctx.logger(name).warn(
+          `助手会话未加入默认工作区 '${workspace.path}'(${sessionId}):`
+          + `${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    },
+  }
 }
 
 /**
@@ -102,6 +164,7 @@ export function apply(ctx: Context, config: AssistantConfig = {}): void {
   mkdirSync(sessionCwd, { recursive: true })
   const registry = new AssistantRegistry({
     sessionCwd,
+    resolveWorkspace: () => resolveAssistantWorkspace(ctx),
     createAgent: options => ctx.agents.create(options),
     getAgent: sessionId => ctx.agents.get(sessionId),
     renameSession: (sessionId, title) => {

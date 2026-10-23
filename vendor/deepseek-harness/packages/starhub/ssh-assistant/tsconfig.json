@@ -12,6 +12,9 @@
       "path": "../../../vendor/cordis"
     },
     {
+      "path": "../../api/workspace-controller/tsconfig.host.json"
+    },
+    {
       "path": "../../core/agent"
     },
     {

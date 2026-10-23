@@ -10,6 +10,9 @@
  *    工具放行;非助手会话原样交回链尾;
  * 4. 助手**不持有连接**(v0.140.0):不订阅任何连接验证卡事件,MFA /
  *    堡垒机选机器 / 主机密钥提示只属于用户自己的终端页。
+ * 5. 归组(v0.140.2):有默认工作区时会话 cwd 取其规范路径并经 attachSession
+ *    记入账户,对话列在工作区分组下;无默认工作区回落 StarHub 自有目录
+ *    (「未分组」),attach 失败只告警不打断打开。
  */
 
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -18,6 +21,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import { DEFAULT_WORKSPACE_DIRECTORY } from '@deepseek-ai/dsh-api-workspace-controller/default-workspace'
 import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -29,7 +33,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import * as plugin from '../src/index.ts'
-import { AssistantRegistry, type AssistantHost } from '../src/registry.ts'
+import { AssistantRegistry, type AssistantHost, type AssistantWorkspace } from '../src/registry.ts'
 import { decodeAssistantFrame, type AssistantFrame } from '../src/frames.ts'
 import { ASSISTANT_TOOLS, assistantPersona } from '../src/persona.ts'
 
@@ -54,7 +58,13 @@ function fakeAgent(id: string): FakeAgent {
   return agent
 }
 
-function fakeHost(): AssistantHost & {
+/** 假默认工作区:path 作会话 cwd,attach 记下会话 id。 */
+function fakeWorkspace(path = '/tmp/default-workspace'): AssistantWorkspace & { attached: string[] } {
+  const attached: string[] = []
+  return { path, attached, attach: async (sessionId: string) => { attached.push(sessionId) } }
+}
+
+function fakeHost(workspace?: AssistantWorkspace): AssistantHost & {
   agents: Map<string, FakeAgent>
   disposed: string[]
   bindings: Array<[string, string, string]>
@@ -73,6 +83,7 @@ function fakeHost(): AssistantHost & {
     created,
     renames,
     sessionCwd: '/tmp/starhub-ssh-assistant-test',
+    resolveWorkspace() { return workspace },
     createAgent(options: CreateAgentOptions): Promise<AgentHandle> {
       const id = String(options.sessionId)
       const agent = fakeAgent(id)
@@ -121,11 +132,38 @@ describe('AssistantRegistry bookkeeping', () => {
     const registry = new AssistantRegistry(host)
     // 无 cwd 的助手会话拼不出系统提示 {{cwd}} 段(回合在第 1 步静默失败、
     // 面板无响应),且被会话列表按 not-found 拒绝——这里钉死 meta.cwd 恒打上。
+    // 没有默认工作区:回落 StarHub 自有目录,行为同旧版(「未分组」)。
     const { assistantId } = await registry.open({ sshSessionId: 's1', assetId: 'a1', assetName: 'server' })
     expect(host.created).toHaveLength(1)
     expect(host.created[0]?.meta?.cwd).toBe('/tmp/starhub-ssh-assistant-test')
     // 显示名 = 纯服务器名(user 来源,压住自动标题)。
     expect(host.renames).toEqual([[assistantId, 'server']])
+  })
+
+  it('joins the default workspace: cwd is its path and the session is attached (v0.140.2)', async () => {
+    // 归组:membership 双条件 = 会话在账户里 + 会话头 cwd 等于工作区
+    // 规范路径。cwd 已由 meta 打上,attach 补上账户侧——会话列表 therefore 把
+    // 对话列在该工作区分组下,不再落「未分组」。
+    const workspace = fakeWorkspace('/tmp/default-workspace')
+    const host = fakeHost(workspace)
+    const registry = new AssistantRegistry(host)
+    const { assistantId } = await registry.open({ sshSessionId: 's1', assetId: 'a1', assetName: 'server' })
+    expect(host.created[0]?.meta?.cwd).toBe('/tmp/default-workspace')
+    expect(workspace.attached).toEqual([assistantId])
+    // 归组不影响标题与资产绑定。
+    expect(host.renames).toEqual([[assistantId, 'server']])
+    expect(host.bindings).toEqual([['a1', assistantId, 's1']])
+  })
+
+  it('reuses a live assistant without re-attaching it to the workspace (v0.140.2)', async () => {
+    const workspace = fakeWorkspace('/tmp/default-workspace')
+    const host = fakeHost(workspace)
+    const registry = new AssistantRegistry(host)
+    const first = await registry.open({ sshSessionId: 's1', assetId: 'a1', assetName: 'server' })
+    const second = await registry.open({ sshSessionId: 's1', assetId: 'a1', assetName: 'server' })
+    expect(second).toMatchObject({ reused: true, assistantId: first.assistantId })
+    expect(workspace.attached).toEqual([first.assistantId])
+    expect(host.created).toHaveLength(1)
   })
 
   it('rebuilds when the agent left the registry without a close', async () => {
@@ -356,7 +394,15 @@ function parseEnvelope(res: { body: () => string }): Record<string, unknown> {
 }
 
 /** 装配真实组合并挂载插件;返回驱动面。 */
-async function mounted(options: { script: () => StreamChunk[][] }) {
+async function mounted(options: {
+  script: () => StreamChunk[][]
+  /**
+   * 默认工作区(标题 = 默认工作区目录名)。缺省 = 组合里没有任何工作区,
+   * 助手会话回落 StarHub 自有 cwd(「未分组」)。`attachFails` 让
+   * attachSession 抛错,验证归组失败只告警不打断打开。
+   */
+  workspace?: { readonly path: string; readonly attachFails?: boolean }
+}) {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
@@ -399,6 +445,21 @@ async function mounted(options: { script: () => StreamChunk[][] }) {
     },
   })
   ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'mock', model: 'mock-model' }) })
+  // 假 workspaceRegistry(v0.140.2 归组):列出一个标题为默认工作区目录名的
+  // 工作区(真服务在 dsh-workspace;组合只验证插件的解析与接线)。attach 记录
+  // 进 attached;attachFails 时抛错,验证降级路径。
+  const attached: string[] = []
+  const workspace = options.workspace
+  ctx.provide('workspaceRegistry', {
+    list: () => workspace === undefined ? [] : [{
+      path: workspace.path,
+      title: DEFAULT_WORKSPACE_DIRECTORY,
+      attachSession: async (sessionId: SessionId) => {
+        if (workspace.attachFails === true) throw new Error('cwd drift: workspace directory moved')
+        attached.push(String(sessionId))
+      },
+    }],
+  })
   // 假 sessionTitle:记录 rename(真服务在 dsh-base;组合只验证插件接线)。
   const renames: Array<[string, string]> = []
   ctx.provide('sessionTitle', {
@@ -433,7 +494,7 @@ async function mounted(options: { script: () => StreamChunk[][] }) {
     await handler(fakeRequest('GET', `/starhub/api/assistant/stream?assistantId=${assistantId}`), res)
     return { frames: () => res.frames(), res }
   }
-  return { ctx, adapter, routes, bridgeCalls, ran, renames, sessionCwd, post, get, stream }
+  return { ctx, adapter, routes, bridgeCalls, ran, renames, attached, sessionCwd, post, get, stream }
 }
 
 describe('starhub-ssh-assistant composition', () => {
@@ -581,6 +642,39 @@ describe('starhub-ssh-assistant composition', () => {
     const closed = await host.post('/starhub/api/assistant/close', { assistantId })
     expect(closed).toEqual({ closed: true })
     expect(host.ctx.agents.get(SessionId(assistantId))).toBeUndefined()
+  })
+
+  it('groups the assistant conversation under the default workspace (v0.140.2)', async () => {
+    // 归组双条件:会话头 cwd = 默认工作区规范路径(meta.cwd),且 attachSession
+    // 把会话记入该工作区账户——dsh 会话列表 therefore 把助手对话列在工作区
+    // 分组下,不再落「未分组」。标题/绑定/路由行为不变。
+    const workspacePath = join(tmpdir(), 'starhub-default-workspace')
+    const host = await mounted({
+      script: () => [[...textResponse('done')]],
+      workspace: { path: workspacePath },
+    })
+    const opened = await host.post('/starhub/api/assistant/open', {
+      sshSessionId: 's1', assetId: 'ssh-1', assetName: 'server',
+    })
+    const assistantId = (opened as { assistantId: string }).assistantId
+    expect(host.ctx.sessions.get(SessionId(assistantId))?.header.cwd).toBe(workspacePath)
+    expect(host.attached).toEqual([assistantId])
+    expect(host.renames).toEqual([[assistantId, 'server']])
+  })
+
+  it('opens the assistant even when the workspace attach fails (v0.140.2)', async () => {
+    // 归组是展示层诉求:attach 被拒(工作区目录漂移等)只告警,助手照常打开。
+    const host = await mounted({
+      script: () => [[...textResponse('done')]],
+      workspace: { path: join(tmpdir(), 'starhub-default-workspace-drifted'), attachFails: true },
+    })
+    const opened = await host.post('/starhub/api/assistant/open', {
+      sshSessionId: 's1', assetId: 'ssh-1', assetName: 'server',
+    })
+    const assistantId = (opened as { assistantId: string }).assistantId
+    expect(assistantId).toMatch(/^ssh-assistant-/)
+    expect(host.attached).toEqual([])
+    expect(host.ctx.agents.get(SessionId(assistantId))).toBeDefined()
   })
 
   it('answers an unknown assistant stream with an SSE error frame, not JSON', async () => {

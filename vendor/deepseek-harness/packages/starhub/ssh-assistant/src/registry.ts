@@ -11,6 +11,11 @@
  * user-visible assistant — reopening the same page reuses the live agent.
  * `assistantId` is the agent/session id in the dsh session store.
  *
+ * Grouping: a new session's cwd is the default Workspace's canonical path
+ * when the deployment has one, and the session is recorded in that
+ * Workspace's account, so the conversation lists under that group instead of
+ * the ungrouped bucket.
+ *
  * @module @deepseek-ai/dsh-starhub-ssh-assistant/registry
  */
 
@@ -42,6 +47,24 @@ const REPLAYABLE_EVENTS: ReadonlySet<string> = new Set([
  * bounded in-memory window is exactly the projected state a late client needs.
  */
 const REPLAY_BUFFER_EVENTS = 2000
+
+/**
+ * The Workspace one assistant session joins: the deployment's default
+ * Workspace when it has one, so the conversation lists under that group
+ * instead of the ungrouped bucket.
+ */
+export interface AssistantWorkspace {
+  /** Canonical Workspace directory, stamped as the assistant session's cwd. */
+  readonly path: string
+  /**
+   * Record the session in the Workspace's account. Membership also requires
+   * the session header cwd to resolve to {@link path}, which the stamped cwd
+   * satisfies. Implementations degrade attach failures to a warn: grouping is
+   * cosmetic, the assistant works either way.
+   * @param sessionId - the assistant's session id.
+   */
+  attach(sessionId: string): Promise<void>
+}
 
 /** One live assistant: agent handle plus its panel-facing state. */
 export interface AssistantEntry {
@@ -82,11 +105,19 @@ export interface OpenAssistantResult {
 /** Cordis-facing operations the registry depends on. */
 export interface AssistantHost {
   /**
-   * Absolute local cwd stamped on every assistant session. StarHub-owned and
-   * created by the host at plugin apply; sessions without one cannot assemble
-   * their prompt (`{{cwd}}` section) and are rejected by the session list.
+   * Absolute local cwd stamped on an assistant session when the deployment
+   * has no default Workspace. StarHub-owned and created by the host at plugin
+   * apply; sessions without one cannot assemble their prompt (`{{cwd}}`
+   * section) and are rejected by the session list.
    */
   readonly sessionCwd: string
+  /**
+   * The Workspace a new assistant session joins, resolved per open. The
+   * session's cwd becomes the Workspace's canonical path, so the conversation
+   * lists under that Workspace group instead of the ungrouped bucket;
+   * `undefined` keeps the StarHub-owned {@link sessionCwd}.
+   */
+  resolveWorkspace(): AssistantWorkspace | undefined
   /** Create the agent-scoped session (dsh `ctx.agents.create`). */
   createAgent(options: CreateAgentOptions): Promise<AgentHandle>
   /** Live agent for a session id, or undefined when it is gone. */
@@ -145,11 +176,15 @@ export class AssistantRegistry {
       throw new Error('没有可用的默认模型:请在 dsh 设置中配置模型后再打开 AI 助手')
     }
     const assistantId = `ssh-assistant-${randomUUID()}`
+    // 归组(v0.140.2):有默认工作区时会话 cwd 取该工作区的规范路径——会话
+    // 列表按 cwd 归组,助手对话因此列在工作区下而不是「未分组」;没有默认
+    // 工作区(或工作区服务缺席)时回落 StarHub 自有目录,行为同旧版。
+    const workspace = this.host.resolveWorkspace()
     const handle = await this.host.createAgent({
       sessionId: SessionId(assistantId),
-      // 打上 StarHub 自有 cwd:无 cwd 的会话拼不出 {{cwd}} 段(回合在第 1 步
-      // 静默失败、面板无响应),且被会话列表按 not-found 拒绝。
-      meta: { cwd: this.host.sessionCwd },
+      // 无 cwd 的会话拼不出 {{cwd}} 段(回合在第 1 步静默失败、面板无响应),
+      // 且被会话列表按 not-found 拒绝——cwd 恒必填。
+      meta: { cwd: workspace?.path ?? this.host.sessionCwd },
       agentOptions: { provider: selection.provider, model: selection.model },
       setup: (agentCtx) => {
         const tools = agentCtx.get('tools') as {
@@ -179,6 +214,10 @@ export class AssistantRegistry {
     // 绑定时带上**所在终端页的会话 id**(v0.140.1):sidecar 的域工具据此优先
     // 复用这个页面的连接,而不是同资产的任意一个窗口。
     await this.host.bindAsset(request.assetId, assistantId, request.sshSessionId)
+    // 记进默认工作区的账户:membership 要「账户里有这个会话」+「会话头 cwd
+    // 等于工作区规范路径」双条件,后者已由上面的 meta.cwd 满足。attach 失败
+    // 由 host 侧降级告警——归组是展示层诉求,不影响助手可用性。
+    if (workspace !== undefined) await workspace.attach(assistantId)
     const entry: AssistantEntry = {
       assistantId,
       sshSessionId: request.sshSessionId,
