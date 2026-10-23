@@ -264,7 +264,7 @@ describe('starhub-live-context plugin apply', () => {
       preStepPayload(new AbortController().signal, 'third-session'),
       async () => ({ kind: 'enter', messages: [] }),
     )
-    const messages = (decision as { kind: 'enter'; messages: Array<{ content: Array<{ type: string; text: string }> }> }).messages
+    const messages = (decision as unknown as { kind: 'enter'; messages: Array<{ content: Array<{ type: string; text: string }> }> }).messages
     const injected = messages.at(-1)
     expect(injected?.content[0]?.text).toContain('StarHub live context:')
     expect(injected?.content[0]?.text).not.toContain('[Recent AI execs]')
