@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.140.1-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.140.2-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,8 +59,8 @@
 
 ## 当前版本
 
-### v0.140.1 (2026-10-21)
-- 🐛 🐛 **SSH 页面里的 AI 复用「那个页面」的连接(多窗口不再连错窗口)**:v0.140.0 的按资产解析在同资产开多个终端窗口时会命中会话 id 序第一个存活者——用户在 A 窗口的助手页里问一句话,命令可能落到 B 窗口的连接上。现在助手打开绑定时把所在终端页的会话 id 一起带给 sidecar(`starhub/bind.asset` 增带 `terminalSessionId`,`bind_asset_context` 落库),域工具优先复用该页连接(`SshManager::alive_session_for` 校验存活 + 归属);该页连接不在(关页/断线)才回落同资产第一个存活会话,都没有则照旧提示去连。`ssh_session_status` 在页面级命中时明说「本终端页的连接」。主壳 AI 无页面上下文,维持按资产解析。端到端验收补三条:页面级复用、死页回落、状态文案。
+### v0.140.2 (2026-10-23)
+- 🔧 🔧 **SSH AI 助手对话归到「默认工作区」,不再落「未分组」**:助手会话的 cwd 此前打的是 StarHub 自有目录 `~/.starhub/ssh-assistant`,而 dsh 会话列表按 cwd 归组——每台服务器一个的助手对话全部堆在侧栏「未分组」里,历史会话既不好找也和普通对话割裂。现在打开助手时解析 `workspaceRegistry` 里标题为默认工作区目录名(`default-workspace`,GUI 显示为「默认工作区」)的工作区:会话 cwd 取其规范路径,建会话后再经 `attachSession` 记入该工作区账户(归组双条件:账户里有该会话 + 会话头 cwd 等于工作区路径),对话因此列在该工作区分组下。没有默认工作区(被用户改名/删除,或组合里没有 workspace 家族)时回落 StarHub 自有目录,行为同旧版;注册表尚未就绪或 attach 被拒(工作区目录漂移)只告警,不打断助手打开。标题钉服务器名、资产绑定、工具面收敛、审批流程其余行为一律不变。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 
