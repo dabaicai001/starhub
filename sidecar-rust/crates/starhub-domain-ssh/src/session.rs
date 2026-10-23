@@ -27,12 +27,6 @@ const SSH_WRITE_CHANNEL_CAPACITY: usize = 256;
 /// 定时器。间隔取 15s:小于绝大多数 NAT / LB 的空闲超时(≥30s),流量开销
 /// 可忽略(单包几十字节,每天约 300KB)。
 const SSH_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
-/// pty 输出 tap 的广播容量(帧数):消费端(AI 采集)跟不上时丢最旧帧,
-/// 读泵永不阻塞。上限兼顾「一条命令的输出突发」与内存占用。
-const PTY_TAP_CAPACITY: usize = 1024;
-/// AI 采集循环轮询 pty 存活标志的间隔:pty 读泵退出(断开/对端关闭)时
-/// 最迟此间隔内快速失败,不必干等命令超时。
-const PTY_ALIVE_POLL: Duration = Duration::from_millis(250);
 const SFTP_PROBE_MARKER: &str = "__STARHUB_SFTP_PATH__";
 const SFTP_PROBE_NONE_MARKER: &str = "__STARHUB_SFTP_NONE__";
 const SFTP_SERVER_CANDIDATES: &[&str] = &[
@@ -166,13 +160,6 @@ pub struct SshSession {
     /// 浏览类 SFTP 操作(list/stat/remove/mkdir/rename/read/write)复用的通道,
     /// 避免每个操作都重新 channel open + subsystem 协商。断线或操作失败时失效重建。
     browse_sftp: Option<russh_sftp::client::SftpSession>,
-    /// 交互 shell pty 的输出 tap(broadcast):AI 域工具在用户终端会话上执行
-    /// 堡垒机命令时订阅它采集输出(用户终端自身经 `ssh:data:<id>` 事件消费,
-    /// 两条通道互不干扰)。pty 读泵退出即关闭。
-    pty_tap: Option<tokio::sync::broadcast::Sender<Vec<u8>>>,
-    /// pty 读泵存活标志:false = shell 通道已关闭(断开/对端关闭),
-    /// AI 采集循环据此快速失败,不必干等超时。
-    pty_alive: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SshSession {
@@ -190,8 +177,6 @@ impl SshSession {
             mfa_used: false,
             web_gateway: None,
             browse_sftp: None,
-            pty_tap: None,
-            pty_alive: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -204,22 +189,6 @@ impl SshSession {
 
     pub fn sftp_timeout_sec(&self) -> u64 {
         self.config.effective_sftp_timeout_sec()
-    }
-
-    /// 是否为「堡垒机」场景:启用 keyboard-interactive MFA 且资产显式/默认
-    /// 声明为堡垒机。
-    ///
-    /// 这类资产的登录壳在验证码通过后,会先呈现「选择机器」交互菜单,普通
-    /// exec 通道(无 pty、无机器选中)会被服务端拒绝。判定 = kb_interactive
-    /// 且 `bastion_mode` 不为显式 false:`bastion_mode: None` 保持旧行为
-    /// (MFA 资产一律按堡垒机处理,存量资产零回归);`Some(false)` 表示普通
-    /// MFA 服务器(2FA 之后是普通 shell,无选机器菜单),命令走普通 exec 通道。
-    ///
-    /// 新模型(v0.140.0)下,AI 命令经 {@link exec_on_terminal_pty} 写入用户
-    /// 终端的同一条 pty(用户在里面亲手选机器),不再自建 pty / 弹选机器卡。
-    pub fn is_bastion(&self) -> bool {
-        self.config.kb_interactive.as_ref().is_some_and(|kb| kb.enabled)
-            && self.config.bastion_mode.unwrap_or(true)
     }
 
     /// 返回会话配置中的连接目标(host, port, username),
@@ -248,19 +217,6 @@ impl SshSession {
     /// 打上资产归属(终端页连接时由 `connect_session` 调用)。
     pub fn set_asset_id(&mut self, asset_id: Option<String>) {
         self.asset_id = asset_id;
-    }
-
-    /// 交互 shell pty 的输出 tap 发送端(克隆即订阅通道);无 pty 时为 None。
-    ///
-    /// AI 域工具在堡垒机类资产上执行命令时:命令写入用户终端的同一条 shell,
-    /// 输出经此 tap 回采(用户终端自身经 `ssh:data:<id>` 事件消费同一份字节)。
-    pub fn pty_output_tap(&self) -> Option<tokio::sync::broadcast::Sender<Vec<u8>>> {
-        self.pty_tap.clone()
-    }
-
-    /// pty 读泵存活标志的共享句柄(AI 采集循环轮询它快速失败)。
-    pub fn pty_alive_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
-        Arc::clone(&self.pty_alive)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -553,21 +509,12 @@ impl SshSession {
         let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(SSH_WRITE_CHANNEL_CAPACITY);
         let (resize_tx, mut resize_rx) = watch::channel((pty_cols, pty_rows));
         self.resize_tx = Some(resize_tx);
-        // pty 输出 tap:AI 域工具在堡垒机类资产上复用本 shell 执行命令时订阅
-        // 它采集输出(用户终端经 ssh:data 事件消费同一份字节,互不干扰)。
-        // broadcast 容量有限:消费端跟不上时丢最旧帧(采集端标记截断),
-        // 绝不阻塞读泵——终端流畅度优先于 AI 采集完整性。
-        let (tap_tx, _tap_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(PTY_TAP_CAPACITY);
-        self.pty_tap = Some(tap_tx.clone());
-        self.pty_alive
-            .store(true, std::sync::atomic::Ordering::Relaxed);
         {
             let mut ch = channels.lock().await;
             ch.insert(session_id.to_string(), (attempt_generation, write_tx));
         }
         let id_for_read = session_id.to_string();
         let channels_clone = channels.clone();
-        let pty_alive = Arc::clone(&self.pty_alive);
         tokio::spawn(async move {
             use tokio::io::AsyncWriteExt;
             while let Some(data) = write_rx.recv().await {
@@ -600,12 +547,10 @@ impl SshSession {
                     msg = channel.wait() => {
                         match msg {
                             Some(ChannelMsg::Data { data }) => {
-                                let _ = tap_tx.send(data.to_vec());
                                 let _ = app_handle
                                     .emit_ser(&format!("ssh:data:{}", id_for_read), data.to_vec());
                             }
                             Some(ChannelMsg::ExtendedData { data, .. }) => {
-                                let _ = tap_tx.send(data.to_vec());
                                 let _ = app_handle
                                     .emit_ser(&format!("ssh:data:{}", id_for_read), data.to_vec());
                             }
@@ -627,9 +572,7 @@ impl SshSession {
                     }
                 }
             }
-            // 读泵退出:shell 通道已关。置位存活标志,让 AI 采集循环快速失败
-            // (否则要干等到命令超时);tap 发送端随本任务 drop 而关闭。
-            pty_alive.store(false, std::sync::atomic::Ordering::Relaxed);
+            // 读泵退出:shell 通道已关。
             let mut ch = channels_clone.lock().await;
             let was_current = ch
                 .get(&id_for_read)
@@ -1117,54 +1060,6 @@ impl SshSession {
         }
     }
 
-    /// 在用户终端已连接的 shell pty 上执行一条命令(堡垒机类资产的复用形态)。
-    ///
-    /// 新模型(v0.140.0):AI 不再自建连接、不再弹「选机器」卡——用户在自己的
-    /// 终端里完成 MFA 与选机器后,AI 把命令写入**同一条 pty**(用户在终端里
-    /// 可见),输出经 pty tap 回采。pty 是交互式 shell,命令执行完不会发
-    /// Eof/Close,因此命令后追加随机哨兵 echo,行缓冲检测「完整行 == 哨兵」
-    /// 即视为命令完毕(命令回显行是 `echo "哨兵"`,不等于哨兵,不误触发)。
-    ///
-    /// `write_tx`(会话写通道)与 `tap`(pty 输出 tap)都是克隆来的句柄:
-    /// 采集期间不持有会话锁,用户的 resize / 断开 / SFTP 不被 AI 命令阻塞。
-    pub async fn exec_on_terminal_pty(
-        write_tx: &mpsc::Sender<Vec<u8>>,
-        tap: &tokio::sync::broadcast::Sender<Vec<u8>>,
-        pty_alive: &std::sync::atomic::AtomicBool,
-        command: &str,
-        timeout_sec: u64,
-        mut abort_rx: Option<oneshot::Receiver<()>>,
-    ) -> Result<String, String> {
-        let sentinel = format!("__DSH_PTY_DONE_{}__", uuid::Uuid::new_v4().simple());
-        match collect_terminal_command(
-            write_tx,
-            tap,
-            pty_alive,
-            command,
-            &sentinel,
-            timeout_sec,
-            &mut abort_rx,
-        )
-        .await
-        {
-            Err(TerminalPtyError::ChannelClosed) => Err(
-                "[EXEC_FAILED] 终端 shell 通道已关闭(连接可能已断开):请在终端页重新连接后重试"
-                    .to_string(),
-            ),
-            Err(TerminalPtyError::Aborted) => {
-                Err(format!("[EXEC_ABORTED] Command aborted by user: {command}"))
-            }
-            Err(TerminalPtyError::TimedOut {
-                timeout_sec,
-                command,
-            }) => Err(format!(
-                "[EXEC_TIMEOUT] 命令超时({timeout_sec}s): {command}。\
-                 若终端仍停在堡垒机选机器菜单,请先完成选择;若 shell 正忙(交互式程序),请稍后重试。"
-            )),
-            Ok((output, truncated)) => Ok(clean_pty_stdout(&output, command, &sentinel, truncated)),
-        }
-    }
-
     pub async fn open_sftp_with_info(
         &mut self,
     ) -> Result<(russh_sftp::client::SftpSession, SftpLaunchInfo), String> {
@@ -1306,8 +1201,6 @@ impl SshSession {
         self.dead.store(true, std::sync::atomic::Ordering::Relaxed);
         self.resize_tx = None;
         self.browse_sftp = None;
-        // 丢弃 pty tap 发送端:读泵随之退出,tap 关闭,在途的 AI 采集立即失败。
-        self.pty_tap = None;
         // 停止固定节拍心跳
         if let Some(abort) = self.heartbeat_abort.take() {
             abort.abort();
@@ -1820,132 +1713,6 @@ fn rewrite_host_header(head: &[u8], host: &str) -> Vec<u8> {
     out
 }
 
-/// 用户终端 pty 命令采集失败分类(新模型 v0.140.0)。
-enum TerminalPtyError {
-    /// 写通道或 tap 关闭(会话/pty 已断)。
-    ChannelClosed,
-    /// 哨兵超时(命令可能仍在运行,或终端停在菜单/交互程序)。
-    TimedOut { timeout_sec: u64, command: String },
-    /// 用户中止(停止生成 → ssh_exec_abort):立即结束等待。
-    Aborted,
-}
-
-/// 写命令 + 随机哨兵到用户终端 pty,经输出 tap 行缓冲采集到哨兵行为止。
-///
-/// 订阅发生在写命令之前:broadcast 只送达订阅后的字节,天然不含上一个
-/// 命令的残留输出(旧实现的「冲刷窗口」不再需要)。pty 读泵退出时 tap 关闭
-/// 且存活标志落位;会话仍持有发送端时 tap 不会自动关,故轮询存活标志,
-/// 断开最迟 `PTY_ALIVE_POLL` 内快速失败,不干等超时。
-///
-/// `abort_rx` 为可选的中止信号(ssh_exec_abort / 停止生成)所有权槽:
-/// 触发时立即以 [`TerminalPtyError::Aborted`] 返回。None 时该分支永不触发。
-async fn collect_terminal_command(
-    write_tx: &mpsc::Sender<Vec<u8>>,
-    tap: &tokio::sync::broadcast::Sender<Vec<u8>>,
-    pty_alive: &std::sync::atomic::AtomicBool,
-    command: &str,
-    sentinel: &str,
-    timeout_sec: u64,
-    abort_rx: &mut Option<oneshot::Receiver<()>>,
-) -> Result<(Vec<u8>, bool), TerminalPtyError> {
-    // 先订阅再写命令:只接收订阅后产生的字节,无残留输出。
-    let mut rx = tap.subscribe();
-    write_tx
-        .send(format!("{}\n", command).into_bytes())
-        .await
-        .map_err(|_| TerminalPtyError::ChannelClosed)?;
-    write_tx
-        .send(format!("echo \"{}\"\n", sentinel).into_bytes())
-        .await
-        .map_err(|_| TerminalPtyError::ChannelClosed)?;
-
-    let mut output = Vec::<u8>::new();
-    let mut truncated = false;
-    // 行缓冲:pty 输出按行检测哨兵(跨 chunk 拼接),避免命令回显误触发。
-    let mut line_buf = Vec::<u8>::new();
-    let collect = async {
-        loop {
-            tokio::select! {
-                msg = rx.recv() => {
-                    match msg {
-                        Ok(data) => {
-                            truncated |= append_capped(&mut output, &data, MAX_EXEC_OUTPUT_BYTES);
-                            line_buf.extend_from_slice(&data);
-                            // 防御:无换行的大输出(二进制/超长行)只保留尾部足够
-                            // 匹配哨兵的长度,避免 line_buf 无限膨胀。
-                            const LINE_BUF_CAP: usize = 4096;
-                            if line_buf.len() > LINE_BUF_CAP {
-                                let keep = sentinel.len() + 8;
-                                let drop = line_buf.len() - keep;
-                                line_buf.drain(..drop);
-                            }
-                            while let Some(pos) = line_buf.iter().position(|&b| b == b'\n') {
-                                let line: Vec<u8> = line_buf.drain(..=pos).collect();
-                                let text = strip_ansi(&String::from_utf8_lossy(&line));
-                                if text.trim().trim_end_matches('\r') == sentinel {
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        // tap 发送端全部丢弃 = pty 读泵已退出且会话已释放
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            return Err(TerminalPtyError::ChannelClosed);
-                        }
-                        // 消费跟不上丢了旧帧:标记截断继续等哨兵,不中断命令
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => truncated = true,
-                    }
-                }
-                // 读泵退出但会话仍持有 tap 发送端时,recv 不会报 Closed:
-                // 轮询存活标志,断开最迟 PTY_ALIVE_POLL 内快速失败。
-                _ = tokio::time::sleep(PTY_ALIVE_POLL) => {
-                    if !pty_alive.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Err(TerminalPtyError::ChannelClosed);
-                    }
-                }
-                _ = async {
-                    match abort_rx.as_mut() {
-                        Some(rx) => rx.await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    return Err(TerminalPtyError::Aborted);
-                }
-            }
-        }
-    };
-    let timeout_sec = timeout_sec.clamp(1, MAX_EXEC_TIMEOUT_SEC);
-    match timeout(Duration::from_secs(timeout_sec), collect).await {
-        Ok(Ok(())) => Ok((output, truncated)),
-        Ok(Err(error)) => Err(error),
-        Err(_) => Err(TerminalPtyError::TimedOut {
-            timeout_sec,
-            command: command.to_string(),
-        }),
-    }
-}
-/// 清洗用户终端 pty 上一条命令的输出:剔除命令回显行(提示符 + 命令原文,
-/// 以命令结尾)与哨兵相关行(回显的 `echo "哨兵"` 行、echo 的哨兵输出行)。
-fn clean_pty_stdout(output: &[u8], command: &str, sentinel: &str, truncated: bool) -> String {
-    let mut stdout = strip_ansi(&String::from_utf8_lossy(output)).to_string();
-    let command_trim = command.trim();
-    stdout = stdout
-        .lines()
-        .filter(|line| {
-            let l = line.trim_end_matches('\r');
-            let t = l.trim();
-            !t.contains(sentinel) && !t.ends_with(command_trim)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if truncated {
-        stdout.push_str(&format!(
-            "\n[OUTPUT_TRUNCATED] output exceeded {} bytes and was truncated",
-            MAX_EXEC_OUTPUT_BYTES
-        ));
-    }
-    stdout
-}
-
 /// 向 buffer 追加数据,总量达到 cap 后丢弃多余部分;返回是否发生了截断。
 fn append_capped(buffer: &mut Vec<u8>, data: &[u8], cap: usize) -> bool {
     if buffer.len() >= cap {
@@ -2305,58 +2072,6 @@ fn is_password_prompt(prompt: &str) -> bool {
         || lower.contains("口令")
 }
 
-/// 去掉终端 ANSI/VT 控制序列,仅保留可见文本。
-///
-/// 堡垒机(GateShell 等)登录取色菜单会在 pty 输出里混入 `\x1b[...m`(颜色)、
-/// `\x1b[...H`(光标定位)、`\x1b[...K`(清行)、`\x1b[?25l/h`(光标显隐)等
-/// 控制码。这类输出若原样透传 `<pre>`,会渲染成"文字+控制码"乱码;这里在
-/// emit 前端 / 组装返回文本前统一剥掉,让选机器浮层显示干净菜单。
-fn strip_ansi(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            // CSI 序列:\x1b[ ... 终止于 0x40..=0x7e(字母/符号)
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for c in chars.by_ref() {
-                    if ('\u{40}'..='\u{7e}').contains(&c) {
-                        break;
-                    }
-                }
-            }
-            // 非 CSI 的 ESC 序列(如 \x1b(M 字符集指定、\x1b7/\x1b8 存取光标):
-            // ESC 后可能跟若干个中间字节(0x20..=0x2f),再以最终字节(0x30..=0x7e)
-            // 结束;整体吞掉,避免把最终字节误当文本保留。
-            else {
-                // 先消费一个字符;若它是中间字节(0x20..=0x2f),继续消费直到最终字节。
-                let mut consumed = 0usize;
-                while let Some(next) = chars.next() {
-                    consumed += 1;
-                    let b = next as u32;
-                    // 中间字节范围 0x20..=0x2f;最终字节范围 0x30..=0x7e。
-                    if !('\u{20}'..='\u{2f}').contains(&next) {
-                        break;
-                    }
-                    if b > 0x7e {
-                        break;
-                    }
-                    if consumed > 16 {
-                        break; // 防御:异常长序列直接丢弃剩余
-                    }
-                }
-            }
-        } else if ch == '\r' {
-            // 回车控制符:CRLF 菜单行尾统一归并为 \n,避免前端 <pre> 渲染出多余
-            // 空行或 \r 残留。这里直接丢弃 \r,保留后续 \n。
-            // 注:孤立 \r(AI 菜单里作"光标回列首")并非可显示文本,一并去掉。
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2373,39 +2088,6 @@ mod tests {
             "-----BEGIN OPENSSH PRIVATE {}-----\n{BODY}\n-----END OPENSSH PRIVATE {}-----",
             "KEY", "KEY",
         )
-    }
-
-    /// 判断是否为「堡垒机 pty exec」场景:启用 keyboard-interactive MFA 即可。
-    /// 覆盖「跳板机 + kb」与「直连堡垒机 + kb」两种形态(直连堡垒机如阿里云
-    /// BastionHost 公网入口,host 即堡垒机、无 jump_host)。
-    #[test]
-    fn is_bastion_requires_kb_enabled_only() {
-        let plain: SshConfig = serde_json::from_str(
-            r#"{"host":"h","port":22,"username":"u","auth":{"Password":"p"}}"#,
-        )
-        .unwrap();
-        assert!(!SshSession::new(plain, Arc::new(crate::events::MemoryKnownHostsStore::default())).is_bastion());
-
-        // 只配跳板机、未启用 kb → 不是堡垒机 pty 场景
-        let jump_only: SshConfig = serde_json::from_str(
-            r#"{"host":"h","port":22,"username":"u","auth":{"Password":"p"},"jump_host":"b"}"#,
-        )
-        .unwrap();
-        assert!(!SshSession::new(jump_only, Arc::new(crate::events::MemoryKnownHostsStore::default())).is_bastion());
-
-        // 跳板机 + kb 启用(无论有无主密码)→ 是
-        let bastion: SshConfig = serde_json::from_str(
-            r#"{"host":"h","port":22,"username":"u","auth":{"Password":"p"},"jump_host":"b","kb_interactive":{"enabled":true,"password":"pw"}}"#,
-        )
-        .unwrap();
-        assert!(SshSession::new(bastion, Arc::new(crate::events::MemoryKnownHostsStore::default())).is_bastion());
-
-        // kb 启用但无跳板机 → 是:直连堡垒机(host 即堡垒机)同样需要选机器
-        let kb_only: SshConfig = serde_json::from_str(
-            r#"{"host":"h","port":22,"username":"u","auth":{"Password":"p"},"kb_interactive":{"enabled":true}}"#,
-        )
-        .unwrap();
-        assert!(SshSession::new(kb_only, Arc::new(crate::events::MemoryKnownHostsStore::default())).is_bastion());
     }
 
     #[test]
@@ -2529,32 +2211,6 @@ mod tests {
         assert!(!is_password_prompt("Verification code"));
         assert!(!is_password_prompt("Username"));
         assert!(!is_password_prompt(""));
-    }
-
-    #[test]
-    fn test_strip_ansi_removes_csi_color_and_cursor_sequences() {
-        // 颜色(SGR \x1b[32m)、光标定位(\x1b[23;1H)、清行(\x1b[K)、光标显隐
-        // (\x1b[?25l / \x1b[?25h)、右移(\x1b[1024D)、下移(\x1b[1B)全部剥掉。
-        let raw = "\x1b[0;36mGateShell\x1b[32m=> Is getting\x1b[23;1H\x1b[K\x1b[?25l\r\n  1  db-prod 10.0.1.5\x1b[0m\x1b[?25h";
-        let clean = strip_ansi(raw);
-        assert!(!clean.contains('\u{1b}'));
-        assert_eq!(clean, "GateShell=> Is getting\n  1  db-prod 10.0.1.5");
-    }
-
-    #[test]
-    fn test_strip_ansi_preserves_plain_text() {
-        let text = "  2  web-01  10.0.1.6\nJump: Use :{number}<Enter>";
-        assert_eq!(strip_ansi(text), text);
-    }
-
-    #[test]
-    fn test_strip_ansi_handles_two_byte_and_charset_escapes() {
-        // \x1b7 / \x1b8(保存/恢复光标)是两字节序列,应整体去掉。
-        assert_eq!(strip_ansi("abc\x1b7def"), "abcdef");
-        assert_eq!(strip_ansi("abc\x1b8def"), "abcdef");
-        // \x1b(M 这类字符集指定序列:ESC 后接中间字符('(')与最终字节('M'),
-        // 均应被剥掉,只留后继文本。
-        assert_eq!(strip_ansi("abc\x1b(Mdef"), "abcdef");
     }
 
     #[test]

@@ -699,11 +699,6 @@ export function SshTerminalOverlay({ asset, onClose }: SshTerminalOverlayProps) 
             // SshConfig 期望的 kb_interactive;缺此字段时正式连接遇到
             // keyboard-interactive 服务器会误报 [AUTH_FAILED] 而不弹验证码。
             ...(kbInteractive === null ? {} : { kb_interactive: kbInteractive }),
-            // 堡垒机模式显式声明(serde 字段为 snake_case):仅在资产已配置时
-            // 下发,存量资产缺省走后端旧行为(MFA 资产视为堡垒机)。
-            ...(asset.config.bastionMode === undefined
-              ? {}
-              : { bastion_mode: asset.config.bastionMode === true }),
             pty_cols: term.cols,
             pty_rows: term.rows,
           },

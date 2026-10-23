@@ -11,6 +11,11 @@
  * 快照尾部先被裁掉)。pull 失败降级为本地 registry+events,不抛错;本地服务
  * 缺失时逐段降级。`enabled: false` 时完全不注入。
  *
+ * **会话级收敛(v0.140.3)**:AI 起源的内容(recentExecs、AI 起源事件)按发起
+ * 会话 id 过滤,只放行当前 agent 会话自己产生的执行——用户在主壳会话里聊天的
+ * 时候,不再看到 SSH 终端页助手刚在另一条会话里跑过的命令(反之亦然)。用户
+ * 起源事件(终端连接/断开等)是资产事实,无会话归属,全局保留。
+ *
  * 格式风格对齐 tool-context 的 pre-step 注入:同一 plugin-source user message
  * (`form: 'snapshot'`,sections 携带包名与全文)。
  *
@@ -73,6 +78,22 @@ interface LiveSnapshot {
   readonly taskTrails?: Array<Record<string, unknown>>
 }
 
+/** recentExecs 条目里发起会话的字段名(v0.140.3 起 sidecar 落库)。 */
+const EXEC_SESSION_FIELD = 'sessionId'
+
+/**
+ * 一条 recentExecs 是否属于当前会话(v0.140.3 会话级收敛)。
+ *
+ * 没有 `sessionId` 的条目(工具直调形态,未经桥信封注入)无法归属,按「非本
+ * 会话」处理——不注入,避免把来源不明的执行塞进任何会话的上下文。
+ * @param exec - `starhub/live.snapshot` 的一条 recentExecs。
+ * @param sessionId - 当前 agent 会话 id(agent.session.id)。
+ */
+function execBelongsToSession(exec: Record<string, unknown>, sessionId: string): boolean {
+  const origin = exec[EXEC_SESSION_FIELD]
+  return typeof origin === 'string' && origin === sessionId
+}
+
 /**
  * 校验活体上下文配置。
  * @param config - 已解析(含默认值)的配置。
@@ -101,16 +122,32 @@ function renderEventLine(event: StarHubDomainEvent): string {
 }
 
 /**
+ * AI 起源事件是否属于当前会话(v0.140.3 会话级收敛)。
+ *
+ * 用户起源事件(终端连接/断开等)没有会话归属,是资产事实,全局保留;AI 起源
+ * 事件必须带 `sessionId` 且等于当前 agent 会话才注入——否则主壳会话会看到
+ * 别的会话(SSH 页助手等)刚执行过的命令摘要。
+ * @param event - 一条领域事件。
+ * @param sessionId - 当前 agent 会话 id(agent.session.id)。
+ */
+function eventBelongsToSession(event: StarHubDomainEvent, sessionId: string): boolean {
+  if (event.origin !== 'ai') return true
+  return event.sessionId !== undefined && event.sessionId === sessionId
+}
+
+/**
  * 渲染本地 registry + 事件视图。
  * @param records - 当前活跃 session 记录。
  * @param events - 事件服务;缺失时该段省略。
  * @param maxEvents - 每资产事件条数上限。
+ * @param sessionId - 当前 agent 会话 id(AI 起源事件按它过滤)。
  * @returns 本地段文本;空段返回 ''。
  */
 function renderLocalSections(
   records: readonly StarHubSessionRecord[],
   events: DomainEventStore | undefined,
   maxEvents: number,
+  sessionId: string,
 ): string {
   const sections: string[] = []
   if (records.length > 0) {
@@ -119,7 +156,9 @@ function renderLocalSections(
     const assetIds = [...new Set(records.map(record => record.assetId))]
     const eventLines: string[] = []
     for (const assetId of assetIds) {
-      for (const event of events?.recent(assetId, maxEvents) ?? []) eventLines.push(renderEventLine(event))
+      for (const event of events?.recent(assetId, maxEvents) ?? []) {
+        if (eventBelongsToSession(event, sessionId)) eventLines.push(renderEventLine(event))
+      }
     }
     if (eventLines.length > 0) {
       sections.push('[Recent events]')
@@ -127,6 +166,7 @@ function renderLocalSections(
     }
   } else if (events !== undefined) {
     const recent = events.recent(undefined, maxEvents)
+      .filter(event => eventBelongsToSession(event, sessionId))
     if (recent.length > 0) {
       sections.push('[Recent events]')
       sections.push(...recent.map(renderEventLine))
@@ -150,9 +190,10 @@ function renderExecLine(exec: Record<string, unknown>): string {
 /**
  * 渲染 pull 到的活性快照段。
  * @param snapshot - `starhub/live.snapshot` 的 result;缺失或字段非数组时该段省略。
+ * @param sessionId - 当前 agent 会话 id(recentExecs 按它过滤,v0.140.3)。
  * @returns 快照段文本;无内容返回 ''。
  */
-function renderSnapshotSections(snapshot: LiveSnapshot | undefined): string {
+function renderSnapshotSections(snapshot: LiveSnapshot | undefined, sessionId: string): string {
   if (snapshot === undefined) return ''
   const sections: string[] = []
   const transfers = snapshot.transfers
@@ -161,9 +202,14 @@ function renderSnapshotSections(snapshot: LiveSnapshot | undefined): string {
     sections.push(...transfers.map(renderTransferLine))
   }
   const execs = snapshot.recentExecs
-  if (Array.isArray(execs) && execs.length > 0) {
-    sections.push('[Recent AI execs]')
-    sections.push(...execs.map(renderExecLine))
+  if (Array.isArray(execs)) {
+    // 只放行本会话自己产生的执行:别的会话(主壳 / 其它终端页助手)跑过的
+    // 命令连同输出尾部,不注入当前会话的上下文。
+    const own = execs.filter(exec => execBelongsToSession(exec, sessionId))
+    if (own.length > 0) {
+      sections.push('[Recent AI execs]')
+      sections.push(...own.map(renderExecLine))
+    }
   }
   const trails = snapshot.taskTrails
   if (Array.isArray(trails) && trails.length > 0) {
@@ -186,11 +232,16 @@ export function truncateText(text: string, maxChars: number): string {
 
 /**
  * 组装一次注入的活体上下文文本;pull 失败降级为本地视图,不抛错。
+ *
+ * v0.140.3 起 AI 起源内容(recentExecs 与 AI 起源事件)按 `sessionId` 做
+ * **会话级过滤**:只放行当前 agent 会话自己产生的执行,别的会话执行过什么
+ * 不再串进本会话的上下文。
  * @param registry - 注册表服务;缺失时本地 registry 段省略。
  * @param events - 事件服务;缺失时本地事件段省略。
  * @param transport - sdk-transport;缺失或 pull 失败时快照段省略。
  * @param maxEvents - 每相关资产的事件条数上限。
  * @param maxSnapshotChars - 整段文本字符上限。
+ * @param sessionId - 当前 agent 会话 id(agent.session.id)。
  * @returns 注入文本;本地与快照段都为空时返回 null(不注入)。
  */
 export async function composeLiveContext(
@@ -199,10 +250,11 @@ export async function composeLiveContext(
   transport: JsonRpcTransportPeer | undefined,
   maxEvents: number,
   maxSnapshotChars: number,
+  sessionId: string,
 ): Promise<string | null> {
   const sections: string[] = []
   const records = registry?.list() ?? []
-  const local = renderLocalSections(records, events, maxEvents)
+  const local = renderLocalSections(records, events, maxEvents, sessionId)
   if (local !== '') sections.push(local)
   let snapshot: LiveSnapshot | undefined
   if (transport !== undefined) {
@@ -222,7 +274,7 @@ export async function composeLiveContext(
       if (timeout !== undefined) clearTimeout(timeout)
     }
   }
-  const live = renderSnapshotSections(snapshot)
+  const live = renderSnapshotSections(snapshot, sessionId)
   if (live !== '') sections.push(live)
   if (sections.length === 0) return null
   const text = ['StarHub live context:', ...sections].join('\n')
@@ -253,12 +305,17 @@ export function apply(ctx: Context, config: Config): void {
       ctx.get('sdk-transport') as JsonRpcTransportPeer | undefined
 
     return ctx.on('agent/pre-step', async (
-      { signal },
+      { agent, signal },
       next,
     ): Promise<PreStepDecision> => {
       const decision = await next()
       if (decision.kind === 'reject' || signal.aborted) return decision
-      const text = await composeLiveContext(registry, events, getTransport(), resolved.maxEvents, resolved.maxSnapshotChars)
+      // 会话级收敛(v0.140.3):AI 起源的执行/事件只放行本会话自己产生的——
+      // 主壳会话不再看到 SSH 页助手刚跑过的命令,反之亦然。
+      const text = await composeLiveContext(
+        registry, events, getTransport(), resolved.maxEvents, resolved.maxSnapshotChars,
+        String(agent.session.id),
+      )
       if (text === null) return decision
       return {
         kind: 'enter',

@@ -72,6 +72,29 @@ describe('DomainEventStore', () => {
     expect(store.recent('a9')[0]?.data).toEqual({ rowCount: 12 })
   })
 
+  it('keeps the AI-origin session id so consumers can scope by session (v0.140.3)', () => {
+    const store = new DomainEventStore()
+    store.push({ kind: 'ssh.exec_completed', assetId: 'a1', ts: 10, summary: 'own exec', origin: 'ai', sessionId: 'own' })
+    store.push({ kind: 'ssh.exec_completed', assetId: 'a1', ts: 11, summary: 'other exec', origin: 'ai', sessionId: 'other' })
+    // 用户起源事件没有会话归属
+    store.push({ kind: 'session.attached', assetId: 'a1', ts: 12, summary: 'attached' })
+
+    expect(store.recent('a1').map(event => [event.summary, event.sessionId])).toEqual([
+      ['attached', undefined],
+      ['other exec', 'other'],
+      ['own exec', 'own'],
+    ])
+  })
+
+  it('drops frames with a malformed sessionId but keeps frames without one', () => {
+    const store = new DomainEventStore()
+    store.push({ kind: 'k', ts: 1, summary: 'no session', origin: 'ai' })
+    store.push({ kind: 'k', ts: 2, summary: 'empty session', origin: 'ai', sessionId: '' })
+    store.push({ kind: 'k', ts: 3, summary: 'non-string session', origin: 'ai', sessionId: 7 })
+
+    expect(store.recent().map(event => event.summary)).toEqual(['no session'])
+  })
+
   it('drops frames missing or malformed in kind, ts, summary, or assetId', () => {
     const store = new DomainEventStore()
     const invalid = [

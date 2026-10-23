@@ -77,10 +77,6 @@ pub struct SshConfig {
     pub sftp_server_path: Option<String>,
     #[serde(default)]
     pub kb_interactive: Option<KeyboardInteractiveConfig>,
-    /// 堡垒机模式显式声明:None = 旧行为(MFA 资产一律按堡垒机,存量零回归);
-    /// Some(false) = 普通 MFA 服务器,AI exec 走普通 exec 通道不弹「选机器」。
-    #[serde(default)]
-    pub bastion_mode: Option<bool>,
     #[serde(default)]
     pub jump_host: Option<String>,
     #[serde(default)]
@@ -195,28 +191,10 @@ mod tests {
         assert_eq!(config.sftp_timeout_sec, DEFAULT_SFTP_TIMEOUT_SEC);
         assert_eq!(config.sftp_launch_mode, SftpLaunchMode::Auto);
         assert!(config.sftp_server_path.is_none());
-        // bastion_mode 缺省 None = 旧行为(MFA 资产一律按堡垒机,存量零回归)
-        assert!(config.bastion_mode.is_none());
         assert_eq!(
             config.effective_pty_size(),
             (DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS)
         );
-    }
-
-    #[test]
-    fn test_ssh_config_bastion_mode_serde() {
-        // 普通 MFA 服务器:显式 false,AI exec 不弹「选机器」
-        let plain: SshConfig = serde_json::from_str(
-            r#"{"host":"h","port":22,"username":"u","auth":{"Password":"p"},"bastion_mode":false}"#,
-        )
-        .unwrap();
-        assert_eq!(plain.bastion_mode, Some(false));
-        // 显式 true = 堡垒机
-        let bastion: SshConfig = serde_json::from_str(
-            r#"{"host":"h","port":22,"username":"u","auth":{"Password":"p"},"bastion_mode":true}"#,
-        )
-        .unwrap();
-        assert_eq!(bastion.bastion_mode, Some(true));
     }
 
     #[test]

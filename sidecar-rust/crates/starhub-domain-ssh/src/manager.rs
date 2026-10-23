@@ -272,10 +272,11 @@ pub async fn connect_session(
 }
 
 /// ssh_exec 的进程内核心(命令面与域工具执行器共用)。
-/// `bastion_interactive` = true 时(AI 域工具路径):堡垒机类资产
-/// (kb_interactive MFA,普通 exec 通道会被服务端拒绝)改走用户终端 pty —
-/// 命令写入用户已连接的同一条 shell,输出经 pty tap 回采(v0.140.0 新模型:
-/// AI 不自建连接、不弹「选机器」卡,选机器由用户在自己的终端里完成)。
+///
+/// 命令一律走**普通 exec 通道**(与交互终端同一条 SSH 连接,互不干扰):
+/// v0.140.3 起堡垒机类资产也走 exec——实测阿里云 BastionHost 在用户选完
+/// 目标机后 exec 通道可用且落在该连接所选机器上(v0.140.0~v0.140.2 曾为此
+/// 把命令改写进用户终端 pty,并带资产级 `bastionMode` 标志,均已退役)。
 ///
 /// `ssh:exec-done` 广播不在这里:该事件是 AI 域工具独有的执行遥测(主壳
 /// 执行记录面板的数据源),由 `tools::exec_ssh_command` 在 AI 路径成功后
@@ -286,7 +287,6 @@ pub async fn ssh_exec_core(
     command: &str,
     timeout_sec: Option<u64>,
     exec_id: Option<&str>,
-    bastion_interactive: bool,
 ) -> Result<String, String> {
     // 执行主体:见上方契约注释。
     let result = async {
@@ -301,8 +301,7 @@ pub async fn ssh_exec_core(
                 .ok_or_else(|| format!("SSH session {} not found", id))?
         };
 
-        let session = session_arc.lock().await;
-        // 注册在途取消句柄:普通 exec 与终端 pty 路径统一支持停止生成中断。
+        // 注册在途取消句柄:exec 路径支持停止生成中断。
         let abort_rx = match exec_id {
             Some(eid) => {
                 let (abort_tx, abort_rx) = tokio::sync::oneshot::channel();
@@ -315,48 +314,7 @@ pub async fn ssh_exec_core(
             }
             None => None,
         };
-        // 堡垒机 pty 路径:启用 kb_interactive MFA(直连堡垒机或跳板机)时,普通
-        // exec 通道被服务端拒绝(Channel send error),命令改写在用户终端的
-        // pty 上执行。仅 AI 域工具路径启用(bastion_interactive=true)。
-        //
-        // 采集期间**不持有会话锁**:tap 发送端与写通道句柄都克隆自会话,
-        // 用户的 resize / 断开 / SFTP 操作不被 AI 命令阻塞(锁在采集前释放)。
-        let bastion_pty = bastion_interactive && session.is_bastion();
-        let tap = if bastion_pty {
-            session.pty_output_tap()
-        } else {
-            None
-        };
-        let pty_alive = if bastion_pty {
-            Some(session.pty_alive_handle())
-        } else {
-            None
-        };
-        drop(session);
-        let result = if let (Some(tap), Some(pty_alive)) = (tap, pty_alive) {
-            let write_tx = {
-                let channels = manager.channels.lock().await;
-                channels.get(id).map(|(_, tx)| tx.clone())
-            };
-            match write_tx {
-                Some(write_tx) => {
-                    SshSession::exec_on_terminal_pty(
-                        &write_tx,
-                        &tap,
-                        &pty_alive,
-                        command,
-                        timeout_sec.unwrap_or(10),
-                        abort_rx,
-                    )
-                    .await
-                }
-                None => Err(
-                    "[EXEC_FAILED] 终端 shell 写通道不在位(连接可能已断开):请在终端页重新连接后重试"
-                        .to_string(),
-                ),
-            }
-        } else {
-            // 普通 exec 通道(与交互终端同一条 SSH 连接,互不干扰)。
+        let result = {
             let mut session = session_arc.lock().await;
             match abort_rx {
                 Some(abort_rx) => {

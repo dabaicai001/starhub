@@ -239,7 +239,6 @@ pub async fn ssh_exec(ssh: &SshRuntime, params: &Value) -> Result<Value, RpcErro
         &command,
         timeout_sec,
         exec_id.as_deref(),
-        false,
     )
     .await
     .map_err(RpcError::internal)?;

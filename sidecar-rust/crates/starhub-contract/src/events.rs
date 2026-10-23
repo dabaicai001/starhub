@@ -41,6 +41,11 @@ pub struct DomainEvent {
     /// 事件起源:"user" | "ai";省略 = user。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// 发起会话的 dsh agent 会话 id(仅 AI 起源事件携带):live-context 的
+    /// pre-step 注入按它做**会话级过滤**——只把本会话自己产生的执行注入上下文,
+    /// 别的会话(主壳 / 其它终端页助手)的执行不再串入。用户起源事件无会话,省略。
+    #[serde(rename = "sessionId", default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 impl DomainEvent {
@@ -51,6 +56,7 @@ impl DomainEvent {
         summary: &str,
         data: serde_json::Value,
         origin: Option<&str>,
+        session_id: Option<&str>,
     ) -> Self {
         Self {
             kind: kind.into(),
@@ -59,6 +65,7 @@ impl DomainEvent {
             summary: normalize_summary(summary),
             data,
             origin: origin.map(str::to_string),
+            session_id: session_id.map(str::to_string),
         }
     }
 }
@@ -201,10 +208,12 @@ fn tool_summary(tool: &str, args: &serde_json::Value) -> String {
 
 /// `starhub/tool.execute` 成功后的 AI 起源领域事件(契约 §1/M4):
 /// kind 按工具名映射,summary 单行 ≤200 字符且不含敏感值,origin=ai。
+/// `session_id` = 发起调用的 dsh agent 会话 id(live-context 按它做会话级过滤)。
 pub fn ai_tool_event(
     tool: &str,
     args: &serde_json::Value,
     asset_id: Option<String>,
+    session_id: Option<&str>,
 ) -> DomainEvent {
     DomainEvent::now(
         kind_for_tool(tool),
@@ -212,6 +221,7 @@ pub fn ai_tool_event(
         &tool_summary(tool, args),
         serde_json::json!({ "tool": tool }),
         Some("ai"),
+        session_id,
     )
 }
 
@@ -225,6 +235,9 @@ pub struct RecentExec {
     /// 输出尾部(≤2KB,char 边界安全)。
     pub tail: String,
     pub ts: i64,
+    /// 发起执行的 dsh agent 会话 id;缺失时消费方按「非本会话」处理(不注入)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// `starhub_list_capabilities` 的模型可读文本:静态能力清单
@@ -300,10 +313,12 @@ mod tests {
             "ssh_exec",
             &serde_json::json!({ "command": "tail -n 5 /var/log/syslog\n第二行" }),
             Some("a1".to_string()),
+            Some("sess-1"),
         );
         assert_eq!(event.kind, "ssh.exec_completed");
         assert_eq!(event.origin.as_deref(), Some("ai"));
         assert_eq!(event.asset_id.as_deref(), Some("a1"));
+        assert_eq!(event.session_id.as_deref(), Some("sess-1"));
         assert!(event.ts > 0);
         assert!(!event.summary.contains('\n'));
         assert!(event
@@ -318,6 +333,7 @@ mod tests {
             "db_query",
             &serde_json::json!({ "sql": "SELECT * FROM t" }),
             None,
+            None,
         );
         assert_eq!(event.summary, "db_query: SELECT * FROM t");
 
@@ -325,11 +341,12 @@ mod tests {
             "sftp_upload",
             &serde_json::json!({ "localPaths": ["a", "b"], "remoteDir": "/tmp" }),
             None,
+            None,
         );
         assert_eq!(event.summary, "sftp_upload: 2 个文件 → /tmp");
 
         // 未知工具:不带参数细节
-        let event = ai_tool_event("docker_logs", &serde_json::json!({}), None);
+        let event = ai_tool_event("docker_logs", &serde_json::json!({}), None, None);
         assert_eq!(event.summary, "docker_logs 执行成功");
         assert_eq!(event.kind, "tool.executed");
     }
@@ -342,6 +359,7 @@ mod tests {
             "查了一张表",
             serde_json::json!({ "rowCount": 3 }),
             Some("user"),
+            None,
         );
         let value = serde_json::to_value(&event).expect("serialize");
         assert_eq!(value["assetId"], "a1");
@@ -350,10 +368,30 @@ mod tests {
         assert!(value["ts"].as_i64().expect("ts") > 0);
 
         // assetId / origin 缺省时省略键(契约:省略 = user)
-        let event = DomainEvent::now("tool.executed", None, "x", serde_json::Value::Null, None);
+        let event = DomainEvent::now(
+            "tool.executed",
+            None,
+            "x",
+            serde_json::Value::Null,
+            None,
+            None,
+        );
         let value = serde_json::to_value(&event).expect("serialize");
         assert!(value.get("assetId").is_none());
         assert!(value.get("origin").is_none());
+        assert!(value.get("sessionId").is_none());
+
+        // AI 起源事件带 sessionId(live-context 会话级过滤的依据)
+        let event = DomainEvent::now(
+            "ssh.exec_completed",
+            Some("a1".into()),
+            "ssh_exec: df -h",
+            serde_json::json!({ "tool": "ssh_exec" }),
+            Some("ai"),
+            Some("sess-9"),
+        );
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(value["sessionId"], "sess-9");
 
         // 前端上报形状(可缺 ts/data/origin)能反序列化
         let parsed: DomainEvent = serde_json::from_value(serde_json::json!({
@@ -364,6 +402,7 @@ mod tests {
         .expect("deserialize");
         assert_eq!(parsed.ts, 0);
         assert_eq!(parsed.origin, None);
+        assert_eq!(parsed.session_id, None);
     }
 
     #[test]

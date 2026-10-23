@@ -67,10 +67,6 @@ pub fn ssh_config_from_asset(asset_name: &str, config: &Value) -> Result<SshConf
         None
     };
 
-    // 堡垒机模式显式声明:None = 旧行为(MFA 资产一律按堡垒机,存量零回归);
-    // Some(false) = 普通 MFA 服务器(2FA 后是普通 shell),AI exec 不弹「选机器」。
-    let bastion_mode = config.get("bastionMode").and_then(Value::as_bool);
-
     let jump_host = get("jumpHost");
     let jump_auth = if jump_host.is_empty() {
         None
@@ -116,7 +112,6 @@ pub fn ssh_config_from_asset(asset_name: &str, config: &Value) -> Result<SshConf
             (!value.is_empty()).then(|| value.to_string())
         },
         kb_interactive,
-        bastion_mode,
         jump_host: (!jump_host.is_empty()).then(|| jump_host.to_string()),
         jump_port: config
             .get("jumpPort")
@@ -188,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn mfa_enables_keyboard_interactive_and_bastion_default() {
+    fn mfa_enables_keyboard_interactive() {
         let config = ssh_config_from_asset(
             "bastion",
             &json!({
@@ -200,15 +195,6 @@ mod tests {
         let kb = config.kb_interactive.expect("kb_interactive enabled");
         assert!(kb.enabled);
         assert_eq!(kb.password.as_deref(), Some("123456"));
-        // bastionMode 缺省 None = 旧行为(MFA 资产一律按堡垒机)
-        assert_eq!(config.bastion_mode, None);
-
-        let plain = ssh_config_from_asset(
-            "plain-mfa",
-            &json!({ "host": "h", "username": "u", "password": "p", "mfaEnabled": true, "bastionMode": false }),
-        )
-        .unwrap();
-        assert_eq!(plain.bastion_mode, Some(false));
     }
 
     #[test]

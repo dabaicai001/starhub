@@ -140,14 +140,6 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
     return asset.config.useKeyAuth === true || asset.config.authMode === 'key' ? 'key' : 'password'
   })
   const [mfaPassword, setMfaPassword] = useState('')
-  /**
-   * 堡垒机模式:勾选后 AI exec 走 pty「选机器」浮层(GateShell 类堡垒机必需);
-   * 不勾选 = 普通 MFA 服务器(2FA 后是普通 shell),AI exec 走普通 exec 通道,
-   * 不再弹「选机器」浮层。存量资产无此字段时后端按旧行为(视为堡垒机)处理,
-   * 表单默认勾选保持兼容(v0.116.8)。
-   */
-  const [bastionMode, setBastionMode] = useState<boolean>(() =>
-    asset === null ? true : asset.config.bastionMode !== false)
   const [privateKey, setPrivateKey] = useState('')
   const [privateKeyName, setPrivateKeyName] = useState('')
   const [passphrase, setPassphrase] = useState('')
@@ -223,7 +215,6 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
       if (sshAuth === 'mfa') {
         // 字段命名严格对齐 Vue SshConnectionForm.onSubmit 的 mfa 分支:
         // mfaEnabled + mfaPassword,主密码同时写入 password 作第一阶段认证。
-        // bastionMode 显式落库(false = 普通 MFA 服务器,AI exec 不弹「选机器」)。
         return {
           host: host.trim(),
           port,
@@ -232,7 +223,6 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
           usePasswordAuth: true,
           useKeyAuth: false,
           mfaEnabled: true,
-          bastionMode,
           password: mfaPassword !== '' ? mfaPassword : undefined,
           mfaPassword: mfaPassword !== '' ? mfaPassword : undefined,
         }
@@ -707,23 +697,6 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
                   disabled={preview}
                   onChange={(event) =>{  setMfaPassword(event.target.value) }}
                 />
-              </div>
-              <div className={s.formField}>
-                <label className={s.fieldLabel} htmlFor="conn-bastion-mode" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    id="conn-bastion-mode"
-                    type="checkbox"
-                    checked={bastionMode}
-                    disabled={preview}
-                    onChange={(event) =>{  setBastionMode(event.target.checked) }}
-                  />
-                  堡垒机(登录后需选择目标机器)
-                </label>
-                <span className={s.fieldHint}>
-                  {bastionMode
-                    ? 'AI 命令会先弹出「选机器」实时终端,需要人工选择目标机器;之后静默执行。普通 MFA 服务器(2FA 后直接是 shell)请取消勾选,AI 命令将直接执行。'
-                    : '普通 MFA 服务器:AI 命令经普通 exec 通道直接执行,不弹「选机器」浮层。'}
-                </span>
               </div>
               <div className={s.formField}>
                 <span className={s.fieldHint}>

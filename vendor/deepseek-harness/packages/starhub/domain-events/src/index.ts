@@ -51,6 +51,12 @@ export interface StarHubDomainEvent {
   readonly data?: unknown
   /** 事件起源;wire 上省略时规范化为 "user"。 */
   readonly origin: StarHubEventOrigin
+  /**
+   * 发起会话的 dsh agent 会话 id(仅 AI 起源事件携带):live-context 的 pre-step
+   * 注入按它做会话级过滤,只放行本会话自己产生的执行,别的会话的执行不串入
+   * (v0.140.3)。用户起源事件无会话,省略。
+   */
+  readonly sessionId?: string
 }
 
 /**
@@ -66,6 +72,8 @@ function parseDomainEvent(value: unknown): StarHubDomainEvent | undefined {
   if (typeof record.summary !== 'string' || record.summary === '') return undefined
   const assetId = record.assetId
   if (assetId !== undefined && (typeof assetId !== 'string' || assetId === '')) return undefined
+  const sessionId = record.sessionId
+  if (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId === '')) return undefined
   return {
     kind: record.kind,
     ...(assetId === undefined ? {} : { assetId }),
@@ -73,6 +81,7 @@ function parseDomainEvent(value: unknown): StarHubDomainEvent | undefined {
     summary: record.summary,
     ...(record.data === undefined ? {} : { data: record.data }),
     origin: record.origin === 'ai' ? 'ai' : 'user',
+    ...(sessionId === undefined ? {} : { sessionId }),
   }
 }
 

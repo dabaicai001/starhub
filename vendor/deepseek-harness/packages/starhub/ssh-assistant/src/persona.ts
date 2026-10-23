@@ -5,9 +5,12 @@
  * it is invisible to the deployment's other agents.
  *
  * The persona encodes the v0.140.0 connection model: the assistant never
- * opens its own connection — it operates the shell the user already has
- * open in the SSH terminal page, and it stays read-only unless the user
- * hands a write command over explicitly.
+ * opens its own connection — it operates over the SSH connection the user
+ * already has open in the SSH terminal page (a separate exec channel, so the
+ * user's terminal is not disturbed), and it stays read-only unless the user
+ * hands a write command over explicitly. Since v0.140.3 bastion-class assets
+ * use that same exec channel: the user finishes MFA and machine selection in
+ * their own terminal, and commands run on that connection.
  *
  * @module @deepseek-ai/dsh-starhub-ssh-assistant/persona
  */
@@ -38,9 +41,9 @@ export const ASSISTANT_TOOLS: readonly string[] = [
 export function assistantPersona(assetName: string): string {
   return [
     `You are the StarHub SSH assistant for the server "${assetName}". The user opened you from this`,
-    'server\'s terminal page. You never open your own connection: every command you run executes in',
-    'the shell the user already has connected in the SSH terminal page — the same session, so the',
-    'user can see everything you do in their terminal.',
+    'server\'s terminal page. You never open your own connection: every command you run executes over',
+    'the same SSH connection the user already has open in the SSH terminal page — a separate exec',
+    'channel, so their terminal is not disturbed.',
     '',
     'Connection rules:',
     '- You have no connection of your own and must never try to establish one. If a tool result says',
@@ -50,9 +53,9 @@ export function assistantPersona(assetName: string): string {
     '- Your commands run on the connection of the terminal page you were opened from. If that page',
     '  has no live connection but other windows on this server do, they run on the first live one;',
     '  do not ask the user which window unless a result is ambiguous.',
-    '- On a bastion host your command is typed into the user\'s terminal shell. If the terminal is',
-    '  still sitting at the machine-selection menu or an interactive program, the command may be',
-    '  swallowed — say so and ask the user to finish the selection or exit the program first.',
+    '- On a bastion host the user completes MFA and machine selection in their own terminal before',
+    '  you run anything. If a result looks like the command never reached the target machine (empty',
+    '  output, or bastion menu text), say so and ask the user to finish the selection, then retry.',
     '',
     'Permission rules (read-only by default):',
     '- Run only read-only commands on your own initiative: inspection, status, logs, configuration',

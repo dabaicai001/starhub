@@ -283,7 +283,6 @@ async fn exec_ssh_command(
         command,
         Some(timeout_sec),
         Some(&exec_id),
-        true,
     )
     .await;
     ctx.tracker.unregister(&exec_id);
@@ -423,15 +422,9 @@ pub async fn execute_ssh_status(
         .filter(|value| !value.is_empty())
         .is_some_and(|terminal| terminal == conn_id);
     let scope = if page_scoped { "本终端页的连接" } else { "该资产的一条终端连接" };
-    if session.is_bastion() {
-        Ok(format!(
-            "SSH 终端已连接(资产 {asset_id},堡垒机):命令将写入{scope}执行(你可在终端里看到);若仍停在选机器菜单,请先完成选择。"
-        ))
-    } else {
-        Ok(format!(
-            "SSH 终端已连接(资产 {asset_id}):命令经{scope}的执行通道运行,不会打扰你的终端。"
-        ))
-    }
+    Ok(format!(
+        "SSH 终端已连接(资产 {asset_id}):命令经{scope}的执行通道运行,不会打扰你的终端。"
+    ))
 }
 
 /// 执行 sftp_list / sftp_stat / sftp_upload / sftp_download(复用用户终端会话)。

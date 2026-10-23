@@ -122,17 +122,28 @@ fn bound_asset_id(ssh: &SshRuntime, args: &Value) -> Option<String> {
 /// 2. 经通知出口发 `starhub/domain.event`(bridge 转给 dsh 的 domain-events);
 /// 3. 写 recentExecs 缓存(每资产最近一次,输出尾部 ≤2KB;无资产绑定时跳过)。
 ///
+/// `params` 是摊平后的工具参数(bridge 的 `starhub/tool.execute` 兼容层把
+/// `{sessionId,name,args}` 还原成「方法名 = 工具名、参数 = args + 注入的
+/// sessionId」):其中的 `sessionId` 即发起调用的 dsh agent 会话 id,随事件与
+/// recentExecs 一并落库——live-context 的 pre-step 注入按它做**会话级过滤**,
+/// 只放行本会话自己产生的执行(v0.140.3)。
+///
 /// 失败路径不产生事件(用户拒绝/超时不代表 AI 动作完成)。
 pub fn after_tool_success(
     ssh: &SshRuntime,
     sink: &Arc<dyn EventSink>,
     state: &BridgeState,
     name: &str,
-    args: &Value,
+    params: &Value,
     output: &str,
 ) {
-    let asset_id = bound_asset_id(ssh, args);
-    let event = events::ai_tool_event(name, args, asset_id.clone());
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let asset_id = bound_asset_id(ssh, params);
+    let event = events::ai_tool_event(name, params, asset_id.clone(), session_id);
     let payload = serde_json::to_value(&event).unwrap_or_else(
         |_| json!({ "kind": events::kind_for_tool(name), "ts": events::unix_now() }),
     );
@@ -144,6 +155,7 @@ pub fn after_tool_success(
             summary: event.summary.clone(),
             tail: events::tail_of(output),
             ts: event.ts,
+            session_id: session_id.map(str::to_string),
         });
     }
 }
@@ -333,6 +345,47 @@ mod tests {
         assert_eq!(recents[0].asset_id, "a1");
         assert_eq!(recents[0].tool_name, "ssh_exec");
         assert_eq!(recents[0].tail, "active (running)");
+        // v0.140.3:发起会话 id 随事件与 recentExecs 落库(live-context 按它
+        // 做会话级过滤,别的会话的执行不串入上下文)
+        assert_eq!(recents[0].session_id.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn after_tool_success_keeps_the_initiating_session_id_distinct_per_call() {
+        let collector = Arc::new(Collector::default());
+        let sink: Arc<dyn EventSink> = Arc::clone(&collector) as Arc<dyn EventSink>;
+        let ssh = runtime_with(Arc::clone(&sink));
+        let state = BridgeState::default();
+        ssh.bind_session("assistant-a", "ssh", "a1", None);
+        ssh.bind_session("shell-b", "ssh", "a1", None);
+
+        after_tool_success(
+            &ssh,
+            &sink,
+            &state,
+            "ssh_exec",
+            &json!({ "sessionId": "assistant-a", "command": "df -h" }),
+            "50%",
+        );
+        after_tool_success(
+            &ssh,
+            &sink,
+            &state,
+            "ssh_exec",
+            &json!({ "sessionId": "shell-b", "command": "uptime" }),
+            "up 9 days",
+        );
+
+        let events = collector.events.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].1["sessionId"], "assistant-a");
+        assert_eq!(events[1].1["sessionId"], "shell-b");
+        drop(events);
+
+        // recentExecs 每资产只留最近一次:覆盖后归属最后的发起会话
+        let recents = state.recent_execs();
+        assert_eq!(recents.len(), 1);
+        assert_eq!(recents[0].session_id.as_deref(), Some("shell-b"));
     }
 
     #[test]
