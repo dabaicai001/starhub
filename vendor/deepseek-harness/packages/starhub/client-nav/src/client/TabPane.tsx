@@ -65,7 +65,8 @@ export function TabPane({ active, children, label, fill = false }: TabPaneProps)
     const host = hostRef.current
     if (host === null) return
     for (const [element, offset] of offsetsRef.current) {
-      if (!host.contains(element)) continue
+      // 已被内容更新换掉的旧节点:删掉引用,避免常驻面板长期持有已卸载 DOM。
+      if (!host.contains(element)) { offsetsRef.current.delete(element); continue }
       if (element.scrollTop !== offset.top) element.scrollTop = offset.top
       if (element.scrollLeft !== offset.left) element.scrollLeft = offset.left
     }
