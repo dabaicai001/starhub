@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.140.3(🔧 **SSH AI 命令一律走 exec 通道:堡垒机「选机器」pty 分支与 `bastionMode` 勾选框整体退役**:v0.140.0~v0.140.2 对堡垒机类资产(kb-interactive MFA)把 AI 命令写入用户终端 pty 并经 tap 哨兵回采,配资产级「堡垒机(登录后需选择目标机器)」勾选框。在阿里云 BastionHost 上实测(不断线,复用终端页「监控」面板的 exec 采集做探针,三页三数据集对账):用户选完目标机后 **exec 通道可用,且落在该连接所选的机器上**;历史那条「Channel send error」是旧模型 AI 自建连接停在选机器菜单时开 exec 所致,不是 exec 不被支持。现在 `ssh_exec_core` 去掉 `bastion_interactive` 参数与整条 pty 分支(AI 与 UI 路径共用同一执行体),删除 `SshSession::is_bastion()`、`SshConfig.bastion_mode`、`asset_config` 的 `bastionMode` 解析、随之死亡的 pty tap 机器(`pty_tap`/`pty_alive`/`exec_on_terminal_pty`/`collect_terminal_command`/`clean_pty_stdout`/`strip_ansi` 等)与 `ssh_session_status` 的堡垒机文案分支;前端连接表单删勾选框/状态/配置字段,`ui.ssh_connect` 不再下发 `bastion_mode`;`ssh_exec`/`ssh_session_status` 工具描述与助手 persona 改述为「同一连接的 exec 通道,不打扰用户终端」。存量资产 config 里残留的 `bastionMode` 键被两端忽略,零回归。) |
+| 当前版本 | v0.140.4(🐛 **工作台标签切换丢状态(滚动回顶、未保存编辑丢失、资产页整页重载)**:资产页之间此前共用一个 iframe 换 `src`,切回即重新导航,页内的查询标签、连接与草稿全部重来;页内标签(DB 查询/表数据、Redis 键值/分析、ES 概览/检索/索引、Docker 容器/镜像、SSH 文件/AI/监控)又用条件渲染,切走即卸载,滚动位置、分页/筛选、未提交的单元格编辑与编辑器光标一起丢失。现在统一改为常驻标签:资产页一页一个 iframe(非活动页 `visibility:hidden`,同一个文档不再导航),页内标签由新增的 `TabPane` 只切可见性(`display:contents` 保持原布局,隐藏期间滚动偏移被浏览器归零时重新激活回填)。DB 表标签切回后网格不重挂、不重新请求,分页/筛选/未保存编辑与滚动位置都在;Redis 分析页(BigKey/内存分析结果)、SFTP 当前目录、ES 文档分页同样保留。监控页隐藏时暂停 5s 自动采集、重新可见即补采;Redis 分析页 / ES 检索页 / Docker 镜像页 / SSH 侧栏页仍在首次进入时才挂载,避免隐藏页提前发请求。) |
 
 ## 架构一句话
 
@@ -145,4 +145,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-10-23 (v0.140.3)*
+*最后更新: 2026-10-29 (v0.140.4)*
