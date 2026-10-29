@@ -1789,7 +1789,13 @@ describe('RedisWorkbench 增强(初始库 / 类型过滤 / 批量删除 / 分析
       fireEvent.click(screen.getByText('big:1'))
       await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('db_redis_get_value', { connId: 'c1', key: 'big:1' }) })
       expect((screen.getByRole('tab', { name: '键值' })).getAttribute('aria-selected')).toBe('true')
-      expect(screen.queryByText('服务器信息')).toBeNull()
+      // 分析页改为常驻:切回键值只隐藏(分析结果与滚动不丢),DOM 仍在但不可见。
+      expect(screen.getByText('服务器信息').closest('[data-tab-active]')?.getAttribute('data-tab-active')).toBe('false')
+      // 再切回分析:直接复用已加载结果,不重新请求 INFO。
+      const infoCalls = invoke.mock.calls.filter(c => c[0] === 'db_redis_info').length
+      fireEvent.click(screen.getByRole('tab', { name: '分析' }))
+      await waitFor(() =>{  expect(screen.getByText('服务器信息').closest('[data-tab-active]')?.getAttribute('data-tab-active')).toBe('true') })
+      expect(invoke.mock.calls.filter(c => c[0] === 'db_redis_info').length).toBe(infoCalls)
     } finally {
       restore()
       confirmSpy.mockRestore()
@@ -1889,7 +1895,7 @@ describe('RedisWorkbench 增强(初始库 / 类型过滤 / 批量删除 / 分析
       // 内存分析空结果。
       fireEvent.click(screen.getByText('开始分析'))
       await waitFor(() =>{  expect(screen.getByText('暂无数据(当前库无 key)。')).toBeTruthy() })
-      // 切回「键值」页签:分析面板卸载。
+      // 切回「键值」页签:分析面板隐藏(常驻),键值页恢复可见。
       fireEvent.click(screen.getByRole('tab', { name: '键值' }))
       await waitFor(() =>{  expect(screen.getByText('未选择 Key')).toBeTruthy() })
     } finally {

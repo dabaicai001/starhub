@@ -122,6 +122,11 @@ function renderWorkbench() {
   return render(<DockerWorkbench asset={asset} onClose={vi.fn()} />)
 }
 
+/** 当前可见的镜像页(容器页常驻隐藏,DOM 里仍有同名镜像文本)。 */
+function imagesPanel(): HTMLElement {
+  return screen.getByRole('tabpanel', { name: '镜像' })
+}
+
 describe('DockerWorkbench', () => {
   it('connects on mount, loads lists, and renders the dashboard + running rows', async () => {
     ;(globalThis as unknown as { ResizeObserver: typeof ResizeObserverMock }).ResizeObserver = ResizeObserverMock
@@ -373,7 +378,7 @@ describe('DockerWorkbench', () => {
     renderWorkbench()
     await waitFor(() =>{  expect(screen.getByText('web')).toBeTruthy() })
     fireEvent.click(screen.getByRole('tab', { name: '镜像' }))
-    await waitFor(() =>{  expect(screen.getByText('nginx:latest')).toBeTruthy() })
+    await waitFor(() =>{  expect(within(imagesPanel()).getByText('nginx:latest')).toBeTruthy() })
 
     // 拉取:空名禁用,输入后提交
     fireEvent.click(screen.getByRole('button', { name: '拉取镜像' }))
@@ -385,7 +390,7 @@ describe('DockerWorkbench', () => {
     await waitFor(() =>{  expect(screen.queryByPlaceholderText('名称[:tag],如 nginx:latest')).toBeNull() })
 
     // 删除镜像
-    await waitFor(() =>{  expect(screen.getByText('nginx:latest')).toBeTruthy() })
+    await waitFor(() =>{  expect(within(imagesPanel()).getByText('nginx:latest')).toBeTruthy() })
     fireEvent.click(screen.getByLabelText('删除镜像'))
     await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('docker_remove_image', expect.anything()) })
 
@@ -610,7 +615,7 @@ describe('DockerWorkbench', () => {
     })
     // images tab + images 刷新(316)
     fireEvent.click(screen.getByRole('tab', { name: '镜像' }))
-    await waitFor(() =>{  expect(screen.getByText('nginx:latest')).toBeTruthy() })
+    await waitFor(() =>{  expect(within(imagesPanel()).getByText('nginx:latest')).toBeTruthy() })
     const beforeImg = invoke.mock.calls.length
     fireEvent.click(screen.getByRole('button', { name: '刷新' }))
     await waitFor(() => {
@@ -640,7 +645,7 @@ describe('DockerWorkbench', () => {
     renderWorkbench()
     await waitFor(() =>{  expect(screen.getByText('web')).toBeTruthy() })
     fireEvent.click(screen.getByRole('tab', { name: '镜像' }))
-    await waitFor(() =>{  expect(screen.getByText('nginx:latest')).toBeTruthy() })
+    await waitFor(() =>{  expect(within(imagesPanel()).getByText('nginx:latest')).toBeTruthy() })
     // 打开 modal
     fireEvent.click(screen.getByRole('button', { name: '拉取镜像' }))
     // 取消(356)
@@ -719,7 +724,7 @@ describe('DockerWorkbench', () => {
     renderWorkbench()
     await waitFor(() =>{  expect(screen.getByText('web')).toBeTruthy() })
     fireEvent.click(screen.getByRole('tab', { name: '镜像' }))
-    await waitFor(() =>{  expect(screen.getByText('nginx:latest')).toBeTruthy() })
+    await waitFor(() =>{  expect(within(imagesPanel()).getByText('nginx:latest')).toBeTruthy() })
     // 拉取失败
     fireEvent.click(screen.getByRole('button', { name: '拉取镜像' }))
     fireEvent.change(screen.getByPlaceholderText('名称[:tag],如 nginx:latest'), { target: { value: 'redis:7' } })

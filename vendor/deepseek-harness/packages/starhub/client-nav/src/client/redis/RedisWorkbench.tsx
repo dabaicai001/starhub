@@ -73,6 +73,7 @@ import { allFolderPaths, buildKeyTree, countLeaves, leafKeys, type KeyTreeNode }
 import { RedisValueEditor } from './RedisValueEditor.tsx'
 import { RedisAnalysisPanel } from './RedisAnalysisPanel.tsx'
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
+import { TabPane } from '../TabPane.tsx'
 import css from './RedisWorkbench.module.css'
 
 /** Redis 固定 DB 编号(单机 0-15)。 */
@@ -486,6 +487,9 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
   const [selectedKeys, setSelectedKeys] = useState<ReadonlyMap<number, ReadonlySet<string>>>(new Map())
   /** 右侧主区页签:键值(现有内容)/ 分析(RedisAnalysisPanel)。 */
   const [mainTab, setMainTab] = useState<'keys' | 'analysis'>('keys')
+  // 分析页首次进入才挂载(INFO / 慢日志随挂载加载),之后切走只隐藏不卸载:
+  // 慢日志、BigKey、内存分析结果与滚动位置在键值/分析之间来回切换后仍保留。
+  const [analysisMounted, setAnalysisMounted] = useState(false)
   const [cliOpen, setCliOpen] = useState(false)
   const [cliInput, setCliInput] = useState('')
   const [cliOutput, setCliOutput] = useState<string>('')
@@ -1185,16 +1189,9 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                   onClick={() =>{  setMainTab('keys') }}>键值</button>
                 <button type="button" role="tab" aria-selected={mainTab === 'analysis'}
                   className={mainTab === 'analysis' ? css.mainTabActive : css.mainTab}
-                  onClick={() =>{  setMainTab('analysis') }}>分析</button>
+                  onClick={() =>{  setAnalysisMounted(true); setMainTab('analysis') }}>分析</button>
               </div>
-              {mainTab === 'analysis' ? (
-                <RedisAnalysisPanel connId={id} activeDb={activeDb}
-                  onOpenKey={(key, type) => {
-                    // BigKey 行点击:切回「键值」页并打开该 key(分析基于连接当前库)。
-                    setOpenValue({ key, type })
-                    setMainTab('keys')
-                  }} />
-              ) : (
+              <TabPane active={mainTab === 'keys'} label="键值">
                 <>
                   {renaming !== null && (
                     <div className={css.renameBar}>
@@ -1232,7 +1229,17 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
                     </div>
                   )}
                 </>
-              )}
+              </TabPane>
+              <TabPane active={mainTab === 'analysis'} label="分析">
+                {analysisMounted && (
+                  <RedisAnalysisPanel connId={id} activeDb={activeDb}
+                    onOpenKey={(key, type) => {
+                      // BigKey 行点击:切回「键值」页并打开该 key(分析基于连接当前库)。
+                      setOpenValue({ key, type })
+                      setMainTab('keys')
+                    }} />
+                )}
+              </TabPane>
             </div>
           </div>
         )}

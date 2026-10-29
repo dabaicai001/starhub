@@ -49,6 +49,7 @@ import { CommandPalette, type PaletteAction } from './CommandPalette.tsx'
 import { TerminalFindBar } from './TerminalFindBar.tsx'
 import { TerminalSettingsMenu } from './TerminalSettingsMenu.tsx'
 import { HostMonitorPanel } from './HostMonitorPanel.tsx'
+import { TabPane } from '../TabPane.tsx'
 import { useTerminalTheme } from './terminal-theme.ts'
 import { terminalOptions, updateTerminalSettings, useTerminalSettings } from './terminal-settings.ts'
 import {
@@ -239,6 +240,12 @@ export function SshTerminalOverlay({ asset, onClose }: SshTerminalOverlayProps) 
   /** 连接代次:点「重新连接」+1,重跑建连 effect(会话 id 与终端随之重建)。 */
   const [connectNonce, setConnectNonce] = useState(0)
   const [sidePanel, setSidePanel] = useState<SidePanel>(null)
+  /**
+   * 打开过的侧栏页(文件 / AI / 监控)。首次打开才挂载(SFTP 建会话、AI 开会话
+   * 都要经宿主,不能因为切到别的页就提前触发),之后页间切换只隐藏不卸载:
+   * SFTP 当前目录与列表滚动、AI 对话滚动、监控指标都不再被重置。
+   */
+  const [mountedPanels, setMountedPanels] = useState<ReadonlySet<Exclude<SidePanel, null>>>(() => new Set())
   // SFTP / 网页右栏宽度(px):拖左边框调整,夹在 min 与 max 之间;宽度记忆在
   // localStorage(side-panel-width.ts),重开侧栏沿用上次拖好的值。
   const [sidePanelWidth, setSidePanelWidth] = useState(loadSidePanelWidth)
@@ -989,8 +996,19 @@ export function SshTerminalOverlay({ asset, onClose }: SshTerminalOverlayProps) 
   const sidePanelDetail = sidePanel === 'ai'
     ? '复用 dsh 模型连接'
     : sidePanel === 'monitor' ? '只读采集,不干扰终端会话' : '与当前 SSH 会话共享连接'
+  /** 打开侧栏页(首次打开才挂载),并记入常驻集合。 */
+  const openSidePanel = useCallback((panel: Exclude<SidePanel, null>): void => {
+    setMountedPanels(prev => (prev.has(panel) ? prev : new Set(prev).add(panel)))
+    setSidePanel(panel)
+  }, [])
+  /** 收起侧栏:整栏卸载(面板内状态丢弃),下次打开按需重新挂载。 */
+  const closeSidePanel = useCallback((): void => {
+    setSidePanel(null)
+    setMountedPanels(new Set())
+  }, [])
   const toggleSidePanel = (panel: Exclude<SidePanel, null>): void => {
-    setSidePanel(current => current === panel ? null : panel)
+    if (sidePanel === panel) { closeSidePanel(); return }
+    openSidePanel(panel)
   }
   // 助手会话 id:面板打开时回传,overlay 卸载(关页面)时销毁——助手随终端
   // 页开合自动建/销毁,不在后台常驻。
@@ -1036,9 +1054,9 @@ export function SshTerminalOverlay({ asset, onClose }: SshTerminalOverlayProps) 
       { id: 'act-font-inc', label: '增大字号', group: '终端操作', run: () => { bumpFontSize(1) } },
       { id: 'act-font-dec', label: '减小字号', group: '终端操作', run: () => { bumpFontSize(-1) } },
       { id: 'act-fullscreen', label: fullscreen ? '退出全屏' : '全屏显示', group: '终端操作', run: () => { setFullscreen(value => !value) } },
-      { id: 'act-sftp', label: '打开文件面板', group: '工作区', run: () => { setSidePanel('sftp') } },
-      { id: 'act-ai', label: '打开 AI 助手', group: '工作区', run: () => { setSidePanel('ai') } },
-      { id: 'act-monitor', label: '打开主机监控', group: '工作区', run: () => { setSidePanel('monitor') } },
+      { id: 'act-sftp', label: '打开文件面板', group: '工作区', run: () => { openSidePanel('sftp') } },
+      { id: 'act-ai', label: '打开 AI 助手', group: '工作区', run: () => { openSidePanel('ai') } },
+      { id: 'act-monitor', label: '打开主机监控', group: '工作区', run: () => { openSidePanel('monitor') } },
       { id: 'act-broadcast', label: '广播命令到多个会话', group: '工作区', run: () => void openBroadcast() },
       { id: 'act-quick', label: '管理快捷命令', group: '工作区', run: () => { setQuickEditorOpen(true) } },
       { id: 'act-settings', label: '终端设置', group: '工作区', run: () => { setSettingsOpen(true) } },
@@ -1255,34 +1273,44 @@ export function SshTerminalOverlay({ asset, onClose }: SshTerminalOverlayProps) 
                   <span className={css.sidePanelTitle}>{sidePanelLabel}</span>
                   <span className={css.sidePanelDetail}>{sidePanelDetail}</span>
                 </div>
-                <button type="button" className={css.sidePanelClose} onClick={() =>{  setSidePanel(null) }} title="收起面板" aria-label="收起侧边面板">
+                <button type="button" className={css.sidePanelClose} onClick={closeSidePanel} title="收起面板" aria-label="收起侧边面板">
                   <IconCloseOutlineMedium size={14} />
                 </button>
               </header>
               <div className={css.sidePanelBody}>
-                {sidePanel === 'ai'
-                  ? (
+                {mountedPanels.has('ai') && (
+                  <TabPane active={sidePanel === 'ai'} label="AI 助手" fill>
                     <SshAssistantPanel
                       sshSessionId={sessionId}
                       assetId={asset.id}
                       assetName={asset.name}
                       onOpened={(id) =>{  assistantIdRef.current = id }}
                     />
-                  )
-                  : sidePanel === 'monitor'
-                    ? <HostMonitorPanel sessionId={sessionId} sshConnected={connected} />
-                    : (
-                      <SftpPanel
-                        asset={asset}
-                        sessionId={sessionId}
-                        sshConnected={connected}
-                        sshCwd={sshCwd}
-                        onFollowTerminal={onFollowTerminal}
-                        transferActiveCount={transferTasks.activeCount}
-                        onOpenTransfers={() => { setTransferDialogOpen(true) }}
-                        uploadDoneNonce={transferTasks.uploadDoneNonce}
-                      />
-                    )}
+                  </TabPane>
+                )}
+                {mountedPanels.has('monitor') && (
+                  <TabPane active={sidePanel === 'monitor'} label="主机监控" fill>
+                    <HostMonitorPanel
+                      sessionId={sessionId}
+                      sshConnected={connected}
+                      active={sidePanel === 'monitor'}
+                    />
+                  </TabPane>
+                )}
+                {mountedPanels.has('sftp') && (
+                  <TabPane active={sidePanel === 'sftp'} label="文件" fill>
+                    <SftpPanel
+                      asset={asset}
+                      sessionId={sessionId}
+                      sshConnected={connected}
+                      sshCwd={sshCwd}
+                      onFollowTerminal={onFollowTerminal}
+                      transferActiveCount={transferTasks.activeCount}
+                      onOpenTransfers={() => { setTransferDialogOpen(true) }}
+                      uploadDoneNonce={transferTasks.uploadDoneNonce}
+                    />
+                  </TabPane>
+                )}
               </div>
             </aside>
           )}

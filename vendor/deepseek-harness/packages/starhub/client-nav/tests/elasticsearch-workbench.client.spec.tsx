@@ -5,7 +5,7 @@
  * 通过宿主桥 invoke 替身驱动 db_es_* 命令。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { RustAsset } from '../src/client/store.ts'
 import { ElasticsearchWorkbench } from '../src/client/es/ElasticsearchWorkbench.tsx'
 import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
@@ -200,8 +200,10 @@ describe('ElasticsearchWorkbench index detail', () => {
       expect(screen.getAllByText('text').length).toBeGreaterThan(0)
       // Delete index from overview table via the confirm dialog.
       fireEvent.click(screen.getByRole('button', { name: '概览' }))
-      await screen.findByText(/logs/)
-      fireEvent.click(screen.getAllByText('删除')[0]!)
+      // 索引页常驻隐藏后仍在 DOM(索引名重复),概览查询限定在可见面板内。
+      const overview = screen.getByRole('tabpanel', { name: '概览' })
+      await within(overview).findByText(/logs/)
+      fireEvent.click(within(overview).getAllByText('删除')[0]!)
       expect(await screen.findByText(/确认删除索引 logs/)).toBeTruthy()
       // The confirm dialog's delete button is the last "删除" button in the DOM.
       fireEvent.click(screen.getAllByRole('button', { name: '删除' }).at(-1)!)
@@ -867,7 +869,9 @@ describe('ElasticsearchWorkbench 文档子页(db.es.* 文档 CRUD)', () => {
     try {
       await openDocuments()
       await screen.findByText('doc-1')
-      fireEvent.click(screen.getAllByText('删除')[0]!)
+      // 概览页常驻隐藏仍有「删除」按钮:文档行删除限定在可见文档面板内。
+      const documents = screen.getByRole('tabpanel', { name: '文档' })
+      fireEvent.click(within(documents).getAllByText('删除')[0]!)
       // 确认弹窗:目标 id 明示;弹窗里的「删除」是最后一个同名按钮。
       await waitFor(() =>{  expect(screen.getByText(/确认删除文档 doc-1/)).toBeTruthy() })
       const confirmBtn = screen.getAllByText('删除', { selector: 'button' }).at(-1)!

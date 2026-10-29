@@ -25,14 +25,19 @@ export interface HostMonitorPanelProps {
   sessionId: string
   /** SSH 是否已连接(断开时只展示占位)。 */
   sshConnected: boolean
+  /**
+   * 是否为当前可见页。常驻标签隐藏期间停止自动刷新,重新可见时立即补采一次;
+   * 缺省视为可见(独立使用该面板时行为不变)。
+   */
+  active?: boolean
 }
 
 /**
  * 渲染主机监控面板。
- * @param props - 会话 id 与连接状态。
+ * @param props - 会话 id、连接状态与可见性。
  * @returns 监控面板。
  */
-export function HostMonitorPanel({ sessionId, sshConnected }: HostMonitorPanelProps) {
+export function HostMonitorPanel({ sessionId, sshConnected, active = true }: HostMonitorPanelProps) {
   const [metrics, setMetrics] = useState<HostMetrics | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,14 +72,14 @@ export function HostMonitorPanel({ sessionId, sshConnected }: HostMonitorPanelPr
     }
   }, [sessionId, sshConnected])
 
-  // 首次进入 / 换会话时采集一次;自动刷新按间隔续采。
+  // 首次进入 / 换会话 / 从隐藏切回时采集一次;自动刷新按间隔续采(隐藏时暂停)。
   useEffect(() => {
-    if (!sshConnected) return
+    if (!sshConnected || !active) return
     void refresh()
     if (!auto) return
     const timer = window.setInterval(() => { void refresh() }, AUTO_REFRESH_MS)
     return () => { window.clearInterval(timer) }
-  }, [auto, refresh, sshConnected])
+  }, [active, auto, refresh, sshConnected])
 
   if (!sshConnected) {
     return (

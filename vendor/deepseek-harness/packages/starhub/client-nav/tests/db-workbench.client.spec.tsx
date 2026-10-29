@@ -555,6 +555,39 @@ describe('DbWorkbench', () => {
     unmount()
   })
 
+  it('表标签切走再切回:网格不卸载,滚动位置与未保存编辑保留且不重新拉数据', async () => {
+    const { calls } = stubInvoke({ tables: [{ name: 'users' }, { name: 'orders' }] })
+    const { unmount } = render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
+    await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
+    fireEvent.click(screen.getByTitle('app'))
+    await waitFor(() =>{  expect(screen.getByText('users')).toBeTruthy() })
+    fireEvent.click(screen.getByText('users'))
+    await waitFor(() =>{  expect(screen.getByText('alice')).toBeTruthy() })
+    const usersPane = screen.getByRole('tabpanel', { name: 'users' })
+    // 下拉到底部(虚拟滚动容器的偏移由 TabPane 记录)。
+    const body = within(usersPane).getByRole('rowgroup') as HTMLElement
+    body.scrollTop = 240
+    fireEvent.scroll(body)
+    // 改一个单元格并提交(Enter),制造未保存的 dirty 值。
+    fireEvent.doubleClick(within(usersPane).getByText('alice'))
+    const editor = screen.getByTestId('cell-edit-input')
+    fireEvent.change(editor, { target: { value: 'alice-edited' } })
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    const loadsBefore = calls.filter(([cmd]) => cmd === 'db_mysql_get_table_data').length
+
+    fireEvent.click(screen.getByRole('tab', { name: '查询 1' }))
+    // 隐藏期间模拟浏览器把滚动偏移归零。
+    body.scrollTop = 0
+    fireEvent.click(screen.getByRole('tab', { name: 'users' }))
+
+    // 同一个网格 DOM 原样回来(没有重挂 → 也没有重新请求/get_table_data 抖动)。
+    expect(screen.getByRole('tabpanel', { name: 'users' })).toBe(usersPane)
+    expect(body.scrollTop).toBe(240)
+    expect(within(usersPane).getByText('alice-edited')).toBeTruthy()
+    expect(calls.filter(([cmd]) => cmd === 'db_mysql_get_table_data').length).toBe(loadsBefore)
+    unmount()
+  })
+
   it('disables the run button on a new empty query and re-enables after typing', async () => {
     stubInvoke({})
     render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)

@@ -298,6 +298,11 @@ describe('SshTerminalOverlay', () => {
     fireEvent.click(getByRole('button', { name: /文件/ }))
     await waitFor(() =>{  expect(invoke).toHaveBeenCalledWith('sftp_list', { id: SESSION_ID, path: '/srv/app' }) })
     expect(invoke).not.toHaveBeenCalledWith('sftp_list', { id: SESSION_ID, path: '/home/deploy' })
+    // 切到监控再切回:文件页常驻,当前目录与列表原样(不重新 ensure / list)。
+    const listCalls = invoke.mock.calls.filter(([cmd]) => cmd === 'sftp_list').length
+    fireEvent.click(getByRole('button', { name: /监控/ }))
+    fireEvent.click(getByRole('button', { name: /文件/ }))
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'sftp_list').length).toBe(listCalls)
     unmount()
   })
   it('injects the OSC 7 hook on an ANSI-colored prompt and SFTP follows the extracted cwd', async () => {

@@ -31,6 +31,7 @@ import {
   formatBytes, type ContainerInfo, type ContainerStats, type DockerConnectParams, type ImageInfo,
 } from './docker-service.ts'
 import { DockerExecTerminal } from './DockerExecTerminal.tsx'
+import { TabPane } from '../TabPane.tsx'
 import css from './DockerWorkbench.module.css'
 
 /** Docker 连接参数(把资产 config 转成 DockerConnectParams;键与 Vue docker.ts 同契约)。 */
@@ -158,6 +159,13 @@ export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose:
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [tab, setTab] = useState<WorkbenchTab>('containers')
+  /** 镜像页首次打开才挂载(之后常驻,镜像列表滚动不丢)。 */
+  const [imagesVisited, setImagesVisited] = useState(false)
+  /** 打开一个内容页(镜像页标记常驻后切换)。 */
+  const openTab = (next: WorkbenchTab): void => {
+    if (next === 'images') setImagesVisited(true)
+    setTab(next)
+  }
   const [showAll, setShowAll] = useState(false)
   const [containers, setContainers] = useState<Loadable<ContainerInfo>>({ items: [], loading: false, error: null })
   const [images, setImages] = useState<Loadable<ImageInfo>>({ items: [], loading: false, error: null })
@@ -384,8 +392,8 @@ export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose:
                 <DashboardCard label="镜像" value={counts.images} accent="cyan" />
               </div>
               <div className={css.contentToolbar} role="tablist" aria-label="Docker 工作区">
-                <button type="button" role="tab" aria-label="容器" aria-selected={tab === 'containers'} className={tab === 'containers' ? css.contentTabActive : css.contentTab} onClick={() =>{  setTab('containers') }}><span aria-hidden="true">容器</span> <span aria-hidden="true">{counts.total}</span></button>
-                <button type="button" role="tab" aria-label="镜像" aria-selected={tab === 'images'} className={tab === 'images' ? css.contentTabActive : css.contentTab} onClick={() =>{  setTab('images') }}><span aria-hidden="true">镜像</span> <span aria-hidden="true">{counts.images}</span></button>
+                <button type="button" role="tab" aria-label="容器" aria-selected={tab === 'containers'} className={tab === 'containers' ? css.contentTabActive : css.contentTab} onClick={() =>{  openTab('containers') }}><span aria-hidden="true">容器</span> <span aria-hidden="true">{counts.total}</span></button>
+                <button type="button" role="tab" aria-label="镜像" aria-selected={tab === 'images'} className={tab === 'images' ? css.contentTabActive : css.contentTab} onClick={() =>{  openTab('images') }}><span aria-hidden="true">镜像</span> <span aria-hidden="true">{counts.images}</span></button>
                 <span className={css.contentDetail}>{tab === 'containers' ? '管理运行实例、日志和终端会话' : '拉取、检查和清理镜像'}</span>
                 <span className={css.spacer} />
                 {tab === 'images' && (
@@ -402,7 +410,9 @@ export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose:
                 )}
                 <button type="button" className={css.toolIcon} onClick={() => tab === 'containers' ? void loadContainers() : void loadImages()} disabled={tab === 'containers' ? containers.loading : images.loading} title="刷新" aria-label="刷新"><IconRefreshOutlineMedium size={14} /></button>
               </div>
-              {tab === 'containers' && (
+              {/* 容器 / 镜像两页常驻:切走只隐藏,列表滚动、展开的日志与统计
+                  详情在来回切换后仍保留。 */}
+              <TabPane active={tab === 'containers'} label="容器">
                 <ContainersView
                   load={containers}
                   showAll={showAll}
@@ -415,14 +425,16 @@ export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose:
                   onToggleStats={c => void toggleStats(c)}
                   onExec={(c) =>{  setExec({ container: c }) }}
                 />
-              )}
-              {tab === 'images' && (
+              </TabPane>
+              {imagesVisited && (
+              <TabPane active={tab === 'images'} label="镜像">
                 <ImagesView
                   load={images}
                   onRefresh={() => void loadImages()}
                   onPullOpen={() =>{  setPullOpen(true) }}
                   onRemove={img => void runRemoveImage(img)}
                 />
+              </TabPane>
               )}
             </main>
           </div>

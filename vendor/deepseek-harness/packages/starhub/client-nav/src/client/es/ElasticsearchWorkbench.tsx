@@ -36,6 +36,7 @@ import {
 } from './es-service.ts'
 import { healthColor, fieldTypeColor } from './es-service.ts'
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
+import { TabPane } from '../TabPane.tsx'
 import css from './ElasticsearchWorkbench.module.css'
 
 /** Connection state. */
@@ -102,6 +103,16 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
   const [connState, setConnState] = useState<ConnState>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<EsTab>('overview')
+  /**
+   * 进入过的页。首次进入才挂载、之后常驻(切走只隐藏):检索页的索引下拉与
+   * 结果区常驻后会在切回概览时留下同名文本,首次进入才建可避免无关页常驻。
+   */
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<EsTab>>(() => new Set<EsTab>(['overview']))
+  /** 打开一个主标签(标记常驻后切换)。 */
+  const openTab = useCallback((next: EsTab): void => {
+    setVisitedTabs(prev => (prev.has(next) ? prev : new Set(prev).add(next)))
+    setTab(next)
+  }, [])
 
   const [health, setHealth] = useState<ClusterHealthInfo | null>(null)
   const [indices, setIndices] = useState<EsIndexInfo[]>([])
@@ -123,6 +134,8 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null)
   // 索引详情子页:映射 / 文档(文档子页走 db.es.* 文档 CRUD)。
   const [indexSubTab, setIndexSubTab] = useState<'mapping' | 'documents'>('mapping')
+  /** 文档子页首次打开才挂载(之后常驻,文档分页与表格滚动不丢)。 */
+  const [documentsVisited, setDocumentsVisited] = useState(false)
   const [docResult, setDocResult] = useState<EsSearchResult | null>(null)
   const [docLoading, setDocLoading] = useState(false)
   const [docFrom, setDocFrom] = useState(0)
@@ -235,7 +248,7 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
     setSelectedIndex(name)
     searchIndexRef.current = name
     setSearchIndex(name)
-    setTab('index')
+    openTab('index')
     setIndexSubTab('mapping')
     setMappingLoading(true)
     setMapping(null)
@@ -255,7 +268,7 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
         setMappingLoading(false)
       }
     }
-  }, [fail])
+  }, [fail, openTab])
 
   // ─── 文档子页(db.es.* 文档 CRUD) ───
 
@@ -507,9 +520,9 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
           <span className={css.muted}>· {health?.numberOfNodes ?? 0} nodes</span>
         </div>
         <nav className={css.tabs}>
-          <button type="button" className={tab === 'overview' ? css.tabActive : ''} onClick={() =>{  setTab('overview') }}>概览</button>
-          <button type="button" className={tab === 'search' ? css.tabActive : ''} onClick={() =>{  setTab('search') }}>检索</button>
-          <button type="button" className={tab === 'index' ? css.tabActive : ''} onClick={() =>{  setTab('index') }}>索引</button>
+          <button type="button" className={tab === 'overview' ? css.tabActive : ''} onClick={() =>{  openTab('overview') }}>概览</button>
+          <button type="button" className={tab === 'search' ? css.tabActive : ''} onClick={() =>{  openTab('search') }}>检索</button>
+          <button type="button" className={tab === 'index' ? css.tabActive : ''} onClick={() =>{  openTab('index') }}>索引</button>
           <button type="button" className={css.headerBtn} onClick={() =>{  setShowNewIndex(true) }}>新建索引</button>
         </nav>
         <button type="button" className={css.closeBtn} onClick={onClose}>关闭</button>
@@ -517,7 +530,9 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
 
       {error !== null && <div className={css.error}>{error}</div>}
 
-      {tab === 'overview' && (
+      {/* 概览 / 检索 / 索引三页常驻:切走只隐藏,表格与结果区滚动、DSL 光标、
+          文档分页在来回切换后仍保留。 */}
+      <TabPane active={tab === 'overview'} label="概览">
         <div className={css.body}>
           <div className={css.indicesHead}>
             <div className={css.summary}>
@@ -546,9 +561,10 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
             </table>
           )}
         </div>
-      )}
+      </TabPane>
 
-      {tab === 'search' && (
+      {visitedTabs.has('search') && (
+      <TabPane active={tab === 'search'} label="检索">
         <div className={`${css.body} ${css.searchLayout}`}>
           <div className={css.dslPanel}>
             <div className={css.panelHead}>
@@ -623,9 +639,15 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
             {result === null && searchLoading && <div className={css.empty}>查询中…</div>}
           </div>
         </div>
+      </TabPane>
       )}
 
-      {tab === 'index' && selectedIndex !== null && (
+      {visitedTabs.has('index') && (
+      <TabPane active={tab === 'index'} label="索引">
+        {selectedIndex === null ? (
+          <div className={`${css.body} ${css.empty}`}>从概览选择一个索引</div>
+        ) : (
+        <>
         <div className={css.body}>
           <div className={css.indicesHead}>
             <h3 className={css.sectionTitle}>{selectedIndex}</h3>
@@ -634,7 +656,7 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
                 <button type="button" className={indexSubTab === 'mapping' ? css.subTabActive : css.subTab}
                   onClick={() =>{  setIndexSubTab('mapping') }}>映射</button>
                 <button type="button" className={indexSubTab === 'documents' ? css.subTabActive : css.subTab}
-                  onClick={() =>{  setIndexSubTab('documents') }}>文档</button>
+                  onClick={() =>{  setDocumentsVisited(true); setIndexSubTab('documents') }}>文档</button>
               </div>
               <button type="button" className={css.smallBtn}
                 onClick={() =>{  void (indexSubTab === 'documents' ? loadDocuments(docFrom, docSize) : selectIndex(selectedIndex)) }}>
@@ -651,7 +673,8 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
             </span>
           </div>
 
-          {indexSubTab === 'documents' ? (
+          {documentsVisited && (
+          <TabPane active={indexSubTab === 'documents'} label="文档">
             <div className={css.docPanel}>
               <div className={css.docToolbar}>
                 <label className={css.sizeLabel}>
@@ -701,7 +724,9 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
                 </>
               )}
             </div>
-          ) : (
+          </TabPane>
+          )}
+          <TabPane active={indexSubTab === 'mapping'} label="映射">
             <>
               <h4 className={css.subTitle}>映射</h4>
               <div className={css.mappingTree}>
@@ -717,12 +742,14 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
                 </>
               )}
             </>
-          )}
+          </TabPane>
         </div>
-      )}
-      {tab === 'index' && selectedIndex === null && <div className={`${css.body} ${css.empty}`}>从概览选择一个索引</div>}
-      {tab === 'index' && selectedIndex !== null && mappingLoading && mapping === null && indexSubTab === 'mapping' && (
-        <div className={`${css.body} ${css.empty}`}>正在加载索引详情…</div>
+        {mappingLoading && mapping === null && indexSubTab === 'mapping' && (
+          <div className={`${css.body} ${css.empty}`}>正在加载索引详情…</div>
+        )}
+        </>
+        )}
+      </TabPane>
       )}
 
       {/* 文档编辑弹窗:新建(可省 id,ES 分配)/ 编辑(id 锁定,整篇替换)。 */}

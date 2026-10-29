@@ -72,6 +72,29 @@ describe('StarHubWorkbenchPanel', () => {
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['验收机'])
   })
 
+  it('keeps every page iframe mounted and only toggles visibility when switching tabs', () => {
+    const { store, rerender, container } = renderPanel()
+    store.open({ key: 'a1', title: '验收机', url: '/starhub-react/index.html?asset=a1' })
+    store.open({ key: 'a2', title: 'MySQL', url: '/starhub-react/index.html?asset=a2' })
+    rerender()
+    const frames = Array.from(container.querySelectorAll('iframe'))
+    expect(frames).toHaveLength(2)
+    const first = screen.getByTitle('验收机') as HTMLIFrameElement
+    const second = screen.getByTitle('MySQL') as HTMLIFrameElement
+    // 活动页可见,非活动页隐藏但仍是同一个 iframe 文档(不换 src → 不重载)。
+    expect(second.getAttribute('aria-hidden')).toBeNull()
+    expect(first.getAttribute('aria-hidden')).toBe('true')
+
+    fireEvent.click(screen.getAllByRole('tab')[0]!)
+    rerender()
+    expect(container.querySelectorAll('iframe')).toHaveLength(2)
+    const firstAfter = screen.getByTitle('验收机') as HTMLIFrameElement
+    expect(firstAfter).toBe(first)
+    expect(firstAfter.getAttribute('src')).toBe('/starhub-react/index.html?asset=a1')
+    expect(firstAfter.getAttribute('aria-hidden')).toBeNull()
+    expect((screen.getByTitle('MySQL') as HTMLIFrameElement).getAttribute('aria-hidden')).toBe('true')
+  })
+
   it('closing the last page empties the panel', () => {
     const { store, rerender, container } = renderPanel()
     store.open({ key: 'a1', title: '验收机', url: '/starhub-react/index.html?asset=a1' })

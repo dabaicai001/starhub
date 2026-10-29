@@ -7,6 +7,10 @@
  * `tauriInvoke` / `tauriListen` 经同一套宿主桥(fetch + SSE)打到 sidecar,
  * 113 个调用点零改动。
  *
+ * v0.140.4 起**一页一个常驻 iframe**(非活动页 visibility:hidden):此前单个
+ * iframe 换 `src` 会触发整页导航,切回资产时工作台里的查询标签、滚动位置、
+ * 连接与未保存草稿全部重来。
+ *
  * 挂在 ui-layout 的 root-scope `main` keyed 槽(key=`starhub-workbench`);
  * 入口(资产行点击 / `starhub://open-asset`)经 `layout.selectPanel` 切到本面板,
  * 关掉最后一页时由 index.ts 的订阅把面板让回会话视图。无页时渲染 null(面板
@@ -80,12 +84,24 @@ export function StarHubWorkbenchPanel({
           </span>
         ))}
       </div>
-      <iframe
-        className={css.frame}
-        title={active.title}
-        src={active.url}
-        allow="clipboard-read; clipboard-write; fullscreen"
-      />
+      <div className={css.frameStack}>
+        {/* 一页一个常驻 iframe:切标签只改可见性。此前是单个 iframe 改 src,
+            Chromium 会重新导航 —— 页面内查询标签、滚动、连接与草稿整页重来。 */}
+        {state.pages.map((page) => {
+          const isActive = page.key === active.key
+          return (
+            <iframe
+              key={page.key}
+              className={clsx(css.frame, !isActive && css.frameHidden)}
+              title={page.title}
+              src={page.url}
+              allow="clipboard-read; clipboard-write; fullscreen"
+              aria-hidden={isActive ? undefined : true}
+              tabIndex={isActive ? 0 : -1}
+            />
+          )
+        })}
+      </div>
     </div>
   )
 }
