@@ -24,9 +24,18 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const { PLUGINS, CLIENT_PLUGIN, ICON_SVG, renderManifest, renderPatch, rewriteClientRegistrationId } = await import(
-  '../scripts/build-plugin-bundle.mjs'
-)
+const {
+  PLUGINS,
+  CLIENT_PLUGIN,
+  ICON_SVG,
+  DSH_ENGINE_RANGE,
+  renderManifest,
+  renderPatch,
+  renderBundleReadme,
+  assessUpdateEligibility,
+  publishabilityProblems,
+  rewriteClientRegistrationId,
+} = await import('../scripts/build-plugin-bundle.mjs')
 const require = createRequire(import.meta.url)
 
 const PACKAGE_NAME = '@starhub/dsh-plugin'
@@ -50,6 +59,54 @@ test('bundle 清单自包含:无 dependencies / peerDependencies / scripts', () 
   assert.equal(manifest.devDependencies, undefined)
   assert.equal(manifest.scripts, undefined)
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
+})
+
+test('清单可按注册表发布(去掉 private,补齐更新/平台/许可字段)', () => {
+  const manifest = renderManifest(PACKAGE_NAME, VERSION)
+  assert.equal(manifest.private, undefined)
+  assert.equal(manifest.license, 'MIT')
+  assert.equal(manifest.publishConfig.access, 'public')
+  assert.equal(manifest.engines.dsh, DSH_ENGINE_RANGE)
+  assert.deepEqual(manifest.os, [process.platform])
+  assert.deepEqual(manifest.dsh.bundle.platforms, [process.platform])
+  assert.ok(Array.isArray(manifest.cpu) && manifest.cpu.length === 1)
+  assert.ok(manifest.files.includes('README.md'))
+  assert.ok(manifest.files.includes('cordis.patch.yml'))
+  assert.ok(manifest.files.includes('bridge/sidecar/**'))
+  assert.ok(manifest.files.includes('host-static/dist/**'))
+})
+
+test('DSH 0.2.2 更新准入:注册表 spec 可更新,路径/git/tarball/别名都不可', () => {
+  const manifest = renderManifest(PACKAGE_NAME, VERSION)
+  assert.deepEqual(assessUpdateEligibility(manifest, `${PACKAGE_NAME}@${VERSION}`), { updatable: true })
+  assert.deepEqual(assessUpdateEligibility(manifest, PACKAGE_NAME), { updatable: true })
+  assert.equal(assessUpdateEligibility(manifest, 'https://github.com/dabaicai001/starhub/releases/download/v1/starhub.tgz').updatable, false)
+  assert.equal(assessUpdateEligibility(manifest, 'git+https://github.com/dabaicai001/starhub.git').updatable, false)
+  assert.equal(assessUpdateEligibility(manifest, 'file:../dist-plugin').updatable, false)
+  assert.equal(assessUpdateEligibility(manifest, `npm:${PACKAGE_NAME}@${VERSION}`).updatable, false)
+  assert.equal(assessUpdateEligibility(manifest, `@other/dsh-plugin@${VERSION}`).updatable, false)
+})
+
+test('发布校验能拦住 private 包与缺失 README', () => {
+  const manifest = renderManifest(PACKAGE_NAME, VERSION)
+  const dir = mkdtempSync(join(tmpdir(), 'starhub-bundle-publish-'))
+  try {
+    writeFileSync(join(dir, 'README.md'), '# x\n')
+    assert.deepEqual(publishabilityProblems(manifest, dir), [])
+    assert.ok(publishabilityProblems({ ...manifest, private: true }, dir).some(problem => problem.includes('private')))
+    rmSync(join(dir, 'README.md'))
+    assert.ok(publishabilityProblems(manifest, dir).some(problem => problem.includes('README')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('包内 README 讲清注册表安装与原地更新的前提', () => {
+  const readme = renderBundleReadme(PACKAGE_NAME, VERSION)
+  assert.ok(readme.includes(`${PACKAGE_NAME}@${VERSION}`))
+  assert.ok(readme.includes('Update'))
+  assert.ok(readme.includes('0.2.2'))
+  assert.ok(readme.includes('tarball'))
 })
 
 test('客户端半边挂在裸包名行上(子路径行不会被当作客户端行)', () => {

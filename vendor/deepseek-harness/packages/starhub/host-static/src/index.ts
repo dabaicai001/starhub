@@ -55,13 +55,43 @@ export const WINDOW_PREFIX = '/starhub-react'
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
   '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.wasm': 'application/wasm',
   '.map': 'application/json',
 }
+
+/** Vite 内容哈希资产可以长期缓存;文件改名即换 URL,不会读到旧内容。 */
+const CACHE_IMMUTABLE = 'public, max-age=31536000, immutable'
+
+/** 入口 HTML 必须每次回源,否则升级后仍加载旧资产清单。 */
+const CACHE_REVALIDATE = 'no-cache'
+
+/**
+ * 是否是 Vite 产出的内容哈希资产(`assets/<name>-<hash>.<ext>`)。
+ *
+ * 只对带哈希的文件发 immutable:其他文件(如 `favicon.svg`)可能同名换内容,
+ * 长期缓存会让升级后的工作台读到旧图。
+ * @param relPath - 相对 dist 根的路径(已解码、已去掉前缀)。
+ * @returns 可长期缓存时为 true。
+ */
+export function isImmutableAsset(relPath: string): boolean {
+  const normalized = relPath.replaceAll('\\', '/').replace(/^\/+/, '')
+  if (!normalized.startsWith('assets/')) return false
+  const base = normalized.slice(normalized.lastIndexOf('/') + 1)
+  return /-[A-Za-z0-9_-]{6,}\.[A-Za-z0-9]+$/.test(base)
+}
+
 
 /**
  * Locate the StarHub repo root by walking up from this module (built:
@@ -158,15 +188,21 @@ export function resolveWindowDistRoot(config: HostStaticConfig = {}): string {
 }
 
 /**
- * Serve one GET/HEAD request under a prefix from the dist root; a miss
- * falls back to index.html with 200 (SPA routing / embed query entries).
+ * Serve one GET/HEAD request under a prefix from the dist root.
+ *
+ * A path with no file extension falls back to index.html with 200 (SPA routing
+ * and embed query entries). A missing path that looks like a file (has an
+ * extension) is a 404 instead: returning index.html for a stale hashed asset
+ * makes the browser cache an HTML document as JavaScript, and the workbench
+ * fails with a misleading syntax error after an upgrade.
  * @param relPath - decoded pathname with the prefix already stripped.
  * @param res - the node:http response to write.
  * @param distRoot - absolute dist root directory.
  * @param distIndex - absolute path of index.html inside distRoot.
+ * @param method - request method; HEAD writes headers only.
  */
 export async function serveStatic(
-  relPath: string, res: ServerResponse, distRoot: string, distIndex: string,
+  relPath: string, res: ServerResponse, distRoot: string, distIndex: string, method: 'GET' | 'HEAD' = 'GET',
 ): Promise<void> {
   const target = resolve(normalize(join(distRoot, relPath)))
   // Traversal rejection mirrors frontend-static: resolve() emits backslash
@@ -176,10 +212,16 @@ export async function serveStatic(
     res.end()
     return
   }
+  const send = (body: Buffer, contentType: string, cacheControl: string): void => {
+    res.writeHead(200, {
+      'content-type': contentType,
+      'content-length': String(body.byteLength),
+      'cache-control': cacheControl,
+    })
+    res.end(method === 'HEAD' ? undefined : body)
+  }
   const serveIndex = async (): Promise<void> => {
-    const body = await readFile(distIndex)
-    res.writeHead(200, { 'content-type': MIME['.html'] })
-    res.end(body)
+    send(await readFile(distIndex), MIME['.html']!, CACHE_REVALIDATE)
   }
   if (target === distRoot || target === distIndex) {
     await serveIndex()
@@ -187,17 +229,23 @@ export async function serveStatic(
   }
   try {
     const body = await readFile(target)
-    res.writeHead(200, { 'content-type': MIME[extname(target)] ?? 'application/octet-stream' })
-    res.end(body)
+    const immutability = isImmutableAsset(relPath) ? CACHE_IMMUTABLE : CACHE_REVALIDATE
+    send(body, MIME[extname(target)] ?? 'application/octet-stream', immutability)
   } catch {
-    // Miss (ENOENT/EISDIR) falls back to index.html with 200 (SPA routing).
+    // A missing file-like path must not turn into index.html (see above).
+    if (extname(target) !== '') {
+      res.writeHead(404, { 'cache-control': CACHE_REVALIDATE })
+      res.end()
+      return
+    }
     await serveIndex()
   }
 }
 
 /**
  * Build a static-file handler for one prefix route: 405 for non-GET/HEAD,
- * SPA fallback to index.html, 403 on traversal outside the dist root.
+ * 400 for a malformed pathname, SPA fallback for extension-less misses, and
+ * 403 on traversal outside the dist root.
  * @param prefix - the prefix the pathname is sliced by.
  * @param distRoot - absolute dist root.
  * @param distIndex - absolute index.html within the dist root.
@@ -214,7 +262,16 @@ export function staticHandler(
     }
     /* node:http always sets url on server requests. */
     const rawPath = new URL(req.url ?? '/', 'http://x').pathname
-    await serveStatic(decodeURIComponent(rawPath).slice(prefix.length), res, distRoot, distIndex)
+    let relativePath: string
+    try {
+      relativePath = decodeURIComponent(rawPath).slice(prefix.length)
+    } catch {
+      // A malformed percent escape is a client error, not an index.html hit.
+      res.writeHead(400)
+      res.end()
+      return
+    }
+    await serveStatic(relativePath, res, distRoot, distIndex, req.method)
   }
 }
 

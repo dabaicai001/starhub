@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.140.4(🐛 **工作台标签切换丢状态(滚动回顶、未保存编辑丢失、资产页整页重载)**:资产页之间此前共用一个 iframe 换 `src`,切回即重新导航,页内的查询标签、连接与草稿全部重来;页内标签(DB 查询/表数据、Redis 键值/分析、ES 概览/检索/索引、Docker 容器/镜像、SSH 文件/AI/监控)又用条件渲染,切走即卸载,滚动位置、分页/筛选、未提交的单元格编辑与编辑器光标一起丢失。现在统一改为常驻标签:资产页一页一个 iframe(非活动页 `visibility:hidden`,同一个文档不再导航),页内标签由新增的 `TabPane` 只切可见性(`display:contents` 保持原布局,隐藏期间滚动偏移被浏览器归零时重新激活回填)。DB 表标签切回后网格不重挂、不重新请求,分页/筛选/未保存编辑与滚动位置都在;Redis 分析页(BigKey/内存分析结果)、SFTP 当前目录、ES 文档分页同样保留。监控页隐藏时暂停 5s 自动采集、重新可见即补采;Redis 分析页 / ES 检索页 / Docker 镜像页 / SSH 侧栏页仍在首次进入时才挂载,避免隐藏页提前发请求。) |
+| 当前版本 | v0.140.5(✨ **DSH 0.2.2 插件页原地更新适配:StarHub 组合包可按注册表包发布并直接 Update**:DSH 0.2.2-rc.1 起,插件页只给「从注册表按本名安装」的第三方 bundle 计算 `updatable` 并提供 Versions/Update(移除旧版 → 安装精确新版 → 失败回滚);`tarball`/`git`/本地目录安装都不显示该区块。原发布链只产 GitHub Release 的 `.tgz`,profile 依赖记的是 URL,新版 DSH 完全够不到更新链路。现在组装产物改成可发布清单(去掉 `private`、补 `license`/`repository`/`publishConfig`/`engines.dsh`/`os`/`cpu`、`dsh.bundle.platforms`、包内 `README.md` 作为插件页详情),新增 `scripts/publish-plugin-bundle.mjs`(`npm run plugin:publish`,含 dry-run、已发布版本跳过、发布前按 DSH 准入规则自检),发布链在 smoke 通过后按 `NPM_TOKEN`/`STARHUB_PLUGIN_REGISTRY`/`STARHUB_PLUGIN_PACKAGE_NAME` 发布;tarball 仍是离线兜底。详见 `docs/DSH升级适配清单-v0.2.2-rc1.md`。) |
 
 ## 架构一句话
 
@@ -94,6 +94,7 @@ npm run test:provision       # provisioning 合并逻辑单测
 npm run smoke:dsh-desktop    # provisioning + 宿主进程冒烟(五条断言)
 npm run plugin:bundle        # 纯插件形态:组装 dist-plugin/(加 --pack 出 .tgz,粘进 dsh 插件页)
 npm run plugin:pack          # 同上并打 tarball(Windows PowerShell 下 `npm run x -- --pack` 会被吞参,故单列一个脚本)
+npm run plugin:publish       # 把组装好的 bundle 发到注册表(DSH 0.2.2+ 插件页原地更新;先 --dry-run 验)
 npm run smoke:plugin-bundle  # 纯插件形态:真 pnpm 安装 + 宿主冒烟(五条断言)
 npm run verify:bridge-compat # 真 sidecar 二进制 ↔ 桥兼容层全工具面验收
 
@@ -145,4 +146,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-10-29 (v0.140.4)*
+*最后更新: 2026-11-06 (v0.140.5)*

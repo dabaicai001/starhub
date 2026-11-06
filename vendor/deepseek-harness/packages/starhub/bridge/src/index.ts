@@ -138,59 +138,72 @@ export async function apply(ctx: Context, config: BridgeConfig = {}): Promise<vo
 
   const handle = await spawnSidecar(command, healthTimeoutMs)
   const sidecar = handle.transport
-  // 通知出口:sidecar 的 `starhub/domain-event`(内层 {event, payload})按事件名
-  // 分发给订阅插件(domain-events / session-registry / 直播面板)。
-  const notifications = new NotificationDispatcher()
-  notifications.attach(sidecar)
-  // 桥 peer:9 个 StarHub 插件经 `sdk-transport` 读到的就是它(协议不变)。
-  const peer = createBridgePeer(sidecar)
-  ctx.provide(BRIDGE_TRANSPORT_SERVICE, peer)
-  ctx.provide(BRIDGE_NOTIFICATIONS_SERVICE, notifications)
-  registerStatusTool(ctx, () => sidecar)
-  // 工作台 API(React 工作台的调用/事件面;独立组合里没有 Tauri IPC)。
-  ctx.effect(
-    () => ctx.webServer.register({
-      kind: 'exact',
-      path: '/starhub/api/invoke',
-      handler: invokeHandler(sidecar),
-    }),
-    'starhub-bridge: /starhub/api/invoke route',
-  )
-  ctx.effect(
-    () => ctx.webServer.register({
-      kind: 'exact',
-      path: '/starhub/api/events',
-      handler: eventsHandler(broadcast => notifications.subscribeAll(broadcast)),
-    }),
-    'starhub-bridge: /starhub/api/events SSE route',
-  )
-  // 直播/接管帧通道(M3):把 sidecar 的本地 WS 以带鉴权的 path 暴露给壳内面板。
-  // 端点每次连接现取(sidecar 可能在本插件之后才绑端口),令牌由面板经
-  // `ui.live_open` 领取、sidecar 在握手中一次性消费。
-  const liveLog = (message: string): void => {
-    ctx.logger('starhub-bridge').warn(message)
-  }
-  ctx.effect(
-    () =>
-      ctx.webServer.registerUpgrade({
-        path: LIVE_UPGRADE_ROUTE,
-        handler: liveUpgradeHandler(async () => {
-          try {
-            const endpoint = await sidecar.request('starhub/live.endpoint', {})
-            const url = (endpoint as { endpoint?: unknown } | null)?.endpoint
-            return typeof url === 'string' && url !== '' ? url : null
-          } catch {
-            return null
-          }
-        }, liveLog),
-      }),
-    'starhub-bridge: /starhub/live upgrade route',
-  )
-  ctx.effect(() => async () => {
+  // 进程生命周期**先**登记:后面的 provide / 路由注册任何一步抛错(例如 profile
+  // 里同时有 sdk-jsonrpc-server 导致 duplicate service),都要先收掉 sidecar 再
+  // 把错误抛出去。否则插件加载失败但 sidecar 还活着,HMR 重载或插件更新时
+  // Windows 无法删除仍被占用的 exe,pnpm remove 失败、更新回滚。
+  let disposed = false
+  const disposeSidecar = async (): Promise<void> => {
+    if (disposed) return
+    disposed = true
     try {
       await handle.dispose()
     } catch (error) {
       ctx.logger('starhub-bridge').warn(`sidecar dispose failed: ${errorMessage(error)}`)
     }
-  })
+  }
+  ctx.effect(() => disposeSidecar, 'starhub-bridge: sidecar process')
+  try {
+    // 通知出口:sidecar 的 `starhub/domain-event`(内层 {event, payload})按事件名
+    // 分发给订阅插件(domain-events / session-registry / 直播面板)。
+    const notifications = new NotificationDispatcher()
+    notifications.attach(sidecar)
+    // 桥 peer:9 个 StarHub 插件经 `sdk-transport` 读到的就是它(协议不变)。
+    const peer = createBridgePeer(sidecar)
+    ctx.provide(BRIDGE_TRANSPORT_SERVICE, peer)
+    ctx.provide(BRIDGE_NOTIFICATIONS_SERVICE, notifications)
+    registerStatusTool(ctx, () => sidecar)
+    // 工作台 API(React 工作台的调用/事件面;独立组合里没有 Tauri IPC)。
+    ctx.effect(
+      () => ctx.webServer.register({
+        kind: 'exact',
+        path: '/starhub/api/invoke',
+        handler: invokeHandler(sidecar),
+      }),
+      'starhub-bridge: /starhub/api/invoke route',
+    )
+    ctx.effect(
+      () => ctx.webServer.register({
+        kind: 'exact',
+        path: '/starhub/api/events',
+        handler: eventsHandler(broadcast => notifications.subscribeAll(broadcast)),
+      }),
+      'starhub-bridge: /starhub/api/events SSE route',
+    )
+    // 直播/接管帧通道(M3):把 sidecar 的本地 WS 以带鉴权的 path 暴露给壳内面板。
+    // 端点每次连接现取(sidecar 可能在本插件之后才绑端口),令牌由面板经
+    // `ui.live_open` 领取、sidecar 在握手中一次性消费。
+    const liveLog = (message: string): void => {
+      ctx.logger('starhub-bridge').warn(message)
+    }
+    ctx.effect(
+      () =>
+        ctx.webServer.registerUpgrade({
+          path: LIVE_UPGRADE_ROUTE,
+          handler: liveUpgradeHandler(async () => {
+            try {
+              const endpoint = await sidecar.request('starhub/live.endpoint', {})
+              const url = (endpoint as { endpoint?: unknown } | null)?.endpoint
+              return typeof url === 'string' && url !== '' ? url : null
+            } catch {
+              return null
+            }
+          }, liveLog),
+        }),
+      'starhub-bridge: /starhub/live upgrade route',
+    )
+  } catch (error) {
+    await disposeSidecar()
+    throw error
+  }
 }

@@ -78,7 +78,11 @@ export async function spawnSidecar(
   if (executable === undefined || executable === '') {
     throw new Error('starhub-bridge: sidecarCommand must name an executable')
   }
-  const child = spawn(executable, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+  const child = spawn(executable, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    // Windows 上控制台子进程默认会闪一个黑框;sidecar 是后台进程。
+    windowsHide: true,
+  })
   const stderr: string[] = []
   child.stderr?.on('data', (chunk: Buffer) => {
     // Bounded tail: diagnostics only; the protocol never rides stderr.
@@ -108,6 +112,9 @@ export async function spawnSidecar(
   } catch (error) {
     transport.close()
     child.kill()
+    // 等它真的退出再抛:加载失败后立刻重试/更新时,Windows 上仍被占用的
+    // sidecar exe 会让删除或覆盖失败。
+    await waitForExit(child, 2000)
     const tail = stderr.join('').trim()
     const detail = tail === '' ? '' : `; stderr tail: ${tail.slice(-400)}`
     throw new Error(`starhub-bridge: sidecar health probe failed: ${errorMessage(error)}${detail}`)
@@ -119,21 +126,29 @@ export async function spawnSidecar(
     async dispose() {
       transport.close()
       child.stdin?.end()
-      await new Promise<void>((resolve) => {
-        if (child.exitCode !== null || child.signalCode !== null) {
-          resolve()
-          return
-        }
-        child.once('exit', () => resolve())
-        child.kill()
-        // The sidecar exits on stdin EOF; force the edge after a grace period.
-        setTimeout(() => {
-          child.kill('SIGKILL')
-          resolve()
-        }, 2000).unref()
-      })
+      await waitForExit(child, 2000)
     },
   }
+}
+
+/**
+ * Wait for a child to exit, force-killing it after the grace period.
+ * @param child - the spawned process.
+ * @param graceMs - how long stdin-EOF/terminate gets before SIGKILL.
+ */
+async function waitForExit(child: ChildProcess, graceMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      resolve()
+    }, graceMs)
+    timer.unref()
+    child.once('exit', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
 }
 
 /** Race a promise against a deadline, rejecting with the sidecar-labeled message. */

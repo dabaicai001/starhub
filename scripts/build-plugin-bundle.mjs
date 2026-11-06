@@ -147,6 +147,23 @@ const CLIENT_INJECT = [
 const DEFAULT_NAME = '@starhub/dsh-plugin'
 const DEFAULT_OUT = join(repoRoot, 'dist-plugin')
 
+/**
+ * DSH 运行时范围(npm `engines.dsh`)。
+ *
+ * 0.2.1 起本包可用;插件的「更新」能力(插件页 Versions / Update)需要
+ * 0.2.2-rc.1 及以上,且只对**从注册表安装**的第三方 bundle 生效。范围放宽到
+ * 0.2.1,是为了让仍随旧 DSH 发货的用户还能安装;更新提示由 DSH 自己按运行时
+ * 能力决定,不靠这里卡死。
+ */
+const DSH_ENGINE_RANGE = '>=0.2.1'
+
+/** 发布仓库(用于 package.json repository / homepage)。 */
+const REPOSITORY_URL = 'https://github.com/dabaicai001/starhub'
+
+/** 当前构建平台:包内是平台相关的 sidecar 二进制,npm 与 dsh 都要按这个声明。 */
+const BUILD_OS = process.platform
+const BUILD_ARCH = process.arch === 'arm64' ? 'arm64' : 'x64'
+
 /** 两个 sidecar 在包内的落地名(Rust 侧按这个名字找 Go 兄弟进程)。 */
 const SIDECAR_NAMES = {
   rust: process.platform === 'win32' ? 'starhub-sidecar-rust.exe' : 'starhub-sidecar-rust',
@@ -267,7 +284,20 @@ function renderPatch(packageName) {
   return lines.join('\n')
 }
 
-/** 生成 bundle 的 package.json(exports 覆盖每个行模块 + 客户端半边 + 展示资源)。 */
+/**
+ * 生成 bundle 的 package.json(exports 覆盖每个行模块 + 客户端半边 + 展示资源)。
+ *
+ * 清单同时是**分发包**与**可更新包**的契约:
+ * - 不能带 `private: true`——npm 拒绝发布私有包,而 DSH 只给「从注册表按本名安装」
+ *   的第三方 bundle 提供 Versions/Update(`plugin-manager` 的 `updateRefusal`);
+ * - `engines.dsh` 让 DSH 在列版本时判兼容(不兼容的版本会标出来而不是装炸);
+ * - `os` / `cpu` 与 `dsh.bundle.platforms` 说明包内 sidecar 的平台,避免在
+ *   mac/Linux 上装出一个跑不起来的包;
+ * - `files` 必须带上 README(插件页的详情文档)与全部运行时段。
+ * @param packageName - 安装后的包名(bundle 名,也是客户端注册 id)。
+ * @param version - 包版本(语义化版本,npm 与更新比较都用它)。
+ * @returns 写入产物的 package.json 对象。
+ */
 function renderManifest(packageName, version) {
   const clientPlugin = PLUGINS.find(plugin => plugin.short === CLIENT_PLUGIN)
   if (clientPlugin === undefined) throw new Error(`PLUGINS 缺少客户端半边宿主 ${CLIENT_PLUGIN}`)
@@ -287,16 +317,28 @@ function renderManifest(packageName, version) {
   return {
     name: packageName,
     version,
-    private: true,
     type: 'module',
     description:
       'StarHub:DevOps 工作台(数据库 / SSH / Docker / Android / AI 助手)作为 DSH 组合包安装',
+    license: 'MIT',
+    repository: { type: 'git', url: `git+${REPOSITORY_URL}.git` },
+    homepage: `${REPOSITORY_URL}#readme`,
+    keywords: ['dsh', 'dsh-plugin', 'starhub', 'devops', 'database', 'ssh', 'docker'],
+    engines: { dsh: DSH_ENGINE_RANGE },
+    os: [BUILD_OS],
+    cpu: [BUILD_ARCH],
+    publishConfig: { access: 'public' },
     exports,
     dsh: {
-      bundle: { patch: './cordis.patch.yml' },
+      bundle: {
+        patch: './cordis.patch.yml',
+        // DSH 0.2.2 起按这个字段在插件页隐藏/拒绝不支持的平台;值与 process.platform 对齐。
+        platforms: [BUILD_OS],
+      },
       client: { platform: 'web', inject: [...CLIENT_INJECT] },
     },
     files: [
+      'README.md',
       '*.js',
       'cordis.patch.yml',
       'icon.svg',
@@ -306,6 +348,54 @@ function renderManifest(packageName, version) {
       'bridge/sidecar/**',
     ],
   }
+}
+
+/**
+ * 生成包内 README(DSH 插件页的详情文档)。
+ *
+ * 插件页优先读 `locale/<lang>.json` 的 `meta.detail` 指向的 Markdown,否则读
+ * 包根 README。README 直接随包分发,所以它必须讲清「从注册表装才能原地更新」
+ * 这条 DSH 0.2.2 起的分发差异,而不是让用户去猜为什么没有 Update 按钮。
+ * @param packageName - 安装包名(注册表 spec 用)。
+ * @param version - 包版本。
+ * @returns README.md 全文。
+ */
+function renderBundleReadme(packageName, version) {
+  return `# StarHub DSH 插件
+
+StarHub 把 DevOps 工作台(数据库客户端、SSH/SFTP、Docker 面板、Android 真机、
+AI 助手)作为**一个 DSH 组合包**装进当前 profile。本包 \`${packageName}@${version}\`
+自带两个 sidecar 可执行文件与 React 工作台静态资源,不依赖 StarHub 仓库检出。
+
+## 安装
+
+- 插件页 → 添加插件 → 填包名 \`${packageName}@${version}\`(注册表安装,可原地更新)。
+- 离线场景可改填 Release 上的 \`.tgz\` 地址;这种安装方式**没有**插件页更新。
+
+## 更新
+
+DSH 0.2.2-rc.1 起,插件页只给「从注册表按本名安装」的第三方 bundle 显示
+**Versions / Update**:打开插件卡片即可检查新版本并原地更新,失败会回滚到原版本。
+从本地目录、git 或 tarball 安装的包不显示该区块,需卸载后重装。
+
+> 更新会替换整个包(含两个 sidecar)。运行中的 sidecar 在插件卸载时由桥关闭;
+> 更新后按 DSH 提示重启或等待 HMR 重组合。
+
+## 要求
+
+- DSH \`${DSH_ENGINE_RANGE}\`;原地更新需要 0.2.2-rc.1 及以上。
+- 当前包只含 **${BUILD_OS} / ${BUILD_ARCH}** 的 sidecar 二进制。
+
+## 组件
+
+包内是一个裸包名行(承载客户端半边)+ 9 个子路径行:导航、静态资源、工具上下文、
+桥接、工具面、审批桥、会话注册表、域事件、直播上下文、SSH AI 助手。
+
+## 数据与权限
+
+插件以宿主用户权限运行,会启动两个常驻 sidecar 进程并监听本地回环端口(直播帧
+通道)。连接凭据与资产数据保存在 DSH profile 的 StarHub 数据文件中,不随包体分发。
+`
 }
 
 /**
@@ -336,7 +426,8 @@ async function rewriteClientRegistrationId(outDir, packageName) {
 }
 
 /**
- * 校验:每个 exports 目标存在、patch 可解析且每行 name 有对应导出。
+ * 校验:每个 exports 目标存在、patch 可解析且每行 name 有对应导出,并满足
+ * 「npm 可发布 + DSH 可更新」的清单约束。
  * 拼出来的包如果在安装后才炸(缺文件、非法 YAML),用户已经在插件页点过安装了,
  * 所以这里 fail loud 要趁早。
  */
@@ -347,10 +438,11 @@ async function assertBundle(outDir, manifest, patchText, packageName) {
     const abs = join(outDir, target)
     if (!existsSync(abs)) problems.push(`exports["${subpath}"] 目标缺失: ${target}`)
   }
-  // 分发包不带 sourcemap:体积占七成,且运行时要不到。漏一个就白打十几 MB,
-  // 所以在组装期就拦住(CI 的 tar 内容校验是第二道)。
+  // 分发包不带 sourcemap / tsc 缓存:体积白占,且 `.tsbuildinfo` 还带本机绝对路径。
+  // 漏一个就白打十几 MB,所以在组装期就拦住(CI 的 tar 内容校验是第二道)。
   for (const file of await listFilesRecursive(outDir)) {
     if (file.endsWith('.map')) problems.push(`产物里不应有 sourcemap: ${file.slice(outDir.length + 1)}`)
+    if (file.endsWith('.tsbuildinfo')) problems.push(`产物里不应有 tsc 缓存: ${file.slice(outDir.length + 1)}`)
   }
   // 客户端半边必须按安装包名注册:boot 图按包名建行,加载器只认
   // `__ModuleLoader__.load({ id })` 里的同一个 id,不一致就是
@@ -389,6 +481,102 @@ async function assertBundle(outDir, manifest, patchText, packageName) {
   if (problems.length > 0) {
     throw new Error(`组装校验失败:\n  - ${problems.join('\n  - ')}`)
   }
+  const publishProblems = publishabilityProblems(manifest, outDir)
+  if (publishProblems.length > 0) {
+    throw new Error(`发布校验失败(包能装但发不出去/更新不了):\n  - ${publishProblems.join('\n  - ')}`)
+  }
+}
+
+/**
+ * 判断 DSH 0.2.2-rc.1 的插件页会不会把本包标成 `updatable`。
+ *
+ * 这是对上游 `plugin-manager` 里 `updateRefusal()` 的**最小复刻**,只用于在
+ * 发布前/诊断时回答「为什么没有 Update 按钮」:
+ * - 必须是第三方 profile 依赖(不是随安装出货的 Official bundle);
+ * - 依赖 spec 必须是**按本名**的注册表 spec(不能是 tarball / git / 本地路径,
+ *   也不能是 `npm:` 别名);
+ * - 包必须声明语义化版本,且不带插件管理(本包不带)。
+ *
+ * 上游还会检查 `readOnlyReason`、安装来源与运行时,这些只有运行中的 DSH 才知道;
+ * 这里覆盖的是**包与依赖 spec 侧**我们能控的部分。
+ * @param manifest - 包清单(package.json 对象)。
+ * @param dependencySpec - profile `dependencies` 里保存的 spec(如 `@starhub/dsh-plugin@1.2.3`)。
+ * @returns `{ updatable: true }` 或 `{ updatable: false, reason }`。
+ */
+function assessUpdateEligibility(manifest, dependencySpec) {
+  if (manifest.dsh?.bundle === undefined) {
+    return { updatable: false, reason: '清单没有 dsh.bundle.patch,不是 DSH 组合包' }
+  }
+  if (!isSemverVersion(manifest.version)) {
+    return { updatable: false, reason: `版本 "${String(manifest.version)}" 不是语义化版本` }
+  }
+  if (manifest.dependencies?.['@deepseek-ai/dsh-plugin-manager'] !== undefined) {
+    return { updatable: false, reason: '包携带插件管理,DSH 不允许替换' }
+  }
+  if (typeof dependencySpec !== 'string' || dependencySpec === '') {
+    return { updatable: false, reason: 'profile 没有记录依赖' }
+  }
+  if (/^(?:\.{0,2}[/\\]|[A-Za-z]:[/\\])/.test(dependencySpec)) {
+    return { updatable: false, reason: `依赖 spec "${dependencySpec}" 是本地路径,不是注册表 spec` }
+  }
+  const at = dependencySpec.lastIndexOf('@')
+  const specName = at > 0 ? dependencySpec.slice(0, at) : dependencySpec
+  const range = at > 0 ? dependencySpec.slice(at + 1) : ''
+  if (specName !== manifest.name) {
+    return {
+      updatable: false,
+      reason: `依赖 spec "${dependencySpec}" 不是按本名 ${manifest.name} 记录的(别名/链接/tarball 都不行)`,
+    }
+  }
+  if (/^(?:file|link|git|git\+|https?|ssh|npm):/i.test(dependencySpec)) {
+    return { updatable: false, reason: `依赖 spec "${dependencySpec}" 不是注册表 spec` }
+  }
+  if (range.includes(':')) {
+    return { updatable: false, reason: `依赖范围 "${range}" 带协议(如 npm: 别名),DSH 不视为可更新` }
+  }
+  return { updatable: true }
+}
+
+/** 是否是带可选预发布/构建后缀的语义化版本(不引 semver 依赖)。 */
+function isSemverVersion(value) {
+  return typeof value === 'string'
+    && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value)
+}
+
+/**
+ * 校验「可发布」:能否 `npm publish` 出去是更新链路的第一道门。
+ *
+ * 与 {@link assessUpdateEligibility} 分开:前者是 npm 侧约束(`private` 必须去掉、
+ * `files` 要带 README),后者是 DSH 侧约束(依赖 spec 形态)。
+ * @param manifest - 包清单。
+ * @param outDir - 组装产物目录(检查 README 是否真的落了盘)。
+ * @returns 问题列表(空表示通过)。
+ */
+function publishabilityProblems(manifest, outDir) {
+  const problems = []
+  if (manifest.private === true) problems.push('package.json 是 private: true,npm 拒绝发布且 DSH 无法从注册表更新')
+  if (!isSemverVersion(manifest.version)) problems.push(`version "${String(manifest.version)}" 不是语义化版本`)
+  if (typeof manifest.license !== 'string' || manifest.license === '') problems.push('缺少 license 字段')
+  if (typeof manifest.engines?.dsh !== 'string' || manifest.engines.dsh === '') {
+    problems.push('缺少 engines.dsh:DSH 列版本时无法判断兼容性')
+  }
+  if (manifest.dsh?.bundle?.patch !== './cordis.patch.yml') problems.push('dsh.bundle.patch 必须指向 ./cordis.patch.yml')
+  const platforms = manifest.dsh?.bundle?.platforms
+  if (!Array.isArray(platforms) || platforms.length === 0) {
+    problems.push('dsh.bundle.platforms 为空:DSH 无法在插件页隐藏不支持的平台')
+  } else if (!Array.isArray(manifest.os) || manifest.os.length === 0
+    || platforms.some(platform => !manifest.os.includes(platform))) {
+    problems.push('dsh.bundle.platforms 与 npm os 字段不一致')
+  }
+  if (!Array.isArray(manifest.cpu) || manifest.cpu.length === 0) problems.push('缺少 npm cpu 字段')
+  if (!existsSync(join(outDir, 'README.md'))) problems.push('缺少 README.md(插件页详情文档会读它)')
+  for (const required of ['README.md', 'cordis.patch.yml', 'bridge/sidecar/**', 'host-static/dist/**']) {
+    if (!manifest.files.includes(required)) problems.push(`files 白名单缺少 ${required}`)
+  }
+  if (manifest.dependencies !== undefined || manifest.peerDependencies !== undefined) {
+    problems.push('分发包必须零依赖:本地产物的 @deepseek-ai/* 裸 import 由 DSH 运行时解析层供给')
+  }
+  return problems
 }
 
 /**
@@ -519,7 +707,11 @@ async function main() {
   console.log(`  客户端     ./client → ${CLIENT_PLUGIN}/lib/client.js`)
   console.log(`  工作台    ${options.windowDist} → host-static/dist(不含 sourcemap)`)
   console.log(`  sidecar   ${basename(rustSidecar)} + ${basename(options.sidecarGo)} → bridge/sidecar/`)
+  console.log(`  平台      ${BUILD_OS}/${BUILD_ARCH}(dsh.bundle.platforms 与 npm os/cpu)`)
   console.log(`  资产名    starhub-dsh-plugin-${version}-${platformTag()}.tgz`)
+  console.log(`  更新      ${assessUpdateEligibility(manifest, `${options.name}@${version}`).updatable
+    ? `注册表安装 ${options.name}@${version} 后,DSH 0.2.2+ 插件页可原地更新`
+    : '不可更新(见发布校验)'}`)
   if (options.dryRun) {
     console.log('[bundle] --dry-run:不落盘')
     return
@@ -531,11 +723,11 @@ async function main() {
 
   for (const plugin of PLUGINS) {
     const source = join(vendorRoot, 'packages', 'starhub', plugin.short)
-    // 同样不带 sourcemap:tsdown 给客户端半边与部分 host lib 产出 .map,
-    // 它们会经 `files` 白名单进 tarball(实测 CI 上被内容校验抓出),而运行时不需要。
+    // 不带 sourcemap / 类型声明 / tsc 构建缓存:运行时只要 .js。`.tsbuildinfo`
+    // 还带本机绝对路径,发到注册表既泄露路径又白占体积(实测每个插件几十 KB)。
     await cp(join(source, 'lib'), join(options.out, plugin.short, 'lib'), {
       recursive: true,
-      filter: entry => !entry.endsWith('.map'),
+      filter: entry => !/(?:\.map|\.tsbuildinfo|\.d\.ts)$/.test(entry),
     })
     const packageJson = {
       name: `${options.name}/${plugin.short}`,
@@ -587,6 +779,7 @@ async function main() {
   }, undefined, 2)}\n`)
   await writeFile(join(options.out, 'icon.svg'), ICON_SVG)
   await writeFile(join(options.out, 'cordis.patch.yml'), patchText)
+  await writeFile(join(options.out, 'README.md'), renderBundleReadme(options.name, version))
   await writeFile(join(options.out, 'package.json'), `${JSON.stringify(manifest, undefined, 2)}\n`)
 
   await assertBundle(options.out, manifest, patchText, options.name)
@@ -599,12 +792,15 @@ async function main() {
     console.log(`  本地文件  ${packed}`)
     const url = releaseAssetUrl(version, basename(packed))
     if (url !== null) console.log(`  Release   ${url}(推 tag 后由 plugin-bundle.yml 自动上传)`)
+    console.log(`  注册表    ${options.name}@${version}(可原地更新;先用 npm run plugin:publish 发布)`)
   } else {
     console.log('[bundle] 在 dsh 插件页「添加插件」里粘贴这个绝对路径:')
     console.log(`  ${options.out}`)
     console.log('[bundle] 注意:本地目录安装是 link,行模块的 @deepseek-ai/* 裸 import 解析不到,')
     console.log('         插件会 failed to import;要真装请用 --pack 出的 tarball 或已发布的包名。')
   }
+  const eligibility = assessUpdateEligibility(manifest, `${options.name}@${version}`)
+  if (!eligibility.updatable) console.warn(`[bundle] 警告:DSH 不会把本包标记为可更新——${eligibility.reason}`)
 }
 
 /**
@@ -723,4 +919,19 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
   })
 }
 
-export { PLUGINS, CLIENT_PLUGIN, ICON_SVG, renderManifest, renderPatch, rewriteClientRegistrationId, SIDECAR_NAMES }
+export {
+  PLUGINS,
+  CLIENT_PLUGIN,
+  ICON_SVG,
+  DSH_ENGINE_RANGE,
+  BUILD_OS,
+  BUILD_ARCH,
+  renderManifest,
+  renderPatch,
+  renderBundleReadme,
+  assessUpdateEligibility,
+  isSemverVersion,
+  publishabilityProblems,
+  rewriteClientRegistrationId,
+  SIDECAR_NAMES,
+}

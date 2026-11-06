@@ -6,6 +6,8 @@ The plugin resolves the dist in this order: the `windowDist` Config field, `STAR
 
 The `windowDist` Config field exists for the installed shell: the M4 provisioning script (`scripts/provision-dsh.mjs` in the StarHub repo) installs the workbench dist under `$DSH_HOME/starhub/resources/starhub-react` and writes that absolute path into the profile patch, so an installed shell never depends on a StarHub checkout being present.
 
+Responses are cache-aware: Vite content-hashed files under `assets/` get `public, max-age=31536000, immutable`, while `index.html` and unhashed files get `no-cache`, so an install or update never serves a stale entry document against new hashes. A missing path with a file extension answers 404 instead of the SPA fallback; extension-less misses still return `index.html` for in-app routes. `HEAD` sends headers only, and a malformed percent escape answers 400.
+
 ## Model Experience
 
 ### Static workbench hosting
@@ -24,5 +26,4 @@ Not applicable.
 
 ## Known Limitations and Deferred Work
 
-- Asset MIME coverage is the minimal set the StarHub build emits (html/js/css/svg/png/woff2/json/map); other extensions ship as `application/octet-stream`.
-- HEAD responses currently write the body like GET (mirrors `frontend-static`).
+- Responses are not compressed; the workbench build ships uncompressed JS/CSS and the host web server forwards them as-is.

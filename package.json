@@ -1,6 +1,6 @@
 {
   "name": "starhub",
-  "version": "0.140.4",
+  "version": "0.140.5",
   "private": true,
   "type": "module",
   "scripts": {
@@ -28,6 +28,7 @@
     "provision:dsh": "node scripts/provision-dsh.mjs",
     "plugin:bundle": "node scripts/build-plugin-bundle.mjs",
     "plugin:pack": "node scripts/build-plugin-bundle.mjs --pack",
+    "plugin:publish": "node scripts/publish-plugin-bundle.mjs",
     "smoke:plugin-bundle": "node scripts/smoke-plugin-bundle.mjs",
     "smoke:dsh-desktop": "node scripts/smoke-dsh-desktop.mjs",
     "test:provision": "node --test tests/provision-dsh.test.mjs",

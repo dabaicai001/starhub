@@ -11,7 +11,7 @@ StarHub sidecar bridge (StarHub-local package, not upstream). It owns the tool-p
 
 ## Semantics
 
-- **Process lifetime.** Spawn on plugin init, kill on dispose (stdin end → SIGTERM → SIGKILL after a 2s grace). The child's bounded stderr tail rides the health-probe error message.
+- **Process lifetime.** Spawn on plugin init, kill on dispose (stdin end → SIGTERM → SIGKILL after a 2s grace). The process is hidden on Windows (`windowsHide`). Its disposal is registered immediately after a successful spawn, and a later setup failure (for example a duplicate `sdk-transport` provider) disposes it before rethrowing, so a failed load never leaves the sidecar holding its executable — a requirement for HMR reload and plugin updates on Windows, where an in-use `.exe` cannot be replaced. The child's bounded stderr tail rides the health-probe error message.
 - **Protocol.** Requests get exactly one response; sidecar notifications (domain events, exec progress) are consumed by the transport's notification handler; malformed lines never kill either side. Error codes: `-32601` unknown method, `-32602` invalid params, `-32603` handler failure.
 - **Compatibility layer** (`src/compat.ts`). The plugin provides the two private services the nine StarHub plugins read — `sdk-transport` and `sdk-notifications`, the same names the `sdk-jsonrpc-server` patch provided in the Tauri composition — so their TypeScript surface is unchanged:
 

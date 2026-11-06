@@ -39,6 +39,9 @@ jobs:
         working-directory: 'S:\'
     env:
       DSH_BUILD_WORKSPACE: 'S:\'
+      # 注册表包名要可配置:公开 npm 上 `@starhub` scope 需要归属;换成实际拥有的
+      # scope/名字时只改仓库变量,不用改代码(客户端注册 id 会随包名改写)。
+      STARHUB_PLUGIN_PACKAGE_NAME: ${{ vars.STARHUB_PLUGIN_PACKAGE_NAME || '@starhub/dsh-plugin' }}
 
     steps:
       - name: Check out source
@@ -130,7 +133,7 @@ jobs:
         #
         # 直接 node 调用:`npm run plugin:bundle -- --pack` 在 Windows PowerShell 下
         # 会被吞掉 `--pack`(踩坑记录 §61),CI 的 windows runner 默认就是 pwsh。
-        run: node scripts/build-plugin-bundle.mjs --pack
+        run: node scripts/build-plugin-bundle.mjs --pack --name "$env:STARHUB_PLUGIN_PACKAGE_NAME"
 
       - name: Verify plugin tarball contents
         # 包体是「装完能不能跑」的全部:两个 sidecar、工作台 dist、客户端半边必须
@@ -143,6 +146,7 @@ jobs:
           $entries = tar -tzf $asset
           $required = @(
             'package/package.json',
+            'package/README.md',
             'package/cordis.patch.yml',
             'package/bridge/sidecar/starhub-sidecar-rust.exe',
             'package/bridge/sidecar/starhub-sidecar.exe',
@@ -153,6 +157,7 @@ jobs:
             if (-not ($entries -match [regex]::Escape($needle))) { throw "tarball 缺少 $needle" }
           }
           if ($entries -match '\.map$') { throw 'tarball 不该带 sourcemap' }
+          if ($entries -match '\.tsbuildinfo$') { throw 'tarball 不该带 tsc 构建缓存' }
           Write-Host "tarball $asset 内容校验通过($($entries.Count) 项,含两个 sidecar 与工作台 dist)"
 
       - name: 'Smoke: plugin tarball install + host boot'
@@ -163,6 +168,41 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $asset = (Get-ChildItem starhub-dsh-plugin-*.tgz | Select-Object -First 1).FullName
           node scripts/smoke-plugin-bundle.mjs --spec "$asset" --timeout 180000
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Detect npm publish secret
+        # 有 token 才把 bundle 发到注册表(DSH 0.2.2+ 只对注册表安装的第三方
+        # bundle 显示 Versions/Update);没有 token 时 tarball 照发,只是没有原地
+        # 更新,因此这里 warning 而不失败。
+        id: npm-publish
+        shell: pwsh
+        env:
+          NPM_TOKEN_VALUE: ${{ secrets.NPM_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:NPM_TOKEN_VALUE) {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning::未配置 NPM_TOKEN,跳过 npm 发布:本版本只能从 tarball 安装,插件页不会出现 Versions/Update。"
+          } else {
+            "enabled=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Publish plugin bundle to npm (enables in-place Update)
+        # 包名/注册表可由仓库变量覆盖;npm 侧鉴权用 NODE_AUTH_TOKEN + npmrc。
+        if: steps.npm-publish.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REGISTRY_URL: ${{ vars.STARHUB_PLUGIN_REGISTRY || 'https://registry.npmjs.org' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $uri = [uri]$env:REGISTRY_URL
+          if (-not $uri.IsAbsoluteUri -or $uri.Scheme -notin @('http', 'https')) {
+            throw "STARHUB_PLUGIN_REGISTRY 必须是 http(s) 注册表地址,收到: '$env:REGISTRY_URL'"
+          }
+          npm config set registry $env:REGISTRY_URL
+          npm config set "//$($uri.Host)/:_authToken" $env:NODE_AUTH_TOKEN
+          node scripts/publish-plugin-bundle.mjs --registry $env:REGISTRY_URL
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload plugin tarball

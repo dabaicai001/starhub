@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.140.4-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.140.5-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,8 +59,10 @@
 
 ## 当前版本
 
-### v0.140.4 (2026-10-29)
-- 🐛 🐛 **工作台标签切换丢状态(滚动回顶、未保存编辑丢失、资产页整页重载)**:资产页之间此前共用一个 iframe 换 `src`,切回即重新导航,页内的查询标签、连接与草稿全部重来;页内标签(DB 查询/表数据、Redis 键值/分析、ES 概览/检索/索引、Docker 容器/镜像、SSH 文件/AI/监控)又用条件渲染,切走即卸载,滚动位置、分页/筛选、未提交的单元格编辑与编辑器光标一起丢失。现在统一改为常驻标签:资产页一页一个 iframe(非活动页 `visibility:hidden`,同一个文档不再导航),页内标签由新增的 `TabPane` 只切可见性(`display:contents` 保持原布局,隐藏期间滚动偏移被浏览器归零时重新激活回填)。DB 表标签切回后网格不重挂、不重新请求,分页/筛选/未保存编辑与滚动位置都在;Redis 分析页(BigKey/内存分析结果)、SFTP 当前目录、ES 文档分页同样保留。监控页隐藏时暂停 5s 自动采集、重新可见即补采;Redis 分析页 / ES 检索页 / Docker 镜像页 / SSH 侧栏页仍在首次进入时才挂载,避免隐藏页提前发请求。
+### v0.140.5 (2026-11-06)
+- ✨ ✨ **DSH 0.2.2 插件页原地更新适配:StarHub 组合包可按注册表包发布并直接 Update**:DSH 0.2.2-rc.1 起,插件页只给「从注册表按本名安装」的第三方 bundle 计算 `updatable` 并提供 Versions/Update(移除旧版 → 安装精确新版 → 失败回滚);`tarball`/`git`/本地目录安装都不显示该区块。原发布链只产 GitHub Release 的 `.tgz`,profile 依赖记的是 URL,新版 DSH 完全够不到更新链路。现在组装产物改成可发布清单(去掉 `private`、补 `license`/`repository`/`publishConfig`/`engines.dsh`/`os`/`cpu`、`dsh.bundle.platforms`、包内 `README.md` 作为插件页详情),新增 `scripts/publish-plugin-bundle.mjs`(`npm run plugin:publish`,含 dry-run、已发布版本跳过、发布前按 DSH 准入规则自检),发布链在 smoke 通过后按 `NPM_TOKEN`/`STARHUB_PLUGIN_REGISTRY`/`STARHUB_PLUGIN_PACKAGE_NAME` 发布;tarball 仍是离线兜底。详见 `docs/DSH升级适配清单-v0.2.2-rc1.md`。
+- 🔧 ⚡ **工作台静态资源按内容哈希缓存,升级后不再拿旧入口**:`/starhub-react` 的 Vite 哈希资产(`assets/<name>-<hash>.<ext>`)返回 `cache-control: public, max-age=31536000, immutable`,`index.html` 与未哈希文件 `no-cache`;缺失的带扩展名路径返回 404 而不是回落 `index.html`(避免浏览器把 HTML 当 JS 缓存),`HEAD` 只发头,补齐 webp/avif/woff/ttf/webmanifest/wasm 等 MIME。
+- 🔧 🐛 **sidecar 生命周期在加载失败/HMR/更新时不再泄漏进程**:sidecar 的 disposer 改为 spawn 成功后立即登记,后续 `ctx.provide`/路由注册抛错会先收进程再抛出;spawn 加 `windowsHide`,健康探针失败与 dispose 都等待子进程真正退出(2s 后 SIGKILL),避免 Windows 上更新时 sidecar 的 exe 仍被占用导致 `pnpm remove` 失败。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 
