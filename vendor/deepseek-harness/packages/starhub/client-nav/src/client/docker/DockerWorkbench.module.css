@@ -49,7 +49,7 @@
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 2px; }
 .rowInfo { display: flex; align-items: center; min-width: 0; flex: 1; }
 .rowMain { display: flex; align-items: center; gap: 10px; min-width: 0; border: 0; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; text-align: left; }
-.stateBadge { font-size: 11px; padding: 1px 8px; border-radius: var(--dsw-radius-xl); text-transform: uppercase; letter-spacing: 0.03em; }
+.stateBadge { font-size: 11px; padding: 1px 8px; border-radius: var(--dsw-radius-xl); corner-shape: round; text-transform: uppercase; letter-spacing: 0.03em; }
 .stateRunning { background: var(--dsw-alias-state-success-primary); color: var(--dsw-alias-label-primary-inverted); }
 .statePaused { background: var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-label-primary-inverted); }
 .stateStopped { background: var(--dsw-alias-bg-mask-3); color: var(--dsw-alias-label-secondary); }
