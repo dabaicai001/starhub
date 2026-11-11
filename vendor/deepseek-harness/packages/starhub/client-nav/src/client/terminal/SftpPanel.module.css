@@ -31,12 +31,12 @@
 
 .dropText {
   padding: 8px 16px;
-  border-radius: 5px;
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-primary);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .statusBar {
@@ -46,16 +46,16 @@
   align-items: center;
   gap: 7px;
   padding: 0 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-2);
 }
 
 .dot {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: 50%; corner-shape: round;
   background: var(--dsw-alias-label-tertiary);
-  transition: background 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .dot.online {
@@ -73,7 +73,7 @@
 .statusLabel {
   color: var(--dsw-alias-label-primary);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .hostLabel {
@@ -109,7 +109,7 @@
 .stateOverlay strong {
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .stateIcon {
@@ -118,8 +118,8 @@
   height: 34px;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   font-size: 16px;
@@ -138,7 +138,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-2);
 }
 
@@ -155,13 +155,13 @@
 .opErrorAction {
   flex-shrink: 0;
   border: 1px solid var(--dsw-alias-state-error-secondary);
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   padding: 2px 10px;
   background: transparent;
   color: var(--dsw-alias-state-error-primary);
   cursor: pointer;
   font-size: 12px;
-  transition: background 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .opErrorAction:hover {
@@ -171,14 +171,14 @@
 .opErrorClose {
   flex-shrink: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   padding: 2px 6px;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
-  transition: background 150ms ease, color 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .opErrorClose:hover {
@@ -188,14 +188,14 @@
 
 .stateOverlay button,
 .fileDialogActions button {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-xs);
   padding: 5px 12px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   font-size: 12px;
-  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .stateOverlay button:hover,
@@ -211,7 +211,7 @@
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-1);
 }
 
@@ -220,7 +220,7 @@
   align-items: center;
   gap: 2px;
   padding-right: 8px;
-  border-right: 1px solid var(--dsw-alias-border-l2);
+  border-right: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .toolGroup:last-child {
@@ -240,11 +240,11 @@
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .tbBtn:hover {
@@ -270,10 +270,10 @@
   right: -4px;
   min-width: 14px;
   padding: 0 3px;
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-label-inverse, #fff);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 14px;
   text-align: center;
 }
@@ -286,21 +286,21 @@
   gap: 2px;
   overflow-x: auto;
   padding: 0 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-2);
   white-space: nowrap;
 }
 
 .crumb {
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--dsw-radius-xs);
   padding: 3px 5px;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
   font-family: var(--ds-font-family-code);
   font-size: 11px;
-  transition: background 150ms ease, color 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .crumb:hover {
@@ -312,15 +312,15 @@
 .fileDialogInput {
   box-sizing: border-box;
   min-width: 0;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-xs);
   padding: 5px 8px;
   outline: none;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
   font-family: var(--ds-font-family-code);
   font-size: 12px;
-  transition: border-color 150ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .pathInput {
@@ -359,10 +359,10 @@
   align-items: center;
   gap: 8px;
   padding: 0 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
-  transition: background 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .fileRow:hover {
@@ -416,8 +416,8 @@
   position: fixed;
   z-index: 91;
   min-width: 170px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 5px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   padding: 4px;
   background: var(--dsw-alias-bg-layer-3);
   box-shadow: var(--dsw-shadow-lv1);
@@ -427,14 +427,14 @@
   display: block;
   width: 100%;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--dsw-radius-xs);
   padding: 6px 10px;
   background: transparent;
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   font-size: 12px;
   text-align: left;
-  transition: background 150ms ease, color 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .menuItem:hover {
@@ -468,18 +468,18 @@
 
 .fileDialog {
   width: min(340px, calc(100vw - 32px));
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 6px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: var(--dsw-shadow-lv2);
 }
 
 .fileDialogHead {
   padding: 12px 14px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .fileDialog p {
@@ -500,7 +500,7 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 10px 14px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .fileDialogActions .primaryAction {

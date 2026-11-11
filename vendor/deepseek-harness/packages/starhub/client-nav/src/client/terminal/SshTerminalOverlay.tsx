@@ -105,6 +105,10 @@ const Zmodem = ZmodemModule as ZmodemApi
 export interface SshTerminalOverlayProps {
   asset: RustAsset
   onClose: () => void
+  /** 整页形态(独立窗口/壳内 iframe):铺满视口,不再套模态遮罩与外边距。 */
+  page?: boolean
+  /** 壳内 iframe 形态:页头收窄并隐藏重复的资产名/头像,由主壳标签条承担 chrome。 */
+  embedded?: boolean
 }
 
 /** `ssh:kb-interactive:<sessionId>` 负载:服务器 keyboard-interactive 请求 + 预填。 */
@@ -228,10 +232,10 @@ function clampFontSize(value: number): number {
  * cwd tracking for the SFTP follow-terminal flow. Each workspace owns its own
  * session id (see {@link terminalSessionId}), so two windows on the same asset
  * never share a shell.
- * @param props - selected SSH asset and workspace close callback.
+ * @param props - selected SSH asset, workspace close callback, and page/embedded layout flags.
  * @returns the native SSH/SFTP terminal workspace.
  */
-export function SshTerminalOverlay({ asset, onClose }: SshTerminalOverlayProps) {
+export function SshTerminalOverlay({ asset, onClose, page = false, embedded = false }: SshTerminalOverlayProps) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
@@ -1068,8 +1072,11 @@ export function SshTerminalOverlay({ asset, onClose }: SshTerminalOverlayProps) 
   }, [bumpFontSize, clearTerminal, commandHistory, connected, copySelection, fullscreen, openFind, pasteClipboard, quickCommands, runCommand])
 
   return (
-    <div className={css.backdrop}>
-      <section className={`${css.panel} ${fullscreen ? css.panelFullscreen : ''}`} aria-label={`SSH 工作区 ${asset.name}`}>
+    <div className={`${css.backdrop}${page ? ` ${css.backdropPage}` : ''}${embedded ? ` ${css.backdropEmbedded}` : ''}`}>
+      <section
+        className={`${css.panel}${fullscreen ? ` ${css.panelFullscreen}` : ''}${page ? ` ${css.panelPage}` : ''}${embedded ? ` ${css.panelEmbedded}` : ''}`}
+        aria-label={`SSH 工作区 ${asset.name}`}
+      >
         <header className={css.header}>
           <div className={css.headLeft}>
             <span

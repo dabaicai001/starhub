@@ -1,14 +1,14 @@
 .backdrop { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: clamp(16px, 5vw, 48px); background: var(--dsw-alias-bg-mask-photo); }
-.panel { display: flex; width: min(1080px, 100%); height: min(720px, 100%); min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); box-shadow: var(--dsw-shadow-lv3); }
-.header { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
-.title { overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.closeButton { border: 1px solid transparent; border-radius: 6px; padding: 5px 10px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
+.panel { display: flex; width: min(1080px, 100%); height: min(720px, 100%); min-width: 0; flex-direction: column; overflow: hidden; border: 0; border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-bg-layer-2); box-shadow: var(--dsw-elevation-prominent); }
+.header { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 14px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
+.title { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.closeButton { border: 1px solid transparent; border-radius: var(--dsw-radius-sm); padding: 5px 10px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .closeButton:hover { border-color: var(--dsw-alias-border-l3); background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .terminalHost { flex: 1; min-height: 0; padding: 10px; background: var(--dsw-alias-markdown-code-block); }
 .terminalHost :global(.xterm) { height: 100%; }
 /* 会话状态条:进入中 / 启动失败 / 会话已结束——覆盖在终端下方,避免死终端无提示。 */
-.stateBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.stateBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 14px; border-top: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .stateBarError { color: var(--dsw-alias-label-error, var(--dsw-alias-label-primary)); }
 .stateText { min-width: 0; flex: 1; overflow-wrap: anywhere; }
-.stateAction { border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; padding: 4px 10px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; font-size: 12px; }
+.stateAction { border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); padding: 4px 10px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; font-size: 12px; }
 .stateAction:hover { background: var(--dsw-alias-interactive-bg-hover); }

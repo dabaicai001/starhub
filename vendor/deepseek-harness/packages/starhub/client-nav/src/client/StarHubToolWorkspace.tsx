@@ -295,7 +295,7 @@ export function StarHubToolWorkspace({
               <IconCloseOutlineMedium size={14} />
             </button>
           </header>
-          {notice !== null && <div className={css.status} role="status">{notice}</div>}
+          {notice !== null && <div className={css.notice} role="status">{notice}</div>}
           <div className={css.tree}>
             {activeSubcategory === null && (
               <div className={css.status}>点击展开一个子类(终端 / 数据库 / Docker / Android)查看内容。</div>

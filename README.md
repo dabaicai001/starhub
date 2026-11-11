@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.140.5-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.141.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,10 +59,13 @@
 
 ## 当前版本
 
-### v0.140.5 (2026-11-06)
-- ✨ ✨ **DSH 0.2.2 插件页原地更新适配:StarHub 组合包可按注册表包发布并直接 Update**:DSH 0.2.2-rc.1 起,插件页只给「从注册表按本名安装」的第三方 bundle 计算 `updatable` 并提供 Versions/Update(移除旧版 → 安装精确新版 → 失败回滚);`tarball`/`git`/本地目录安装都不显示该区块。原发布链只产 GitHub Release 的 `.tgz`,profile 依赖记的是 URL,新版 DSH 完全够不到更新链路。现在组装产物改成可发布清单(去掉 `private`、补 `license`/`repository`/`publishConfig`/`engines.dsh`/`os`/`cpu`、`dsh.bundle.platforms`、包内 `README.md` 作为插件页详情),新增 `scripts/publish-plugin-bundle.mjs`(`npm run plugin:publish`,含 dry-run、已发布版本跳过、发布前按 DSH 准入规则自检),发布链在 smoke 通过后按 `NPM_TOKEN`/`STARHUB_PLUGIN_REGISTRY`/`STARHUB_PLUGIN_PACKAGE_NAME` 发布;tarball 仍是离线兜底。详见 `docs/DSH升级适配清单-v0.2.2-rc1.md`。
-- 🔧 ⚡ **工作台静态资源按内容哈希缓存,升级后不再拿旧入口**:`/starhub-react` 的 Vite 哈希资产(`assets/<name>-<hash>.<ext>`)返回 `cache-control: public, max-age=31536000, immutable`,`index.html` 与未哈希文件 `no-cache`;缺失的带扩展名路径返回 404 而不是回落 `index.html`(避免浏览器把 HTML 当 JS 缓存),`HEAD` 只发头,补齐 webp/avif/woff/ttf/webmanifest/wasm 等 MIME。
-- 🔧 🐛 **sidecar 生命周期在加载失败/HMR/更新时不再泄漏进程**:sidecar 的 disposer 改为 spawn 成功后立即登记,后续 `ctx.provide`/路由注册抛错会先收进程再抛出;spawn 加 `windowsHide`,健康探针失败与 dispose 都等待子进程真正退出(2s 后 SIGKILL),避免 Windows 上更新时 sidecar 的 exe 仍被占用导致 `pnpm remove` 失败。
+### v0.141.0 (2026-11-11)
+- 🔧 🎨 **工作台 UI 基座统一:字重/字号/圆角/描边/动效按 DSH 规范收敛**:此前 107 处 ≥600 字重、15 种字号(含 10.5/11.5/12.5)、16 种圆角(79 处 6px,DSH 是 8)、277 处 1px 中性描边、12 种动效时长各写各的,同一产品里页面松紧/粗细/手感不一致。现在字重只留 400/500,字号收成 10–18,圆角映射到 `--dsw-radius-*`,中性描边改 0.5px,时长/缓动统一走 `--ds-transition-duration*`/`--ds-ease-in-out`;近 40 处 `50%`/`999px` 圆角补 `corner-shape: round`,修复 DSH 全局 superellipse 把圆点/胶囊压成超椭圆;DB/Dashboard/Broker/settings 的持续动画补 reduced-motion。
+- 🔧 ✨ **壳内工作台去模态化 + 主题实时跟随**:资产页 URL 增加 `embed=1`,SSH 页在独立窗口与壳内都改为 edge-to-edge(去掉 fixed 遮罩/16px 边距/圆角投影),不再像「标签页里弹了个窗」;DB/Redis/Docker/ES/SSH 页头统一 52px,壳内 44px 并隐藏重复的资产名/头像;已打开的 iframe 经 `BroadcastChannel('starhub-theme')` 跟随 DSH 深浅色切换,不再停在打开时的主题。
+- 🔧 ✨ **标签条与工具面板交互完善**:主标签增加 2px 激活指示、内容面衔接、方向键/Home/End 切换、中键关页、关闭钮常显与 24px 命中区;空页簿渲染「返回会话」兜底,不再 `return null` 留白板。工具面板行改为静止透明 / hover / 选中三级,行尾编辑钮预留 34px 不再压字,展开有 160ms 进场,通知改浮层不再把列表往下推。
+- 🔧 🐛 **连接对话框布局与可达性**:`.dialogPanel` 从固定三行 grid 改 flex,表单占唯一滚动区,预览提示/测试结果/MFA 面板不再把 action row 挤出可视区;补 `aria-modal="true"` 与名称输入自动聚焦;大对话框/浮层改 `border:0` + `--dsw-elevation-prominent`。
+- 🔧 🐛 **跨模块 keyframes 失效**:命令面板/查找条/终端设置菜单引用了只存在于 `SshTerminalOverlay.module.css` 的 `starhub-*` keyframes,CSS Modules 各自作用域下动画实际不执行;在各自文件内补齐定义,并移除命令面板遮罩的 `backdrop-filter`(DSH 规范:模态遮罩不加模糊)。
+- ✅ ✅ `npm run build:window`、`tsc -b packages/starhub/client-nav/tsconfig.json`、`vitest run packages/starhub/client-nav/tests`(993 tests)全绿。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

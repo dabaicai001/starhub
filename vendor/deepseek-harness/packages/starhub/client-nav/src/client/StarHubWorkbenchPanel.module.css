@@ -1,6 +1,10 @@
 /* StarHub workbench main panel (M2 step 6): tab strip + same-origin iframe that
    carries the standalone React workbench (/starhub-react/). Fills the layout's
-   main area; tokens follow the dsw alias set. */
+   main area; tokens follow the dsw alias set.
+
+   Tab geometry follows the dsh compact-control scale: R8 slot, 30px tab,
+   24px close hit target. The active tab takes the content layer so the page
+   below reads as one surface, with a 2px top accent instead of a hover fill. */
 
 .panel {
   display: flex;
@@ -21,24 +25,53 @@
   flex: none;
   overflow-x: auto;
   padding: 6px 8px 0;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-2);
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent;
+}
+
+.tabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tabs::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--dsw-alias-scrollbar-bg-l1);
+}
+
+.tabs::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* 一签 = 主按钮 + 关闭钮的外壳(两者同处一个标签视觉单元)。 */
 .tabSlot {
+  position: relative;
   display: inline-flex;
   align-items: center;
   flex: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: var(--dsw-radius-sm) var(--dsw-radius-sm) 0 0;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .tabSlot:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.tabSlot:has(.active) {
-  background: var(--dsw-alias-interactive-bg-hover-accent);
+.tabSlotActive {
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: inset 0 2px 0 var(--dsw-alias-state-business-primary);
+}
+
+/* 盖住标签条底边框,让激活页与内容区连成一块。 */
+.tabSlotActive::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: var(--dsw-alias-bg-layer-1);
+  content: '';
 }
 
 .tab {
@@ -46,15 +79,17 @@
   align-items: center;
   gap: 6px;
   max-width: 220px;
-  padding: 6px 8px 6px 10px;
+  height: 30px;
+  padding: 0 4px 0 10px;
   border: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: var(--dsw-radius-sm) var(--dsw-radius-sm) 0 0;
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
   font-family: inherit;
   font-size: 12px;
   white-space: nowrap;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .tab:hover {
@@ -63,9 +98,15 @@
 }
 
 .tab.active {
-  background: var(--dsw-alias-interactive-bg-hover-accent);
+  background: transparent;
   color: var(--dsw-alias-label-primary);
-  font-weight: 600;
+  font-weight: 500;
+}
+
+.tab:focus-visible,
+.tabClose:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: -2px;
 }
 
 .tabLabel {
@@ -79,14 +120,22 @@
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
+  opacity: 0.55;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.tabSlot:hover .tabClose,
+.tabSlotActive .tabClose,
+.tabClose:focus-visible {
+  opacity: 1;
 }
 
 .tabClose:hover {
@@ -113,4 +162,58 @@
 /* 非活动页:visibility 而非 display:none —— 保留 iframe 文档的布局与滚动位置。 */
 .frameHidden {
   visibility: hidden;
+}
+
+/* 空页簿兜底:主面板被恢复/残留时给出明确出口,不留白板。 */
+.empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+}
+
+.emptyTitle {
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.emptyHint {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.emptyAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  margin-top: 8px;
+  padding: 0 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.emptyAction:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-border-l4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabSlot,
+  .tab,
+  .tabClose,
+  .emptyAction {
+    transition: none;
+  }
 }

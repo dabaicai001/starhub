@@ -140,6 +140,21 @@ export function apply(ctx: Context): void {
   // StarHub 工作台遵循 dsh 设计理念:不再注入自有主题 token(旧 --dsw-accent /
   // --dsw-font-mono / --dsw-shadow-popover 等历史令牌),统一消费 ui-theme 的
   // --dsw-alias-* 语义别名,深浅色由 dsh 主题所有者(ui-theme)处理。
+  // 工作台 iframe 不跑 ui-theme 插件树:打开时用 `dark` 参数落一次主题,之后
+  // 用户在 DSH 里切深浅色时经同源 BroadcastChannel 广播,已打开的页实时跟随。
+  ctx.effect(() => {
+    if (typeof BroadcastChannel === 'undefined') return () => {}
+    const channel = new BroadcastChannel('starhub-theme')
+    const publish = (): void => {
+      channel.postMessage({ dark: document.body.hasAttribute('data-ds-dark-theme') })
+    }
+    const observer = new MutationObserver(publish)
+    observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
+    return () => {
+      observer.disconnect()
+      channel.close()
+    }
+  }, 'starhub: workbench theme broadcast')
   /** 打开资产实例操作页:记录选择桥(供 AI 工具上下文)后一律开**壳内工作台
    *  面板页**(openNewPage → 页簿开/聚焦一页 + 切主面板)。所有类型
    *  (SSH / 数据库 / Docker / Redis)统一走同一块面板,不再新开独立窗口,
@@ -153,7 +168,9 @@ export function apply(ctx: Context): void {
     let url = baseUrl
     if (typeof document !== 'undefined') {
       const dark = document.body.hasAttribute('data-ds-dark-theme')
-      url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}dark=${dark ? '1' : '0'}`
+      // embed=1:页内工作台知道自己跑在壳内 iframe 里,不再套一层遮罩/16px 边距,
+      // 由主壳标签条承担窗口 chrome(见 App.tsx 的 WindowShell)。
+      url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}dark=${dark ? '1' : '0'}&embed=1`
     }
     openNewPage(url, asset.name, asset.id)
       // 开页失败(如宿主桥未就绪)打日志,不阻断主壳交互
@@ -285,6 +302,9 @@ export function apply(ctx: Context): void {
   const workbenchInject = (): StarHubWorkbenchPanelInjected => ({
     activatePage: (key) => { workbench.activateIfOpen(key) },
     closePage: (key) => { workbench.close(key) },
+    // 空页簿兜底:面板被恢复成 workbench 但没有页时,给用户一个明确的出口,
+    // 而不是把主区留成白板。
+    closeWorkbench: () => { layout.selectPanel(null) },
     hooks: { workbench: workbench.source },
   })
   ctx.slots.inject('main', () => ctx.slots.register({

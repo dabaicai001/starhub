@@ -15,22 +15,22 @@
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .refresh {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   padding: 4px 10px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .refresh:hover:not(:disabled) {
@@ -70,7 +70,7 @@
   border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent);
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent);
   color: var(--dsw-alias-state-error-primary);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .body {
@@ -94,8 +94,8 @@
   min-width: 0;
   flex-direction: column;
   gap: 3px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 9px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
   padding: 8px 10px;
   background: var(--dsw-alias-bg-layer-1);
 }
@@ -108,8 +108,8 @@
 .cardValue {
   overflow: hidden;
   color: var(--dsw-alias-label-primary);
-  font-size: 15px;
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -117,7 +117,7 @@
 
 .cardHint {
   color: var(--dsw-alias-label-tertiary);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .memCard,
@@ -126,8 +126,8 @@
   flex: none;
   flex-direction: column;
   gap: 7px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 9px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
   padding: 10px 12px;
   background: var(--dsw-alias-bg-layer-1);
 }
@@ -142,12 +142,12 @@
 .memTitle {
   color: var(--dsw-alias-label-primary);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .memValue {
   color: var(--dsw-alias-label-secondary);
-  font-size: 11.5px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -155,40 +155,40 @@
 .percentTrack {
   height: 6px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   background: var(--dsw-alias-border-l1);
 }
 
 .memFill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   background: var(--dsw-alias-state-business-primary);
-  transition: width 240ms ease;
+  transition: width var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 .memHint {
   color: var(--dsw-alias-label-tertiary);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .table th {
   padding: 4px 6px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-tertiary);
-  font-weight: 600;
+  font-weight: 500;
   text-align: left;
   white-space: nowrap;
 }
 
 .table td {
   padding: 5px 6px;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
   color: var(--dsw-alias-label-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -221,7 +221,7 @@
 .percentFill {
   display: block;
   height: 100%;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   background: var(--dsw-alias-state-success-primary);
 }
 
@@ -256,12 +256,12 @@
 .placeholderTitle {
   color: var(--dsw-alias-label-secondary);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .placeholderHint {
   max-width: 260px;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.6;
 }
 

@@ -66,6 +66,9 @@ function requestWindowClose(): void {
 /** Standalone shell: resolve the URL to a workbench and render it. */
 export function WindowShell() {
   const [state, setState] = useState<ShellState>({ kind: 'loading' })
+  // 壳内 iframe 与独立浏览器页共用同一入口:embed=1 时去掉整页窗口感
+  // (SSH 的遮罩/16px 边距),由主壳标签条承担 chrome。
+  const embedded = new URLSearchParams(window.location.search).get('embed') === '1'
 
   useEffect(() => {
     const params = parseWindowParams(window.location.search)
@@ -99,7 +102,7 @@ export function WindowShell() {
   const renderWorkbench = (asset: RustAsset, workbench: WindowWorkbench) => {
     switch (workbench) {
       case 'ssh':
-        return <SshTerminalOverlay asset={asset} onClose={requestWindowClose} />
+        return <SshTerminalOverlay asset={asset} onClose={requestWindowClose} page embedded={embedded} />
       case 'db-mysql':
       case 'db-postgresql':
       case 'db-clickhouse':
@@ -119,7 +122,7 @@ export function WindowShell() {
 
   if (state.kind === 'ready') {
     return (
-      <div className="window-frame standalone-workbench">
+      <div className={`window-frame standalone-workbench${embedded ? ' embedded-workbench' : ''}`}>
         <WorkbenchErrorBoundary>{renderWorkbench(state.asset, state.workbench)}</WorkbenchErrorBoundary>
       </div>
     )
@@ -143,6 +146,8 @@ export function WindowShell() {
 
 /** Keep a reference so HMR can unmount cleanly (used by main.tsx). */
 export let rootRef: Root | null = null
+/** Same-origin channel the DSH shell uses to broadcast theme flips. */
+let themeChannel: BroadcastChannel | null = null
 export function render(container: HTMLElement): void {
   rootRef = createRoot(container)
   rootRef.render(<WindowShell />)
@@ -174,6 +179,17 @@ export function mount(): void {
   if (!fromHint && typeof matchMedia !== 'undefined') {
     const mq = matchMedia('(prefers-color-scheme: dark)')
     mq.addEventListener('change', () => { apply(mq.matches) })
+  }
+  // 页面打开后 DSH 再切深浅色:经同源 BroadcastChannel 接收壳的广播,
+  // 已打开的工作台不再停留在旧主题。
+  themeChannel?.close()
+  themeChannel = null
+  if (typeof BroadcastChannel !== 'undefined') {
+    themeChannel = new BroadcastChannel('starhub-theme')
+    themeChannel.addEventListener('message', (event) => {
+      const dark = (event.data as { dark?: unknown } | null)?.dark
+      if (typeof dark === 'boolean') apply(dark)
+    })
   }
   const el = document.getElementById('root')
   if (el !== null) render(el)

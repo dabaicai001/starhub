@@ -23,8 +23,8 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(560px, 94vw);
   max-height: min(660px, 88vh);
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 6px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
   overflow: hidden;
@@ -36,12 +36,12 @@
   align-items: flex-start;
   justify-content: space-between;
   padding: 14px 16px 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .title {
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }
 
@@ -56,12 +56,12 @@
   width: 28px;
   height: 28px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
-  font-size: 15px;
+  font-size: 14px;
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .closeBtn:hover {
@@ -85,8 +85,8 @@
 }
 
 .smallBtn {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-xs);
   min-height: 28px;
   padding: 4px 10px;
   background: transparent;
@@ -94,7 +94,7 @@
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .smallBtn:hover {
@@ -114,8 +114,8 @@
   gap: 4px;
   max-height: 220px;
   overflow-y: auto;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 5px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   padding: 5px;
   background: var(--dsw-alias-bg-layer-1);
 }
@@ -127,13 +127,13 @@
   min-height: 48px;
   padding: 8px 10px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .sessionRow:hover {
@@ -166,7 +166,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 600;
+  font-weight: 500;
   font-size: 12px;
 }
 
@@ -178,15 +178,15 @@
 
 .commandInput {
   min-height: 40px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-xs);
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
   font-family: var(--ds-font-family-code);
   font-size: 13px;
   padding: 8px 10px;
   outline: none;
-  transition: border-color 150ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .commandInput::placeholder {
@@ -204,8 +204,8 @@
   color: var(--dsw-alias-state-warn-primary);
   line-height: 1.55;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-xs);
   background: var(--dsw-alias-bg-layer-1);
 }
 
@@ -214,22 +214,22 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .secondaryBtn,
 .primaryBtn {
   min-height: 32px;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   padding: 5px 14px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, border-color 150ms ease, filter 150ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), filter var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .secondaryBtn {
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
 }

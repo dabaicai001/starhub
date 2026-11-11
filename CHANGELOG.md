@@ -9,6 +9,18 @@
 
 ---
 
+## [0.141.0] - 2026-11-11
+
+### 变更
+- 🎨 **工作台 UI 基座统一:字重/字号/圆角/描边/动效按 DSH 规范收敛**:此前 107 处 ≥600 字重、15 种字号(含 10.5/11.5/12.5)、16 种圆角(79 处 6px,DSH 是 8)、277 处 1px 中性描边、12 种动效时长各写各的,同一产品里页面松紧/粗细/手感不一致。现在字重只留 400/500,字号收成 10–18,圆角映射到 `--dsw-radius-*`,中性描边改 0.5px,时长/缓动统一走 `--ds-transition-duration*`/`--ds-ease-in-out`;近 40 处 `50%`/`999px` 圆角补 `corner-shape: round`,修复 DSH 全局 superellipse 把圆点/胶囊压成超椭圆;DB/Dashboard/Broker/settings 的持续动画补 reduced-motion。
+- ✨ **壳内工作台去模态化 + 主题实时跟随**:资产页 URL 增加 `embed=1`,SSH 页在独立窗口与壳内都改为 edge-to-edge(去掉 fixed 遮罩/16px 边距/圆角投影),不再像「标签页里弹了个窗」;DB/Redis/Docker/ES/SSH 页头统一 52px,壳内 44px 并隐藏重复的资产名/头像;已打开的 iframe 经 `BroadcastChannel('starhub-theme')` 跟随 DSH 深浅色切换,不再停在打开时的主题。
+- ✨ **标签条与工具面板交互完善**:主标签增加 2px 激活指示、内容面衔接、方向键/Home/End 切换、中键关页、关闭钮常显与 24px 命中区;空页簿渲染「返回会话」兜底,不再 `return null` 留白板。工具面板行改为静止透明 / hover / 选中三级,行尾编辑钮预留 34px 不再压字,展开有 160ms 进场,通知改浮层不再把列表往下推。
+- 🐛 **连接对话框布局与可达性**:`.dialogPanel` 从固定三行 grid 改 flex,表单占唯一滚动区,预览提示/测试结果/MFA 面板不再把 action row 挤出可视区;补 `aria-modal="true"` 与名称输入自动聚焦;大对话框/浮层改 `border:0` + `--dsw-elevation-prominent`。
+- 🐛 **跨模块 keyframes 失效**:命令面板/查找条/终端设置菜单引用了只存在于 `SshTerminalOverlay.module.css` 的 `starhub-*` keyframes,CSS Modules 各自作用域下动画实际不执行;在各自文件内补齐定义,并移除命令面板遮罩的 `backdrop-filter`(DSH 规范:模态遮罩不加模糊)。
+
+### 测试
+- ✅ `npm run build:window`、`tsc -b packages/starhub/client-nav/tsconfig.json`、`vitest run packages/starhub/client-nav/tests`(993 tests)全绿。
+
 ## [0.140.5] - 2026-11-06
 
 ### 新增

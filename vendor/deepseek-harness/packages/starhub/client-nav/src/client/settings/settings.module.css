@@ -17,7 +17,7 @@
   flex-direction: column;
   gap: 12px;
   padding: 16px 0;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .section:last-child {
@@ -69,7 +69,7 @@
   height: 28px;
   padding: 0 12px;
   border: none;
-  border-radius: 14px;
+  border-radius: var(--dsw-radius-sm);
   font-family: inherit;
   font-size: 12px;
   line-height: 18px;
@@ -99,7 +99,7 @@
 .btnOutline {
   background: transparent;
   color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .btnSecondary:hover,
@@ -132,7 +132,7 @@
 .testFail,
 .testPending {
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   font-size: 12px;
   word-break: break-all;
 }
@@ -158,8 +158,8 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-bg-layer-1);
 }
 
@@ -171,7 +171,7 @@
   height: 26px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
@@ -194,8 +194,8 @@
   box-sizing: border-box;
   width: 100%;
   min-height: 32px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
   font-family: inherit;
@@ -239,8 +239,8 @@
   box-sizing: border-box;
   margin-top: 12px;
   padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
   white-space: pre;
@@ -284,8 +284,8 @@
   padding: 4px 6px;
   background: var(--dsw-alias-bg-overlay, var(--dsw-specific-input-major));
   color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-xs);
 }
 
 .select:disabled {
@@ -325,12 +325,12 @@
   align-items: center;
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   white-space: nowrap;
 }
 
 .badge {
-  border: 1px solid var(--dsw-alias-border-l3);
+  border: 0.5px solid var(--dsw-alias-border-l3);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
 }
@@ -354,8 +354,8 @@
   flex-direction: column;
   gap: 6px;
   padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
 }
 
 .card.disabled {
@@ -372,7 +372,7 @@
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -403,8 +403,8 @@
 
 .tableWrap{
   overflow: auto;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
 
   /* Elevated scroll container: rebind the scrollbar indirection to the l2 pair. */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
@@ -419,14 +419,14 @@
 .table th,
 .table td {
   padding: 8px 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
   text-align: left;
   white-space: nowrap;
 }
 
 .table th {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -467,8 +467,8 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
 }
 
 .statHead {
@@ -503,7 +503,7 @@
   align-items: center;
   gap: 6px;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   background: var(--dsw-alias-interactive-bg-hover);
   font-size: 11px;
 }
@@ -520,7 +520,7 @@
   height: 14px;
   padding: 0;
   border: none;
-  border-radius: 50%;
+  border-radius: 50%; corner-shape: round;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
@@ -547,7 +547,7 @@
   gap: 10px;
   padding: 28px 20px;
   text-align: center;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .aboutLogo {
@@ -556,11 +556,11 @@
   justify-content: center;
   width: 72px;
   height: 72px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 16px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-lg);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 34px;
-  font-weight: 700;
+  font-weight: 500;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
 }
@@ -568,7 +568,7 @@
 .aboutName {
   margin: 0;
   font-size: 22px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }
 
@@ -580,7 +580,7 @@
 
 .aboutVersion code {
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }
@@ -592,7 +592,7 @@
   font-size: 10px;
   line-height: 16px;
   padding: 0 7px;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   white-space: nowrap;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-tertiary);
@@ -617,8 +617,8 @@
   align-items: center;
   height: 28px;
   padding: 0 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 14px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-primary);
   text-decoration: none;
@@ -652,7 +652,7 @@
   font-size: 12px;
   color: var(--dsw-alias-label-tertiary);
   border: 1px dashed var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
 }
 
 
@@ -671,54 +671,61 @@
 }
 
 .dialogPanel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 0;
   width: min(720px, 100%);
   max-height: min(760px, calc(100vh - 48px));
+  max-height: min(760px, calc(100dvh - 48px));
   overflow: hidden;
   background: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  box-shadow: var(--dsw-shadow-lv3);
+  border: 0;
+  border-radius: var(--dsw-radius-lg);
+  box-shadow: var(--dsw-elevation-prominent);
 }
 
 .dialogHead {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: none;
   min-height: 52px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-1);
 }
 
 .dialogTitle {
   flex: 1;
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }
 
 .dialogPanel > .formGrid,
 .dialogPanel > .hint,
+.dialogPanel > .errorText,
+.dialogPanel > .kbPanel,
 .dialogPanel > .testOk,
 .dialogPanel > .testFail,
 .dialogPanel > .testPending {
+  flex: none;
   margin-inline: 16px;
 }
 
 .dialogPanel > .formGrid {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding-block: 16px;
 }
 
 .dialogPanel > .actionRow {
+  flex: none;
   min-height: 58px;
   margin: 0;
   padding: 0 16px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-1);
 }
 
@@ -743,6 +750,12 @@
 
 @keyframes settings-spin {
   to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
 }
 
 .mono {

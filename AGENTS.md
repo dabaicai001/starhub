@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.140.5(✨ **DSH 0.2.2 插件页原地更新适配:StarHub 组合包可按注册表包发布并直接 Update**:DSH 0.2.2-rc.1 起,插件页只给「从注册表按本名安装」的第三方 bundle 计算 `updatable` 并提供 Versions/Update(移除旧版 → 安装精确新版 → 失败回滚);`tarball`/`git`/本地目录安装都不显示该区块。原发布链只产 GitHub Release 的 `.tgz`,profile 依赖记的是 URL,新版 DSH 完全够不到更新链路。现在组装产物改成可发布清单(去掉 `private`、补 `license`/`repository`/`publishConfig`/`engines.dsh`/`os`/`cpu`、`dsh.bundle.platforms`、包内 `README.md` 作为插件页详情),新增 `scripts/publish-plugin-bundle.mjs`(`npm run plugin:publish`,含 dry-run、已发布版本跳过、发布前按 DSH 准入规则自检),发布链在 smoke 通过后按 `NPM_TOKEN`/`STARHUB_PLUGIN_REGISTRY`/`STARHUB_PLUGIN_PACKAGE_NAME` 发布;tarball 仍是离线兜底。详见 `docs/DSH升级适配清单-v0.2.2-rc1.md`。) |
+| 当前版本 | v0.141.0(🎨 **工作台 UI 基座统一:字重/字号/圆角/描边/动效按 DSH 规范收敛**:此前 107 处 ≥600 字重、15 种字号(含 10.5/11.5/12.5)、16 种圆角(79 处 6px,DSH 是 8)、277 处 1px 中性描边、12 种动效时长各写各的,同一产品里页面松紧/粗细/手感不一致。现在字重只留 400/500,字号收成 10–18,圆角映射到 `--dsw-radius-*`,中性描边改 0.5px,时长/缓动统一走 `--ds-transition-duration*`/`--ds-ease-in-out`;近 40 处 `50%`/`999px` 圆角补 `corner-shape: round`,修复 DSH 全局 superellipse 把圆点/胶囊压成超椭圆;DB/Dashboard/Broker/settings 的持续动画补 reduced-motion。) |
 
 ## 架构一句话
 
@@ -146,4 +146,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-11-06 (v0.140.5)*
+*最后更新: 2026-11-11 (v0.141.0)*

@@ -54,7 +54,7 @@
   justify-content: center;
   padding: 16px;
   background: var(--dsw-alias-bg-mask-3);
-  animation: starhub-backdrop-in 160ms ease-out;
+  animation: starhub-backdrop-in var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .panel {
@@ -65,11 +65,11 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 14px;
+  border: 0;
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-layer-1);
-  box-shadow: var(--dsw-shadow-lv2);
-  animation: starhub-dialog-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: var(--dsw-elevation-prominent);
+  animation: starhub-dialog-in var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 /* 全屏:铺满视口、去掉圆角与投影(像真正的终端应用)。 */
@@ -77,6 +77,41 @@
   width: 100%;
   border-radius: 0;
   box-shadow: none;
+}
+
+/* 整页形态(独立窗口/壳内 iframe):不再当模态框,直接铺满视口。 */
+.backdropPage,
+.backdropEmbedded {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  animation: none;
+}
+
+.panelPage,
+.panelEmbedded {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+
+/* 壳内:资产名已由主壳标签条承担,页头只留状态与动作。 */
+:global(.embedded-workbench) .header {
+  min-height: 44px;
+}
+
+:global(.embedded-workbench) .avatar,
+:global(.embedded-workbench) .identity {
+  display: none;
 }
 
 /* ── Header ────────────────────────────────────────────────────── */
@@ -88,8 +123,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 10px 0 14px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  padding: 0 16px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-2);
 }
 
@@ -107,10 +142,10 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  border-radius: 9px;
+  border-radius: var(--dsw-radius-md);
   font-size: 14px;
-  font-weight: 700;
-  transition: background 200ms ease, color 200ms ease;
+  font-weight: 500;
+  transition: background var(--ds-transition-duration) var(--ds-ease-in-out), color var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 .avatarOnline {
@@ -139,7 +174,7 @@
   overflow: hidden;
   color: var(--dsw-alias-label-primary);
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -160,11 +195,11 @@
   align-items: center;
   gap: 6px;
   margin-left: 4px;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   padding: 3px 10px 3px 8px;
   font-size: 11px;
-  font-weight: 600;
-  transition: background 200ms ease, color 200ms ease;
+  font-weight: 500;
+  transition: background var(--ds-transition-duration) var(--ds-ease-in-out), color var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 .statusPillOnline {
@@ -194,7 +229,7 @@
   width: 7px;
   height: 7px;
   flex: none;
-  border-radius: 50%;
+  border-radius: 50%; corner-shape: round;
 }
 
 .connectionOnline {
@@ -203,7 +238,7 @@
 
 .connectionPending {
   background: var(--dsw-alias-state-warning-primary);
-  animation: starhub-dot-pulse 1.2s ease-in-out infinite;
+  animation: starhub-dot-pulse 1.2s var(--ds-ease-in-out) infinite;
 }
 
 .connectionOffline {
@@ -247,11 +282,11 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
-  transition: background 140ms ease, color 140ms ease, transform 100ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .headerAction:hover,
@@ -281,14 +316,14 @@
   align-items: center;
   gap: 5px;
   border: 1px solid var(--dsw-alias-state-business-primary);
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   padding: 6px 12px;
   background: transparent;
   color: var(--dsw-alias-state-business-primary);
   cursor: pointer;
   font-size: 12px;
-  font-weight: 600;
-  transition: background 140ms ease, transform 100ms ease;
+  font-weight: 500;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .reconnectAction:hover {
@@ -303,15 +338,15 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   padding: 6px 11px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   font-size: 12px;
-  font-weight: 600;
-  transition: background 140ms ease, color 140ms ease, border-color 140ms ease, transform 100ms ease;
+  font-weight: 500;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .broadcastAction:hover {
@@ -345,15 +380,15 @@
   max-width: min(560px, calc(100% - 48px));
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 999px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 999px; corner-shape: round;
   padding: 7px 8px 7px 12px;
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: var(--dsw-shadow-lv2);
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   transform: translateX(-50%);
-  animation: starhub-toast-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: starhub-toast-in var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 .notice_error {
@@ -373,7 +408,7 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 50%; corner-shape: round;
   background: var(--dsw-alias-state-success-primary);
   color: var(--dsw-alias-label-primary-inverted);
   font-size: 10px;
@@ -401,12 +436,12 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 50%;
+  border-radius: 50%; corner-shape: round;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
   line-height: 1;
-  transition: background 140ms ease, color 140ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .noticeClose:hover {
@@ -442,9 +477,9 @@
   align-items: center;
   gap: 8px;
   padding: 0 8px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-2);
-  animation: starhub-bar-in 180ms ease-out;
+  animation: starhub-bar-in var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 .tabGroup {
@@ -452,8 +487,8 @@
   flex: none;
   align-items: center;
   gap: 2px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 9px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
   padding: 2px;
   background: var(--dsw-alias-bg-layer-1);
 }
@@ -465,13 +500,13 @@
   align-items: center;
   gap: 5px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   padding: 4px 10px;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
   white-space: nowrap;
-  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), box-shadow var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .terminalTab {
@@ -479,7 +514,7 @@
   box-shadow: var(--dsw-shadow-lv1);
   color: var(--dsw-alias-label-primary);
   font-family: var(--ds-font-family-code);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .workspaceTab,
@@ -496,7 +531,7 @@
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: var(--dsw-shadow-lv1);
   color: var(--dsw-alias-state-business-primary);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .tabBadge {
@@ -505,11 +540,11 @@
   height: 15px;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   padding: 0 4px;
   background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-label-primary-inverted);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1;
 }
 
@@ -533,8 +568,8 @@
   flex: none;
   max-width: 180px;
   overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 999px; corner-shape: round;
   padding: 3px 11px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
@@ -542,7 +577,7 @@
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease, transform 120ms ease, box-shadow 140ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), background var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out), box-shadow var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .quickCommand:hover:not(:disabled) {
@@ -565,13 +600,13 @@
 .quickEmpty {
   flex: none;
   border: 1px dashed var(--dsw-alias-border-l2);
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   padding: 3px 11px;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
   font-size: 12px;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .quickEmpty:hover {
@@ -596,11 +631,11 @@
   align-items: center;
   justify-content: center;
   border: 1px dashed var(--dsw-alias-border-l2);
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease, transform 100ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), background var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .quickIconButton:hover {
@@ -639,17 +674,17 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   padding: 0 5px;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
   font-size: 12px;
-  transition: background 140ms ease, color 140ms ease, transform 100ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .toolButton {
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .fontButton:hover,
@@ -678,7 +713,7 @@
   flex: 1;
   padding: 8px 0 8px 10px;
   background: var(--starhub-terminal-surface, var(--dsw-alias-bg-layer-1));
-  transition: box-shadow 180ms ease;
+  transition: box-shadow var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 /* 键盘焦点进入终端时给一圈淡色描边,提示「输入将发往 SSH」。 */
@@ -695,7 +730,7 @@
   align-items: center;
   gap: 10px;
   padding: 0 10px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
@@ -709,14 +744,14 @@
   align-items: center;
   gap: 5px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--dsw-radius-sm);
   padding: 2px 6px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   font: inherit;
   font-size: 11px;
-  transition: background 140ms ease, color 140ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .statusCwd:hover,
@@ -755,14 +790,14 @@
   flex: none;
   align-items: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: 999px; corner-shape: round;
   padding: 2px 8px;
   background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-label-primary-inverted);
   cursor: pointer;
   font: inherit;
-  font-size: 10.5px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 /* ── Error bar ─────────────────────────────────────────────────── */
@@ -774,7 +809,7 @@
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, var(--dsw-alias-bg-layer-2));
   color: var(--dsw-alias-state-error-primary);
   font-size: 12px;
-  animation: starhub-bar-in 160ms ease-out;
+  animation: starhub-bar-in var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .fileInput {
@@ -789,7 +824,7 @@
   min-width: 0;
   flex: none;
   flex-direction: column;
-  border-left: 1px solid var(--dsw-alias-border-l2);
+  border-left: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-2);
 }
 
@@ -813,7 +848,7 @@
   left: 3px;
   width: 1px;
   background: transparent;
-  transition: background 140ms ease, width 140ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), width var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .sidePanelResize:hover::after,
@@ -831,7 +866,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 0 8px 0 14px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .sidePanelHeader > div {
@@ -844,7 +879,7 @@
 .sidePanelTitle {
   color: var(--dsw-alias-label-primary);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .sidePanelDetail {
@@ -863,11 +898,11 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
-  transition: background 140ms ease, color 140ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .sidePanelClose:hover {
@@ -901,8 +936,7 @@
   justify-content: center;
   padding: 24px;
   background: var(--dsw-alias-bg-mask-3);
-  backdrop-filter: blur(4px);
-  animation: starhub-backdrop-in 160ms ease-out;
+  animation: starhub-backdrop-in var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .kbBackdrop { z-index: 90; }
@@ -917,11 +951,11 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: var(--dsw-shadow-lv2);
-  animation: starhub-dialog-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: starhub-dialog-in var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 .kbDialog { width: min(400px, 92vw); }
@@ -936,13 +970,13 @@
   justify-content: space-between;
   gap: 12px;
   padding: 13px 16px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .kbTitle {
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .kbHint {
@@ -980,8 +1014,8 @@
 .kbInput {
   box-sizing: border-box;
   width: 100%;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   padding: 8px 10px;
   outline: none;
   background: var(--dsw-alias-bg-layer-1);
@@ -989,7 +1023,7 @@
   font: inherit;
   font-size: 13px;
   font-family: var(--ds-font-family-code);
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), box-shadow var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .kbInput:focus {
@@ -1008,7 +1042,7 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .kbSubmit {
@@ -1016,14 +1050,14 @@
   align-items: center;
   gap: 5px;
   border: 1px solid var(--dsw-alias-state-business-primary);
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   padding: 7px 16px;
   background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-label-primary-inverted);
   cursor: pointer;
   font-size: 12px;
-  font-weight: 600;
-  transition: filter 140ms ease, transform 100ms ease;
+  font-weight: 500;
+  transition: filter var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .kbSubmit:hover {
@@ -1041,13 +1075,13 @@
   flex-direction: column;
   gap: 3px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .hkTitle {
   color: var(--dsw-alias-label-primary);
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .hkHint {
@@ -1090,7 +1124,7 @@
 
 .hkDanger {
   border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warning-primary) 35%, transparent);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
   padding: 8px 10px;
   background: color-mix(in srgb, var(--dsw-alias-state-warning-primary) 8%, transparent);
   color: var(--dsw-alias-state-warning-primary);
@@ -1103,18 +1137,18 @@
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .hkBtnDanger,
 .hkBtnSecondary,
 .hkBtnPrimary {
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   padding: 7px 14px;
   cursor: pointer;
   font-size: 12px;
-  font-weight: 600;
-  transition: filter 140ms ease, background 140ms ease, border-color 140ms ease, color 140ms ease, transform 100ms ease;
+  font-weight: 500;
+  transition: filter var(--ds-transition-duration-fast) var(--ds-ease-in-out), background var(--ds-transition-duration-fast) var(--ds-ease-in-out), border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .hkBtnDanger:active,
@@ -1134,7 +1168,7 @@
 }
 
 .hkBtnSecondary {
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
 }
@@ -1170,12 +1204,12 @@
 
 .zmodemLabel {
   flex: none;
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   padding: 2px 6px;
   background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-label-primary-inverted);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
   letter-spacing: 0.5px;
 }
 
@@ -1184,7 +1218,7 @@
   overflow: hidden;
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1200,16 +1234,16 @@
 
 .zmodemTrack {
   height: 5px;
-  border-radius: 3px;
+  border-radius: var(--dsw-radius-xs);
   overflow: hidden;
   background: var(--dsw-alias-border-l1);
 }
 
 .zmodemFill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--dsw-radius-xs);
   background: var(--dsw-alias-state-business-primary);
-  transition: width 150ms linear;
+  transition: width var(--ds-transition-duration-fast) linear;
 }
 
 .zmodemActions {
@@ -1220,14 +1254,14 @@
 
 .zmodemBtn,
 .zmodemBtnPrimary {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   padding: 6px 14px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   font-size: 12px;
-  transition: background 140ms ease, color 140ms ease, border-color 140ms ease, filter 140ms ease, transform 100ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), filter var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .zmodemBtn:hover {
@@ -1244,7 +1278,7 @@
   border-color: var(--dsw-alias-state-business-primary);
   background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-label-primary-inverted);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .zmodemBtnPrimary:hover {
@@ -1260,7 +1294,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 13px 16px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .quickEditorHeader > div {
@@ -1273,7 +1307,7 @@
 .quickEditorTitle {
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .quickEditorHint {
@@ -1287,8 +1321,8 @@
   align-items: center;
   gap: 7px;
   margin: 10px 16px 0;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   padding: 6px 9px;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-tertiary);
@@ -1333,15 +1367,15 @@
 .quickEditorRow textarea {
   box-sizing: border-box;
   width: 100%;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 7px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
   padding: 7px 9px;
   outline: none;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
   font: inherit;
   font-size: 12px;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), box-shadow var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .quickEditorRow textarea {
@@ -1363,11 +1397,11 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
-  transition: background 140ms ease, color 140ms ease;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .quickDelete:hover {
@@ -1388,7 +1422,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .quickAdd {
@@ -1396,13 +1430,13 @@
   align-items: center;
   gap: 5px;
   border: 1px dashed var(--dsw-alias-border-l2);
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   padding: 6px 12px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   font-size: 12px;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out), background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .quickAdd:hover {
@@ -1414,14 +1448,14 @@
 
 .quickDone {
   border: 1px solid var(--dsw-alias-state-business-primary);
-  border-radius: 7px;
+  border-radius: var(--dsw-radius-sm);
   padding: 7px 16px;
   background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-label-primary-inverted);
   cursor: pointer;
   font-size: 12px;
-  font-weight: 600;
-  transition: filter 140ms ease, transform 100ms ease;
+  font-weight: 500;
+  transition: filter var(--ds-transition-duration-fast) var(--ds-ease-in-out), transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .quickDone:hover {

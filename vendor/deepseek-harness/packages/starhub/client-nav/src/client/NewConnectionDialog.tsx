@@ -474,6 +474,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
       <div
         className={s.dialogPanel}
         role="dialog"
+        aria-modal="true"
         aria-label={editing ? '编辑连接' : '新建连接'}
         onMouseDown={(event) =>{  event.stopPropagation() }}
       >
@@ -505,6 +506,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
               id="conn-name"
               className={s.input}
               value={name}
+              autoFocus
               disabled={preview}
               placeholder="连接名称"
               onChange={(event) =>{  setName(event.target.value) }}

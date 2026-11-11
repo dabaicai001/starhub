@@ -2,6 +2,7 @@
    subcategory/asset tree scrolling inside. Tokens follow the dsw alias set. */
 
 .panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -24,13 +25,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  min-height: 48px;
+  padding: 0 12px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .title {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }
 
@@ -38,14 +40,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .closeButton:hover {
@@ -74,13 +77,14 @@
   width: 100%;
   padding: 7px 10px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   font-family: inherit;
   font-size: 13px;
   text-align: left;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .category:hover {
@@ -89,9 +93,9 @@
 }
 
 .category.active {
-  background: var(--dsw-alias-interactive-bg-hover-accent);
+  background: var(--dsw-alias-interactive-bg-active);
   color: var(--dsw-alias-label-primary);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .categoryLabel {
@@ -105,14 +109,21 @@
 .assetGroup {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 2px 0 6px 22px;
+  gap: 6px;
+  padding: 2px 0 8px 22px;
+  animation: starhub-group-in var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+@keyframes starhub-group-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .count {
   font-size: 11px;
   padding: 0 6px;
   border-radius: 999px;
+  corner-shape: round;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-tertiary);
 }
@@ -125,14 +136,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .iconButton:hover {
@@ -156,24 +168,26 @@
   align-items: flex-start;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px 34px 7px 10px;
   border: none;
-  border-radius: 5px;
-  background: var(--dsw-alias-interactive-bg-hover);
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
   color: inherit;
   cursor: pointer;
   font-family: inherit;
   font-size: 13px;
   text-align: left;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .row:hover {
-  background: var(--dsw-alias-interactive-bg-hover-accent);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .row.active {
-  background: var(--dsw-alias-interactive-bg-hover-accent);
+  background: var(--dsw-alias-state-business-tertiary);
   color: var(--dsw-alias-label-primary);
+  box-shadow: inset 2px 0 0 var(--dsw-alias-state-business-primary);
 }
 
 .badge {
@@ -184,6 +198,7 @@
   font-size: 11px;
   padding: 1px 8px;
   border-radius: 999px;
+  corner-shape: round;
   background: var(--dsw-alias-state-business-tertiary);
   color: var(--dsw-alias-state-business-primary);
   white-space: nowrap;
@@ -206,7 +221,7 @@
 
 .rowName {
   color: var(--dsw-alias-label-primary);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .rowSub {
@@ -223,25 +238,30 @@
 
 .rowEdit {
   position: absolute;
-  right: 4px;
+  right: 6px;
   top: 50%;
   transform: translateY(-50%);
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-xs);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out), background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .rowWrap:hover .rowEdit,
+.rowWrap:focus-within .rowEdit,
 .rowEdit:focus-visible {
-  display: inline-flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .rowEdit:hover {
@@ -258,8 +278,33 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* 面板级瞬时提示:浮在列表上方,不参与文档流(出现时不把列表往下推)。 */
+.notice {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  z-index: 5;
+  width: auto;
+  max-width: min(420px, calc(100% - 32px));
+  padding: 8px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-3);
+  box-shadow: var(--dsw-elevation-prominent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  transform: translateX(-50%);
+  animation: starhub-notice-in var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+@keyframes starhub-notice-in {
+  from { opacity: 0; transform: translate(-50%, -4px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 .previewTitle {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }
 
@@ -268,19 +313,42 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
+  height: 28px;
   padding: 0 10px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   font-family: inherit;
   font-size: 12px;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
 .retryButton:hover {
   background: var(--dsw-alias-interactive-bg-hover-accent);
+}
+
+.closeButton:focus-visible,
+.iconButton:focus-visible,
+.category:focus-visible,
+.row:focus-visible,
+.rowEdit:focus-visible,
+.retryButton:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .category,
+  .row,
+  .rowEdit,
+  .retryButton,
+  .assetGroup,
+  .notice {
+    transition: none;
+    animation: none;
+  }
 }
 
 /* 右键菜单的 Menu 包装 span:display:contents 让空 anchor 不参与行布局。 */

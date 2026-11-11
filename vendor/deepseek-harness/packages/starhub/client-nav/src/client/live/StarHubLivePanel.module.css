@@ -16,7 +16,7 @@
   gap: 4px;
   padding: 6px 8px;
   flex: none;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   overflow-x: auto;
 }
 
@@ -29,7 +29,7 @@
 .tab {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px 0 0 6px;
+  border-radius: var(--dsw-radius-sm) 0 0 var(--dsw-radius-sm);
   color: inherit;
   padding: 4px 8px;
   cursor: pointer;
@@ -52,7 +52,7 @@
 .tabClose {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--dsw-radius-sm) var(--dsw-radius-sm) 0;
   color: inherit;
   padding: 4px 6px;
   cursor: pointer;
@@ -68,12 +68,12 @@
   gap: 10px;
   padding: 6px 10px;
   flex: none;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   flex-wrap: wrap;
 }
 
 .badge {
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   padding: 1px 6px;
   font-size: 11px;
 }
@@ -134,7 +134,7 @@
   top: 8px;
   padding: 3px 8px;
   background: rgba(0, 0, 0, 0.6);
-  border-radius: 4px;
+  border-radius: var(--dsw-radius-xs);
   font-size: 12px;
   color: var(--dsw-alias-state-warn-primary);
   pointer-events: none;
