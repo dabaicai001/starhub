@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.141.5-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.141.6-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,8 +59,8 @@
 
 ## 当前版本
 
-### v0.141.5 (2026-11-12)
-- 🐛 **主壳 AI 不再猜终端连接**:同一资产开多个终端页时,AI 改为复用**最近一次连接**的那一页(此前按随机会话 id 排序,命令可能落到另一页);页内助手的页面级绑定仍然最优先。
+### v0.141.6 (2026-11-12)
+- 🐛 **修 v0.141.5 的发布构建失败**:`exactOptionalPropertyTypes` 下可选字段不能显式赋 `undefined`、测试解析器类型不匹配,测试辅助文件未列进 `tsconfig.client.json`;已在本地补跑 host/client 两个聚合面 tsc + 四个包 1100 测试。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

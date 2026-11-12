@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.141.5(🐛 **主壳 AI 不再猜终端连接**:同资产多页面时 `find_asset_session` 改为「最近连接优先」(记录连接先后、去重、上限 64),不再是随机 id 排序;页内助手的显式页面绑定仍最优先。详见 CHANGELOG 与 `docs/踩坑记录.md` §82) |
+| 当前版本 | v0.141.6(🐛 **修 v0.141.5 的发布构建失败**:`exactOptionalPropertyTypes` 下可选字段不能显式赋 `undefined`(TS2375)、测试解析器类型不匹配(TS2322),并把带签名的 settings 写入替身补进 `tsconfig.client.json`(TS2352/TS6307)。发布前必须跑两个聚合面 `tsc -b tsconfig.host.json` 与 `tsc -b tsconfig.client.json`;详见 `docs/踩坑记录.md` §28) |
 
 ## 架构一句话
 
@@ -147,4 +147,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-11-12 (v0.141.5)*
+*最后更新: 2026-11-12 (v0.141.6)*

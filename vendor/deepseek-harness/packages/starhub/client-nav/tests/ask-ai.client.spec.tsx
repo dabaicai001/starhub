@@ -14,7 +14,7 @@ import type { ISessions, IWorkspaces } from '@deepseek-ai/dsh-client-runtime/cli
 import type { UiWorkspace } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import { createToolSelectionBridge } from '../src/client/store.ts'
 import { createAskAiHandler } from '../src/client/host-events.ts'
-import { TOOL_CONTEXT_NAMESPACE, type SettingsUpdateWriter } from '../src/client/tool-context.ts'
+import { createSettingsWriter, lastBinding } from './settings-writer.ts'
 
 interface HarnessOverrides {
   current?: string
@@ -59,9 +59,7 @@ function harness(overrides: HarnessOverrides = {}) {
   const conversation = overrides.noConversation === true
     ? undefined
     : { input: { for: inputFor } } as unknown as IConversation
-  const update = vi.fn(() => Promise.resolve({ result: { ok: true } }))
-  const mutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
-  const writer: SettingsUpdateWriter = { update, mutate }
+  const { writer, update, mutate } = createSettingsWriter()
   const selection = createToolSelectionBridge()
   const handler = createAskAiHandler({ writer, selection, sessions, workspaces, uiWorkspace, conversation })
   return { handler, openSession, create, setDraft, inputFor, binding, update, mutate, selection }
@@ -118,12 +116,10 @@ describe('createAskAiHandler', () => {
     selection.selectSubcategory('terminal')
     handler({ text: 'web-1 报错', assetId: 'a1', assetName: 'web-1' })
     expect(mutate).toHaveBeenCalledTimes(1)
-    const [ns, ops] = mutate.mock.calls[0] as [string, { op: string; path: string[]; value: string }[]]
-    expect(ns).toBe(TOOL_CONTEXT_NAMESPACE)
+    const { sessionId, binding } = lastBinding(mutate)
+    expect(sessionId).toBe('s1')
     // 按会话写入:路径带上 sessionId,值是该会话自己的 JSON 条目。
-    expect(ops[0]?.op).toBe('set')
-    expect(ops[0]?.path).toEqual(['bindings', 's1'])
-    expect(JSON.parse(ops[0]?.value ?? '')).toMatchObject({
+    expect(binding).toMatchObject({
       subcategory: 'terminal',
       assetId: 'a1',
       assetName: 'web-1',
@@ -136,8 +132,7 @@ describe('createAskAiHandler', () => {
   it('light-binds with an empty name when the payload omits assetName', () => {
     const { handler, mutate } = harness({ current: 's1' })
     handler({ text: 'x', assetId: 'a1' })
-    const [, ops] = mutate.mock.calls[0] as [string, { value: string }[]]
-    expect(JSON.parse(ops[0]?.value ?? '')).toMatchObject({
+    expect(lastBinding(mutate).binding).toMatchObject({
       subcategory: '',
       assetId: 'a1',
       assetName: '',

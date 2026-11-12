@@ -10,7 +10,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientSessionContext, InputTriggerPick } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { createStarHubAssets, createToolSelectionBridge, type RustAsset } from '../src/client/store.ts'
 import { assetToolBadge, renderAssetReference, createStarHubAssetSource } from '../src/client/asset-source.ts'
-import { type SettingsUpdateWriter } from '../src/client/tool-context.ts'
+import type { SettingsUpdateWriter } from '../src/client/tool-context.ts'
+import { createSettingsWriter, lastBinding, type MutateSpy } from './settings-writer.ts'
 import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
 
 /** 构造一个最小资产(只带匹配所需的字段)。 */
@@ -43,18 +44,18 @@ function pickOf(candidate: { name: string; description?: string }): InputTrigger
   }
 }
 
-function makeHarness(assets: ReturnType<typeof createStarHubAssets>, mutate: ReturnType<typeof vi.fn>) {
-  const writer = { update: vi.fn(), mutate } as unknown as SettingsUpdateWriter
+function makeHarness(assets: ReturnType<typeof createStarHubAssets>, mutate: MutateSpy = createSettingsWriter().mutate) {
+  const writer: SettingsUpdateWriter = { update: vi.fn(() => Promise.resolve({})), mutate }
   const selection = createToolSelectionBridge()
   const source = createStarHubAssetSource({ writer, assets, selection })
   return { writer, selection, source }
 }
 
 /** 取最近一次按会话绑定写入的条目(`bindings[<sessionId>]` 的 JSON)。 */
-function bindingOf(mutate: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const call = mutate.mock.calls.at(-1) as [string, { path: string[]; value: string }[]] | undefined
-  expect(call?.[1][0]?.path).toEqual(['bindings', 's1'])
-  return JSON.parse(call?.[1][0]?.value ?? '{}') as Record<string, unknown>
+function bindingOf(mutate: MutateSpy): Record<string, unknown> {
+  const written = lastBinding(mutate)
+  expect(written.sessionId).toBe('s1')
+  return written.binding
 }
 
 afterEach(() => {
@@ -84,7 +85,7 @@ describe('renderAssetReference', () => {
 
 describe('createStarHubAssetSource', () => {
   it('binds the @ trigger under the starhub-asset source name', () => {
-    const { source } = makeHarness(createStarHubAssets(), vi.fn())
+    const { source } = makeHarness(createStarHubAssets())
     expect(source.trigger).toBe('@')
     expect(source.name).toBe('starhub-asset')
     expect(source.codec).toBeDefined()
@@ -100,7 +101,7 @@ describe('createStarHubAssetSource', () => {
       ],
       loading: false, error: null, preview: false,
     })
-    const { source } = makeHarness(assets, vi.fn())
+    const { source } = makeHarness(assets)
     await expect(source.candidates(proj(), req('WEB'))).resolves.toEqual([
       { name: 'web-1', icon: expect.any(Function), description: 'deploy@10.0.0.5' },
       { name: 'web-2', icon: expect.any(Function), description: '10.0.0.6' },
@@ -125,7 +126,7 @@ describe('createStarHubAssetSource', () => {
       assets: [{ ...rustAsset('a1', 'x', config), type }],
       loading: false, error: null, preview: false,
     })
-    const { source } = makeHarness(assets, vi.fn())
+    const { source } = makeHarness(assets)
     const [candidate] = await source.candidates(proj(), req(''))
     // 0.1.6:候选 icon 位只收词表字符串或自定义组件;分类文本徽标由组件承载,
     // 文本映射本身仍由纯函数 assetToolBadge 覆盖。
@@ -136,7 +137,7 @@ describe('createStarHubAssetSource', () => {
   it('candidates return everything on an empty query and nothing when aborted', async () => {
     const assets = createStarHubAssets()
     assets.source.set({ assets: [rustAsset('a1', 'web-1'), rustAsset('a2', 'web-2')], loading: false, error: null, preview: false })
-    const { source } = makeHarness(assets, vi.fn())
+    const { source } = makeHarness(assets)
     await expect(source.candidates(proj(), req(''))).resolves.toHaveLength(2)
     const controller = new AbortController()
     controller.abort()
@@ -147,7 +148,7 @@ describe('createStarHubAssetSource', () => {
   it('lexicon serves the asset-name roll and subscribeLexicon forwards snapshot changes', () => {
     const assets = createStarHubAssets()
     assets.source.set({ assets: [rustAsset('a1', 'web-1'), rustAsset('a2', 'web-2')], loading: false, error: null, preview: false })
-    const { source } = makeHarness(assets, vi.fn())
+    const { source } = makeHarness(assets)
     expect(source.lexicon!(proj())).toEqual(['web-1', 'web-2'])
     let notified = 0
     const off = source.subscribeLexicon!(proj(), () => { notified += 1 })
@@ -164,7 +165,7 @@ describe('createStarHubAssetSource', () => {
     stubHostBridge(() => [rustAsset('a1', 'web-1')])
     try {
       const assets = createStarHubAssets()
-      const { source } = makeHarness(assets, vi.fn())
+      const { source } = makeHarness(assets)
       source.warm!(proj())
       expect(assets.source.getSnapshot().loading).toBe(true)
       await vi.waitFor(() =>{  expect(assets.source.getSnapshot().loading).toBe(false) })
@@ -180,7 +181,7 @@ describe('createStarHubAssetSource', () => {
       assets: [rustAsset('a1', 'web-1', { username: 'deploy', host: '10.0.0.5' })],
       loading: false, error: null, preview: false,
     })
-    const mutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
+    const mutate = createSettingsWriter().mutate
     const { selection, source } = makeHarness(assets, mutate)
     // 侧栏当前打开别的工具不影响 @ 绑定:绑定以「被引用资产」为准。
     selection.selectSubcategory('database')
@@ -216,7 +217,7 @@ describe('createStarHubAssetSource', () => {
       assets: [{ ...rustAsset(id, `${type}-asset`), type }],
       loading: false, error: null, preview: false,
     })
-    const mutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
+    const mutate = createSettingsWriter().mutate
     const { selection, source } = makeHarness(assets, mutate)
     // 侧栏选中无关工具:@ 绑定必须按被引用资产派生,不被侧栏误导。
     selection.selectSubcategory('database')
@@ -237,7 +238,7 @@ describe('createStarHubAssetSource', () => {
       assets: [{ ...rustAsset('r1', 'redis-1', { dbType: 'redis' }), type: 'db' }],
       loading: false, error: null, preview: false,
     })
-    const mutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
+    const mutate = createSettingsWriter().mutate
     const { source } = makeHarness(assets, mutate)
     const [candidate] = await source.candidates(proj(), req(''))
     source.onPick(pickOf(candidate!))
@@ -247,7 +248,7 @@ describe('createStarHubAssetSource', () => {
   })
 
   it('onPick falls back to plain text for a candidate this source did not produce', () => {
-    const { source } = makeHarness(createStarHubAssets(), vi.fn())
+    const { source } = makeHarness(createStarHubAssets())
     const outcome = source.onPick(pickOf({ name: 'foreign' }))
     expect(outcome).toEqual({ text: '@foreign ' })
   })
@@ -258,7 +259,7 @@ describe('createStarHubAssetSource', () => {
       assets: [{ ...rustAsset('d1', 'docker-1'), type: 'docker' }],
       loading: false, error: null, preview: false,
     })
-    const { source } = makeHarness(assets, vi.fn(() => Promise.resolve({ result: { ok: true } })))
+    const { source } = makeHarness(assets)
     const [candidate] = await source.candidates(proj(), req(''))
     expect(assetToolBadge({ type: 'docker', config: {} })).toBe('Docker')
     expect(candidate?.icon).toBeTypeOf('function')
@@ -270,7 +271,8 @@ describe('createStarHubAssetSource', () => {
   })
 
   it('light binding swallows settings mutate failures', async () => {
-    const mutate = vi.fn(() => Promise.reject(new Error('namespace missing')))
+    const mutate = createSettingsWriter().mutate
+    mutate.mockImplementation(() => Promise.reject(new Error('namespace missing')))
     const assets = createStarHubAssets()
     assets.source.set({ assets: [rustAsset('a1', 'web-1')], loading: false, error: null, preview: false })
     const { source } = makeHarness(assets, mutate)
@@ -286,7 +288,7 @@ describe('createStarHubAssetSource', () => {
   it('codec clipboard projects @name and falls back to the raw id for a deleted asset', async () => {
     const assets = createStarHubAssets()
     assets.source.set({ assets: [rustAsset('a1', 'web-1')], loading: false, error: null, preview: false })
-    const { source } = makeHarness(assets, vi.fn())
+    const { source } = makeHarness(assets)
     expect(source.codec!.clipboardText('a1')).toBe('@web-1')
     expect(source.codec!.clipboardText('gone')).toBe('@gone')
   })
@@ -297,7 +299,7 @@ describe('createStarHubAssetSource', () => {
       assets: [rustAsset('a1', 'web-1', { username: 'deploy', host: '10.0.0.5' })],
       loading: false, error: null, preview: false,
     })
-    const { source } = makeHarness(assets, vi.fn())
+    const { source } = makeHarness(assets)
     await expect(source.codec!.serialize('a1', new AbortController().signal))
       .resolves.toBe('@web-1 (deploy@10.0.0.5)')
     // 资产删除后:序列化失败 = 阻止发送(流水线契约,绝不静默降级)

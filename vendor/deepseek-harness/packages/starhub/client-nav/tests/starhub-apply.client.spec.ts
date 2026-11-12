@@ -34,6 +34,7 @@ import { AndroidSettingsTab } from '../src/client/settings/android.tsx'
 import { SshSettingsTab } from '../src/client/settings/ssh.tsx'
 import { STARHUB_ASSET_SOURCE } from '../src/client/asset-source.ts'
 import { restoreHostBridge } from './host-bridge.ts'
+import { createSettingsWriter, lastBinding } from './settings-writer.ts'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -322,15 +323,14 @@ describe('client-nav apply (rc.2)', () => {
   }
 
   function referenceContext(inputStub: { insertReference: ReturnType<typeof vi.fn>; setDraft: ReturnType<typeof vi.fn> }) {
-    const settingsUpdate = vi.fn(() => Promise.resolve({ result: { ok: true } }))
-    const settingsMutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
+    const { writer, update: settingsUpdate, mutate: settingsMutate } = createSettingsWriter()
     const input = {
       ...inputStub,
       addImages: vi.fn(() => true),
       state: { getSnapshot: () => ({ draft: '查一下 ', draftRev: 3 }) },
     }
     const harness = fakeContext({
-      remote: { settings: { update: settingsUpdate, mutate: settingsMutate } },
+      remote: { settings: writer },
       sessions: {
         list: {
           // 0.1.7:当前会话 = mainView 保留的会话(currentSessionId 推导)。
@@ -361,9 +361,9 @@ describe('client-nav apply (rc.2)', () => {
     const panel = mainByKey(register, 'starhub-tools').inject() as { insertAssetReference: (asset: unknown) => void }
     panel.insertAssetReference(refAsset)
     // 轻绑定:按会话写 bindings[sessionId](与 @ pick 同一通道,路径带会话 id)
-    const [, bindingOps] = settingsMutate.mock.calls[0] as [string, { path: string[]; value: string }[]]
-    expect(bindingOps[0]?.path).toEqual(['bindings', 's1'])
-    expect(JSON.parse(bindingOps[0]?.value ?? '')).toMatchObject({ assetId: 'a1', assetName: 'prod-server' })
+    const written = lastBinding(settingsMutate)
+    expect(written.sessionId).toBe('s1')
+    expect(written.binding).toMatchObject({ assetId: 'a1', assetName: 'prod-server' })
     // chip 插在草稿末尾(span 从 draft 末起,带 pick 时刻 draftRev)
     expect(insertReference).toHaveBeenCalledWith(
       { source: STARHUB_ASSET_SOURCE, ref: 'a1', label: 'prod-server (deploy@10.0.0.5)', clipboardText: '@prod-server' },
@@ -384,11 +384,8 @@ describe('client-nav apply (rc.2)', () => {
   })
 
   it('no-ops the asset reference when no session is current', () => {
-    const settingsUpdate = vi.fn(() => Promise.resolve({ result: { ok: true } }))
-    const settingsMutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
-    const { ctx, register } = fakeContext({
-      remote: { settings: { update: settingsUpdate, mutate: settingsMutate } },
-    })
+    const { writer, update: settingsUpdate, mutate: settingsMutate } = createSettingsWriter()
+    const { ctx, register } = fakeContext({ remote: { settings: writer } })
     applyPlugin(ctx)
     // apply 启动期的记忆开关初始同步也会写一次 settings,先清掉再断言本路径不写
     settingsUpdate.mockClear()

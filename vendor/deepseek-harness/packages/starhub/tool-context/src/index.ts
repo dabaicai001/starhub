@@ -99,22 +99,27 @@ export const Config = z.object({
   bindings: z.dict(z.string()).default({}).volatile(),
 })
 
-/** 一个会话的绑定条目(client-nav 写入 `bindings[sessionId]` 的 JSON 形状)。 */
+/**
+ * 一个会话的绑定条目(client-nav 写入 `bindings[sessionId]` 的 JSON 形状)。
+ *
+ * 字段一律 `可选 + 显式 undefined`:读入口径是「取到就带、取不到为 undefined」,
+ * 与 `exactOptionalPropertyTypes` 下「存在但为 undefined」的赋值语义一致。
+ */
 export interface ToolContextBinding {
   /** 当前子类 key(terminal / database / docker);空 = 未选中。 */
-  subcategory?: string
+  subcategory?: string | undefined
   /** 当前选中资产的 id。 */
-  assetId?: string
+  assetId?: string | undefined
   /** 当前选中资产的显示名。 */
-  assetName?: string
+  assetName?: string | undefined
   /** 子类段路由前缀(如 /ssh)。 */
-  routePrefix?: string
+  routePrefix?: string | undefined
   /** 资产大类 id(db / ssh / docker / local)。 */
-  assetType?: string
+  assetType?: string | undefined
   /** 数据库子类型(redis / mysql / clickhouse / …)。 */
-  dbType?: string
+  dbType?: string | undefined
   /** 写入时间(毫秒);client-nav 据此裁剪过期条目。 */
-  updatedAt?: number
+  updatedAt?: number | undefined
 }
 
 /**

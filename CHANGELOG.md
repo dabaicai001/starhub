@@ -9,6 +9,14 @@
 
 ---
 
+## [0.141.6] - 2026-11-12
+
+### 修复
+- 🐛 **修 v0.141.5 的发布构建失败(CI `build:lib` 的 tsc 门)**:tag 推送后 `Release desktop bundles` 与 `main` CI 都在 `Package dsh runtime → build:lib:host` 挂掉,两处 TS 报错:① `packages/starhub/tool-context/src/index.ts` 的 `parseBindings` 给「可选但存在」的字段显式赋了 `undefined`,在 `exactOptionalPropertyTypes` 下不合法(TS2375)→ `ToolContextBinding` 的可选字段补成 `?: T | undefined`,并注明读入口径;② `live-context/tests/snapshot-cache.spec.ts` 的 `release` 解析器类型与 `Promise<{step}>` 不匹配(TS2322)→ 收紧为具体值类型。同时把测试里的 settings 写入替身改成带签名的工厂 `tests/settings-writer.ts`(此前 `vi.fn()` 的 `mock.calls[0]` 被推成空元组,断言里的元组转换在 `tsconfig.client.json` 下直接 TS2352),并把该辅助文件显式列进 `tsconfig.client.json`(不带 `.client` 中缀,否则 TS6307)。本地已补跑 `tsc -b tsconfig.host.json` 与 `tsc -b tsconfig.client.json` 两个聚合面 + 四个包 1100 个单测全绿。
+
+### 测试
+- ✅ `tsc -b tsconfig.host.json`、`tsc -b tsconfig.client.json`、`vitest run packages/starhub/{client-nav,tool-context,live-context,bridge}/tests`(62 files / 1100 tests)全绿。
+
 ## [0.141.5] - 2026-11-12
 
 ### 修复

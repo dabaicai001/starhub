@@ -28,7 +28,7 @@ describe('LiveSnapshotCache', () => {
   it('returns the stale snapshot immediately and refreshes in the background', async () => {
     const time = clock()
     const cache = new LiveSnapshotCache({ timeoutMs: 50, ttlMs: 10, cooldownMs: 1_000 }, time.now)
-    let release: (value: unknown) => void = () => {}
+    let release: (value: { step: number }) => void = () => {}
     const pull = vi.fn(() => Promise.resolve({ step: 1 }))
     expect(await cache.get(pull)).toEqual({ step: 1 })
 
