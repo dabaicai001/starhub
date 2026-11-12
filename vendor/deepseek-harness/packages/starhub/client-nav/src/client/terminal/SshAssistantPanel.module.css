@@ -364,6 +364,20 @@
   font-size: 11px;
 }
 
+.approvalAllow:disabled,
+.approvalReject:disabled {
+  opacity: 0.55;
+  cursor: default;
+  filter: none;
+}
+
+.approvalError {
+  margin: 8px 0 0;
+  color: var(--dsw-alias-state-danger-primary);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 /* ── 输入区 ──────────────────────────────────────────────────── */
 
 .composer {

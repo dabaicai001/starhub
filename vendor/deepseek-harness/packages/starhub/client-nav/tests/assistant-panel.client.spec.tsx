@@ -154,6 +154,53 @@ describe('SshAssistantPanel', () => {
     })
   })
 
+  it('keeps a failed approval pending and lets the user retry', async () => {
+    let attempts = 0
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.endsWith('/approval') && ++attempts === 1) {
+        return jsonResponse({ ok: false, error: 'approval request expired' })
+      }
+      return assistantFetch(input, init)
+    })
+    render(<SshAssistantPanel sshSessionId="s1" assetId="ssh-1" assetName="server" />)
+    await waitReady()
+    act(() => {
+      emitHostEvent('starhub-assistant', {
+        t: 'approval',
+        requestId: 'r1',
+        toolName: 'ssh_exec',
+        reason: '风险命令:reboot',
+      })
+    })
+    fireEvent.click(screen.getByText('允许一次'))
+    await screen.findByText(/approval request expired/)
+    // 提交失败 ≠ 已允许:卡片仍是待确认,按钮可再点。
+    expect(screen.queryByText('已允许')).toBeNull()
+    expect(screen.getByText<HTMLButtonElement>('允许一次').disabled).toBe(false)
+    fireEvent.click(screen.getByText('允许一次'))
+    await screen.findByText('已允许')
+    expect(attempts).toBe(2)
+  })
+
+  it('retries opening the assistant after a failure', async () => {
+    let openAttempts = 0
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.endsWith('/open') && ++openAttempts === 1) {
+        return jsonResponse({ ok: false, error: 'assistant boot failed' })
+      }
+      return assistantFetch(input, init)
+    })
+    render(<SshAssistantPanel sshSessionId="s1" assetId="ssh-1" assetName="server" />)
+    await screen.findByText('AI 助手打开失败')
+    expect(screen.getByText('assistant boot failed')).toBeTruthy()
+    fireEvent.click(screen.getByText('重试'))
+    // 重试必须真的重发 open(不是只把界面切回「正在打开」)。
+    await waitReady()
+    expect(openAttempts).toBe(2)
+  })
+
   it('stops a running turn from the panel', async () => {
     render(
       <SshAssistantPanel sshSessionId="s1" assetId="ssh-1" assetName="server" />,

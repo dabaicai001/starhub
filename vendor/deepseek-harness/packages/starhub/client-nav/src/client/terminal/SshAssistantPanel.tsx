@@ -60,6 +60,11 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
   const [dropped, setDropped] = useState(false)
   const [stopping, setStopping] = useState(false)
   const stopPending = useRef(false)
+  // 打开失败后的「重试」:换一份 boot 身份重跑挂载效应(否则 effect 依赖不变,
+  // 点重试只会把界面停在「正在打开…」)。
+  const [bootAttempt, setBootAttempt] = useState(0)
+  // 审批提交状态:requestId → 错误文案('' = 提交中)。成功后该项标记为已结算。
+  const [decisions, setDecisions] = useState<ReadonlyMap<string, string>>(new Map())
   const listRef = useRef<HTMLDivElement | null>(null)
 
   // 帧回调:折叠消息 + 跟踪状态/模型/关闭。
@@ -114,7 +119,7 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
       disposed = true
       unsubscribe?.()
     }
-  }, [sshSessionId, assetId, assetName, onFrame])
+  }, [sshSessionId, assetId, assetName, onFrame, bootAttempt])
 
   // 贴底跟随:新消息到达且用户本就贴近底部时滚到底。
   useEffect(() => {
@@ -152,14 +157,21 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
     }
   }
 
-  /** 结算审批。 */
+  /** 结算审批:先提交,成功才标记已结算;失败保留按钮并给出可重试的错误。 */
   const decide = async (requestId: string, outcome: AssistantApprovalOutcome): Promise<void> => {
-    if (assistantId === null) return
-    setItems(prev => settleApprovalItem(prev, requestId, outcome))
+    if (assistantId === null || decisions.get(requestId) === '') return
+    setDecisions(prev => new Map(prev).set(requestId, ''))
     try {
       await submitAssistantApproval(assistantId, requestId, outcome)
-    } catch {
-      // 结算失败(请求已过期):状态由下一次重放/帧纠正,不额外报错。
+      setItems(prev => settleApprovalItem(prev, requestId, outcome))
+      setDecisions((prev) => {
+        const next = new Map(prev)
+        next.delete(requestId)
+        return next
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setDecisions(prev => new Map(prev).set(requestId, message))
     }
   }
 
@@ -200,7 +212,14 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
         <div className={css.centered} role="alert">
           <p className={css.failedText}>AI 助手打开失败</p>
           <p className={css.failedDetail}>{phase.message}</p>
-          <button type="button" className={css.retryButton} onClick={() =>{  setPhase({ kind: 'opening' }) }}>
+          <button
+            type="button"
+            className={css.retryButton}
+            onClick={() => {
+              setPhase({ kind: 'opening' })
+              setBootAttempt(attempt => attempt + 1)
+            }}
+          >
             重试
           </button>
         </div>
@@ -295,22 +314,31 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
                 {item.reason !== null && <p className={css.approvalReason}>{item.reason}</p>}
                 {item.settled === null
                   ? (
-                    <div className={css.approvalActions}>
-                      <button
-                        type="button"
-                        className={css.approvalAllow}
-                        onClick={() => void decide(item.requestId, 'allowed-once')}
-                      >
-                        允许一次
-                      </button>
-                      <button
-                        type="button"
-                        className={css.approvalReject}
-                        onClick={() => void decide(item.requestId, 'rejected')}
-                      >
-                        拒绝
-                      </button>
-                    </div>
+                    <>
+                      <div className={css.approvalActions}>
+                        <button
+                          type="button"
+                          className={css.approvalAllow}
+                          onClick={() => void decide(item.requestId, 'allowed-once')}
+                          disabled={decisions.get(item.requestId) === ''}
+                        >
+                          {decisions.get(item.requestId) === '' ? '提交中…' : '允许一次'}
+                        </button>
+                        <button
+                          type="button"
+                          className={css.approvalReject}
+                          onClick={() => void decide(item.requestId, 'rejected')}
+                          disabled={decisions.get(item.requestId) === ''}
+                        >
+                          拒绝
+                        </button>
+                      </div>
+                      {(decisions.get(item.requestId) ?? '') !== '' && (
+                        <p className={css.approvalError} role="alert">
+                          提交失败:{decisions.get(item.requestId)}——可重试。
+                        </p>
+                      )}
+                    </>
                   )
                   : (
                     <p className={css.approvalSettled}>

@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.141.1-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.141.2-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,9 +59,8 @@
 
 ## 当前版本
 
-### v0.141.1 (2026-11-12)
-- 🐛 **AI 操作的「停止」真的停了**:取消信号贯通工具桥 → sidecar → SSH 执行层——运行中的 exec 先 `SIGTERM` 再关通道(带部分输出返回 `[EXEC_ABORTED]`),排队在会话锁上的调用在派发前就退出,停止只关那一条执行通道、用户终端连接保留;面板停止按钮失败会落一行错误并可重试。
-- ✅ **`npm run verify:ai-cancel` 真链路验收**:真 sidecar + 真 paramiko SSH fixture 断言「运行中的通道真的关闭 / 排队中的命令一条都没下发 / 连接仍可用」。
+### v0.141.2 (2026-11-12)
+- 🐛 **助手「重试」与「审批」不再假装成功**:打开失败后的「重试」现在真的重跑打开请求(此前只把界面切回「正在打开…」);审批改为先提交、成功才显示已结算——提交中按钮禁用,失败保留卡片、写明错误并可直接再点。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 
