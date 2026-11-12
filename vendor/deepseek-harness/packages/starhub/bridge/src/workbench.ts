@@ -79,6 +79,79 @@ function hostOriginOf(req: IncomingMessage): string | null {
 /** Maximum accepted request body for one invocation (bytes). */
 const MAX_INVOKE_BODY_BYTES = 1024 * 1024
 
+/** Default budget for one workbench invocation (10 minutes). */
+export const DEFAULT_INVOKE_TIMEOUT_MS = 10 * 60_000
+
+/** Hard ceiling for a caller-supplied budget (2 hours). */
+export const MAX_INVOKE_TIMEOUT_MS = 2 * 60 * 60_000
+
+/** Extra slack on top of a command's own `timeoutSec` before the HTTP budget expires. */
+const INVOKE_TIMEOUT_SLACK_MS = 15_000
+
+/** Per-route knobs: the default budget and the caller's ceiling. */
+export interface InvokeHandlerOptions {
+  /** Budget when neither `timeoutMs` nor `args.timeoutSec` names one. */
+  timeoutMs?: number
+  /** Upper bound for any single invocation. */
+  maxTimeoutMs?: number
+}
+
+/**
+ * Resolve one invocation's wall-clock budget.
+ *
+ * A command that carries its own `timeoutSec` (SSH exec, monitoring probes) gets
+ * that budget plus slack, so the HTTP layer never cuts a job the sidecar was
+ * told to run longer; otherwise the route default applies.
+ * @param body - decoded request body.
+ * @param args - sidecar params.
+ * @param options - route defaults.
+ * @returns budget in milliseconds, clamped to [1s, maxTimeoutMs].
+ */
+export function resolveInvokeBudget(
+  body: Record<string, unknown>,
+  args: Record<string, unknown>,
+  options: InvokeHandlerOptions = {},
+): number {
+  const max = options.maxTimeoutMs ?? MAX_INVOKE_TIMEOUT_MS
+  const requested = typeof body.timeoutMs === 'number' && Number.isFinite(body.timeoutMs)
+    ? body.timeoutMs
+    : undefined
+  const commandSec = typeof args.timeoutSec === 'number' && Number.isFinite(args.timeoutSec)
+    ? args.timeoutSec
+    : undefined
+  const derived = commandSec === undefined ? undefined : commandSec * 1000 + INVOKE_TIMEOUT_SLACK_MS
+  const budget = requested ?? derived ?? options.timeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS
+  return Math.min(Math.max(budget, 1_000), max)
+}
+
+/**
+ * Race one sidecar request against the invocation budget.
+ * @param pending - the in-flight sidecar request.
+ * @param timeoutMs - wall-clock budget.
+ * @param label - command name used in the failure message.
+ * @returns the sidecar result.
+ * @throws Error naming the command and budget when the budget expires.
+ */
+async function withBudget<T>(pending: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const budget = timeoutMs < 1_000 ? `${String(Math.round(timeoutMs))}ms` : `${String(Math.round(timeoutMs / 1000))}s`
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(
+            `${label} 超过 ${budget} 未返回:sidecar 仍在执行或已失联。`
+            + '长耗时命令请显式传 timeoutSec(秒)或 timeoutMs(毫秒)。',
+          ))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 /** Read and JSON-parse a bounded request body; rejects on oversize or bad JSON. */
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
@@ -107,11 +180,20 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 /**
  * Build the `POST /starhub/api/invoke` handler.
+ *
+ * Every invocation is bounded: an unanswered sidecar request would otherwise
+ * leave the workbench on a perpetual spinner. The budget comes from the caller
+ * (`timeoutMs`), the command's own `timeoutSec`, or the route default. If the
+ * request carries an `execId`, expiring it also asks the sidecar to abort that
+ * execution. A client that disconnects first gets no response written.
+ *
  * @param sidecar - live sidecar transport.
+ * @param options - default and maximum budget.
  * @returns the node:http request handler.
  */
 export function invokeHandler(
   sidecar: JsonRpcTransportPeer,
+  options: InvokeHandlerOptions = {},
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
     if (req.method !== 'POST') {
@@ -140,12 +222,25 @@ export function invokeHandler(
       sendJson(res, 200, { ok: true, result: { origin } })
       return
     }
+    // 客户端先断(关页签 / 切资产):请求已经发出,不在超时或失败时再写响应。
+    // 用对象承载标记,避免 TS 把这个只由回调赋值的 let 窄化成字面量 false。
+    const connection = { gone: false }
+    const onGone = (): void => { connection.gone = true }
+    req.on('close', onGone)
+    const record = args as Record<string, unknown>
+    const execId = typeof record.execId === 'string' ? record.execId : ''
+    const budget = resolveInvokeBudget(body, record, options)
     try {
-      const result = await sidecar.request(uiMethod(cmd), args)
-      sendJson(res, 200, { ok: true, result })
+      const result = await withBudget(sidecar.request(uiMethod(cmd), args), budget, cmd)
+      if (!connection.gone) sendJson(res, 200, { ok: true, result })
     } catch (error) {
+      // 超时/断连:若这条调用带执行身份,顺手让 sidecar 停掉它,别让"界面以为失败、
+      // 服务器还在跑"成为常态。
+      if (execId !== '') sidecar.notify('starhub/exec.abort', { execId })
       // 未实现的命令 / sidecar 报错:软错误给工作台(与 Tauri IPC 缺失同款降级)。
-      sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      if (!connection.gone) sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+    } finally {
+      req.off('close', onGone)
     }
   }
 }

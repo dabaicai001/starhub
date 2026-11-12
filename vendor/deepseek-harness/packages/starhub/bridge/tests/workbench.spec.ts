@@ -8,9 +8,13 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { JsonRpcTransportPeer } from '@deepseek-ai/dsh-sdk-protocol'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { eventsHandler, EVENTS_ROUTE, invokeHandler, INVOKE_ROUTE, uiMethod, WORKBENCH_API_PREFIX } from '../src/workbench.ts'
+import {
+  DEFAULT_INVOKE_TIMEOUT_MS, eventsHandler, EVENTS_ROUTE, invokeHandler, INVOKE_ROUTE,
+  MAX_INVOKE_TIMEOUT_MS, resolveInvokeBudget, uiMethod, WORKBENCH_API_PREFIX,
+} from '../src/workbench.ts'
 
 /** Minimal IncomingMessage: a readable stream carrying the request body. */
 function fakeRequest(method: string, body = ''): IncomingMessage {
@@ -178,6 +182,60 @@ describe('POST /starhub/api/invoke', () => {
     await invokeRoute(sidecar)(fakeRequest('GET'), res)
     expect(res.status).toBe(405)
     expect(JSON.parse(body())).toEqual({ ok: false, error: 'method not allowed' })
+  })
+
+  it('derives the invocation budget from timeoutMs, timeoutSec, or the route default', () => {
+    expect(resolveInvokeBudget({}, {})).toBe(DEFAULT_INVOKE_TIMEOUT_MS)
+    expect(resolveInvokeBudget({ timeoutMs: 5_000 }, {})).toBe(5_000)
+    // 命令自带 timeoutSec:HTTP 预算跟着放大,不会把 sidecar 允许的长命令提前掐死。
+    expect(resolveInvokeBudget({}, { timeoutSec: 1_800 })).toBe(1_800_000 + 15_000)
+    // 上限与下限都夹住。
+    expect(resolveInvokeBudget({ timeoutMs: 99 }, {})).toBe(1_000)
+    expect(resolveInvokeBudget({ timeoutMs: 10 * 60 * 60_000 }, {})).toBe(MAX_INVOKE_TIMEOUT_MS)
+  })
+
+  it('answers a timeout instead of letting the workbench spin forever', async () => {
+    const hanging: JsonRpcTransportPeer = { request: (): Promise<unknown> => new Promise(() => {}), notify: () => {} }
+    const { res, body } = fakeResponse()
+    await invokeHandler(hanging)(fakeRequest('POST', JSON.stringify({ cmd: 'ssh_exec', timeoutMs: 1_000, args: {} })), res)
+    expect(res.status).toBe(200)
+    const reply = JSON.parse(body()) as { ok: boolean; error: string }
+    expect(reply.ok).toBe(false)
+    expect(reply.error).toContain('ssh_exec')
+    expect(reply.error).toContain('1s')
+    expect(reply.error).toContain('timeoutSec')
+  })
+
+  it('aborts the sidecar execution named by execId when the budget expires', async () => {
+    const notifications: Array<{ method: string; params: object }> = []
+    const hanging: JsonRpcTransportPeer = {
+      request: (): Promise<unknown> => new Promise(() => {}),
+      notify: (method: string, params: object) => { notifications.push({ method, params }) },
+    }
+    const { res } = fakeResponse()
+    await invokeHandler(hanging)(
+      fakeRequest('POST', JSON.stringify({ cmd: 'ssh_exec', timeoutMs: 1_000, args: { execId: 'e1' } })),
+      res,
+    )
+    expect(notifications).toEqual([{ method: 'starhub/exec.abort', params: { execId: 'e1' } }])
+  })
+
+  it('does not write a response after the client disconnects', async () => {
+    let settle: (value: unknown) => void = () => {}
+    const sidecar: JsonRpcTransportPeer = {
+      request: (): Promise<unknown> => new Promise((resolve) => { settle = resolve }),
+      notify: () => {},
+    }
+    const { res, body } = fakeResponse()
+    const request = fakeRequest('POST', JSON.stringify({ cmd: 'get_assets', args: {} }))
+    const pending = invokeHandler(sidecar)(request, res)
+    // 等 handler 真正发出 sidecar 请求后再模拟客户端断开。
+    await new Promise(resolve => setTimeout(resolve, 0))
+    request.emit('close')
+    settle([{ id: 'a1' }])
+    await pending
+    expect(res.status).toBe(0)
+    expect(body()).toBe('')
   })
 })
 

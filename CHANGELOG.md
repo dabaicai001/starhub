@@ -9,6 +9,14 @@
 
 ---
 
+## [0.141.4] - 2026-11-12
+
+### 优化
+- ⚡ **「一直等」的来源收口:工作台调用有预算、AI 上下文快照不再每步等满**:① 工作台的统一调用层(`POST /starhub/api/invoke`,React 工作台所有侧边栏动作都走它)此前对 sidecar 请求**没有任何超时**,sidecar 一旦挂住,界面就是永久转圈;现在每次调用都有预算——调用方可以传 `timeoutMs`,命令自带 `timeoutSec` 时按它加 15s 余量(1000s 的命令不会被 120s 掐死),否则走默认 10 分钟(`Config.invokeTimeoutMs`),上限 2 小时(`invokeMaxTimeoutMs`);超时返回一条可读错误(点名命令与预算,并提示怎么传更长的超时),带 `execId` 的调用同时发 `starhub/exec.abort`,不让「界面以为失败、服务器还在跑」成为常态;客户端先断开(关页签/切资产)时不再白写一次响应。② `starhub-live-context` 的 `starhub/live.snapshot` 此前是**每个模型步同步 pull 一次**、单次最多等 2s,sidecar 慢或失联时这一步就被拖 2s;现在快照带缓存:首步最多等 `snapshotTimeoutMs`(默认 800ms),之后每步**立刻**拿到上一次的快照、超龄(`snapshotTtlMs`,默认 3s)时在后台刷新,失败后进入 `snapshotCooldownMs`(默认 15s)冷却、不再每步重试;三个预算都进了插件 Config。
+
+### 测试
+- ✅ `workbench.spec.ts` 补预算推导(`timeoutMs` / `timeoutSec` / 上下限)、超时回错、超时按 `execId` 中止、客户端断开不写响应;新增 `live-context/tests/snapshot-cache.spec.ts` 覆盖首拉/命中缓存/超龄后台刷新/失败冷却/永不返回/非对象结果。bridge + live-context 全量 85 测试通过。
+
 ## [0.141.3] - 2026-11-12
 
 ### 新增

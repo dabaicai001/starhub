@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.141.3(✨ **AI 知道你在看什么**:工具上下文按会话保存(两个终端页/助手互不覆盖),面板「当前目标」条显示资产 · cwd,终端选区随提问附带(只附带一次);详见 CHANGELOG 与 `docs/踩坑记录.md` §80) |
+| 当前版本 | v0.141.4(⚡ **不再「一直等」**:工作台统一调用层补齐超时预算(调用方 `timeoutMs` / 命令 `timeoutSec`+15s / 默认 10 分钟,上限 2 小时),超时回可读错误并按 `execId` 中止;AI 上下文快照改「首步 ≤800ms + 缓存 + 后台刷新 + 失败冷却 15s」;详见 CHANGELOG 与 `docs/踩坑记录.md`) |
 
 ## 架构一句话
 
@@ -147,4 +147,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-11-12 (v0.141.3)*
+*最后更新: 2026-11-12 (v0.141.4)*

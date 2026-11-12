@@ -30,6 +30,7 @@ import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { JsonRpcTransportPeer } from '@deepseek-ai/dsh-sdk-protocol'
 import type { SessionRegistry, StarHubSessionRecord } from '@deepseek-ai/dsh-starhub-session-registry'
 import type { DomainEventStore, StarHubDomainEvent } from '@deepseek-ai/dsh-starhub-domain-events'
+import { LiveSnapshotCache } from './snapshot-cache.ts'
 
 // DSH 0.1.7:MessageSourceMap 是merge-extensible 联合,生产者自行声明 kind
 // (共享 catch-all `plugin` kind 已移除)。
@@ -48,8 +49,14 @@ export const inject = ['agents']
 /** 桥方法名;Rust 侧实现见 src-tauri/src/harness/mod.rs(契约 §2.2)。 */
 const LIVE_SNAPSHOT_METHOD = 'starhub/live.snapshot'
 
-/** 反向宿主快照最多等待 2 秒;超时降级为本地 registry/events,不得阻断 agent turn。 */
-const LIVE_SNAPSHOT_TIMEOUT_MS = 2_000
+/** 一次快照 pull 的默认预算(首步最多等这么久;之后走缓存)。 */
+const LIVE_SNAPSHOT_TIMEOUT_MS = 800
+
+/** 缓存 TTL:超过这个年龄的快照在后台刷新,不阻塞当前步。 */
+const LIVE_SNAPSHOT_TTL_MS = 3_000
+
+/** pull 失败后的冷却:这段期间不再试,避免每一步都等满预算。 */
+const LIVE_SNAPSHOT_COOLDOWN_MS = 15_000
 
 /** 截断时追加的省略号(截断后总长仍 ≤ maxSnapshotChars)。 */
 const TRUNCATION_ELLIPSIS = '…'
@@ -62,6 +69,12 @@ export interface Config {
   maxEvents?: number
   /** 整段注入文本的字符上限;默认 4000。 */
   maxSnapshotChars?: number
+  /** 快照 pull 的单次预算(毫秒);默认 800。 */
+  snapshotTimeoutMs?: number
+  /** 快照缓存 TTL(毫秒),超龄后台刷新;默认 3000。 */
+  snapshotTtlMs?: number
+  /** pull 失败后的冷却(毫秒);默认 15000。 */
+  snapshotCooldownMs?: number
 }
 
 /** Schemastery validation for {@link Config}(cordis 加载时应用默认值)。 */
@@ -69,6 +82,9 @@ export const Config: z<Config> = z.object({
   enabled: z.boolean().default(true),
   maxEvents: z.number().default(10),
   maxSnapshotChars: z.number().default(4000),
+  snapshotTimeoutMs: z.number().default(LIVE_SNAPSHOT_TIMEOUT_MS),
+  snapshotTtlMs: z.number().default(LIVE_SNAPSHOT_TTL_MS),
+  snapshotCooldownMs: z.number().default(LIVE_SNAPSHOT_COOLDOWN_MS),
 })
 
 /** `starhub/live.snapshot` 的 result(契约 §2.2)。 */
@@ -97,14 +113,29 @@ function execBelongsToSession(exec: Record<string, unknown>, sessionId: string):
 /**
  * 校验活体上下文配置。
  * @param config - 已解析(含默认值)的配置。
- * @throws 当 maxEvents / maxSnapshotChars 不是正整数时。
+ * @throws 当计数/预算不是正整数时。
  */
-function validateConfig(config: { maxEvents: number; maxSnapshotChars: number }): void {
+function validateConfig(config: {
+  maxEvents: number
+  maxSnapshotChars: number
+  snapshotTimeoutMs: number
+  snapshotTtlMs: number
+  snapshotCooldownMs: number
+}): void {
   if (!Number.isSafeInteger(config.maxEvents) || config.maxEvents <= 0) {
     throw new TypeError(`starhub-live-context: maxEvents must be a positive safe integer, got ${String(config.maxEvents)}`)
   }
   if (!Number.isSafeInteger(config.maxSnapshotChars) || config.maxSnapshotChars <= 0) {
     throw new TypeError(`starhub-live-context: maxSnapshotChars must be a positive safe integer, got ${String(config.maxSnapshotChars)}`)
+  }
+  for (const [key, value] of Object.entries({
+    snapshotTimeoutMs: config.snapshotTimeoutMs,
+    snapshotTtlMs: config.snapshotTtlMs,
+    snapshotCooldownMs: config.snapshotCooldownMs,
+  })) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new TypeError(`starhub-live-context: ${key} must be a positive safe integer, got ${String(value)}`)
+    }
   }
 }
 
@@ -242,6 +273,8 @@ export function truncateText(text: string, maxChars: number): string {
  * @param maxEvents - 每相关资产的事件条数上限。
  * @param maxSnapshotChars - 整段文本字符上限。
  * @param sessionId - 当前 agent 会话 id(agent.session.id)。
+ * @param cache - 快照缓存(插件 apply 里创建);缺省时直接 pull 并受 2s 预算约束
+ *   (单测/直调路径),传缓存后每步优先用上一次的快照,刷新在后台进行。
  * @returns 注入文本;本地与快照段都为空时返回 null(不注入)。
  */
 export async function composeLiveContext(
@@ -251,6 +284,7 @@ export async function composeLiveContext(
   maxEvents: number,
   maxSnapshotChars: number,
   sessionId: string,
+  cache?: LiveSnapshotCache,
 ): Promise<string | null> {
   const sections: string[] = []
   const records = registry?.list() ?? []
@@ -258,20 +292,23 @@ export async function composeLiveContext(
   if (local !== '') sections.push(local)
   let snapshot: LiveSnapshot | undefined
   if (transport !== undefined) {
-    let timeout: ReturnType<typeof setTimeout> | undefined
-    try {
-      const timeoutPromise = new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => { reject(new Error('starhub/live.snapshot timed out')) }, LIVE_SNAPSHOT_TIMEOUT_MS)
-      })
-      const result: unknown = await Promise.race([
-        transport.request(LIVE_SNAPSHOT_METHOD, {}),
-        timeoutPromise,
-      ])
+    const pull = (): Promise<unknown> => transport.request(LIVE_SNAPSHOT_METHOD, {})
+    if (cache === undefined) {
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      try {
+        const timeoutPromise = new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => { reject(new Error('starhub/live.snapshot timed out')) }, LIVE_SNAPSHOT_TIMEOUT_MS)
+        })
+        const result: unknown = await Promise.race([pull(), timeoutPromise])
+        snapshot = typeof result === 'object' && result !== null ? result : undefined
+      } catch {
+        // pull 失败/超时(宿主报错、进程断开或未实现)降级为本地 registry+events,不打断 pre-step。
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout)
+      }
+    } else {
+      const result = await cache.get(pull)
       snapshot = typeof result === 'object' && result !== null ? result : undefined
-    } catch {
-      // pull 失败/超时(宿主报错、进程断开或未实现)降级为本地 registry+events,不打断 pre-step。
-    } finally {
-      if (timeout !== undefined) clearTimeout(timeout)
     }
   }
   const live = renderSnapshotSections(snapshot, sessionId)
@@ -285,10 +322,17 @@ export async function composeLiveContext(
  * 注册插件:在每次 agent pre-step 注入活体上下文。
  * @param ctx - plugin context;监听器随插件 fiber 卸载。
  * @param config - 注入配置(cordis 已应用 schema 默认值)。
- * @throws 当 maxEvents / maxSnapshotChars 非法时。
+ * @throws 当 maxEvents / maxSnapshotChars / 快照预算非法时。
  */
 export function apply(ctx: Context, config: Config): void {
-  const resolved = config as Config & { enabled: boolean; maxEvents: number; maxSnapshotChars: number }
+  const resolved = {
+    enabled: config.enabled ?? true,
+    maxEvents: config.maxEvents ?? 10,
+    maxSnapshotChars: config.maxSnapshotChars ?? 4000,
+    snapshotTimeoutMs: config.snapshotTimeoutMs ?? LIVE_SNAPSHOT_TIMEOUT_MS,
+    snapshotTtlMs: config.snapshotTtlMs ?? LIVE_SNAPSHOT_TTL_MS,
+    snapshotCooldownMs: config.snapshotCooldownMs ?? LIVE_SNAPSHOT_COOLDOWN_MS,
+  }
   if (!resolved.enabled) return
   validateConfig(resolved)
   ctx.effect(() => {
@@ -303,6 +347,13 @@ export function apply(ctx: Context, config: Config): void {
     const events = ctx.get('starhub-domain-events') as DomainEventStore | undefined
     const getTransport = (): JsonRpcTransportPeer | undefined =>
       ctx.get('sdk-transport') as JsonRpcTransportPeer | undefined
+    // 快照缓存:一次 pull 的结果服务后续每一步,刷新在后台进行——慢 sidecar 不再
+    // 让每个模型步都等满预算(v0.141.4)。
+    const cache = new LiveSnapshotCache({
+      timeoutMs: resolved.snapshotTimeoutMs,
+      ttlMs: resolved.snapshotTtlMs,
+      cooldownMs: resolved.snapshotCooldownMs,
+    })
 
     return ctx.on('agent/pre-step', async (
       { agent, signal },
@@ -314,7 +365,7 @@ export function apply(ctx: Context, config: Config): void {
       // 主壳会话不再看到 SSH 页助手刚跑过的命令,反之亦然。
       const text = await composeLiveContext(
         registry, events, getTransport(), resolved.maxEvents, resolved.maxSnapshotChars,
-        String(agent.session.id),
+        String(agent.session.id), cache,
       )
       if (text === null) return decision
       return {

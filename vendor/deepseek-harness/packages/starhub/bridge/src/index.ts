@@ -42,7 +42,7 @@ import {
   spawnSidecar,
 } from './transport.ts'
 import { liveUpgradeHandler, LIVE_UPGRADE_ROUTE } from './live.ts'
-import { eventsHandler, invokeHandler } from './workbench.ts'
+import { eventsHandler, invokeHandler, DEFAULT_INVOKE_TIMEOUT_MS, MAX_INVOKE_TIMEOUT_MS } from './workbench.ts'
 
 export const name = 'starhub-bridge'
 export const inject = ['tools', 'webServer']
@@ -51,16 +51,27 @@ export const inject = ['tools', 'webServer']
  * 插件配置。sidecarCommand 是部署变化项(可执行路径随打包布局而变),
  * 按上游「No hardcoded tunables」规约走 Config;healthTimeoutMs 是启动期
  * 健康探针预算,sidecar 起不来时 fail loud,不让每个工具调用重复失败。
+ * invokeTimeoutMs / invokeMaxTimeoutMs 是工作台 HTTP 调用的预算:超时不再
+ * 让界面无限转圈(调用自带 `timeoutSec` 时按它加余量)。
  */
-export const Config: z<{ sidecarCommand?: string[]; healthTimeoutMs?: number }> = z.object({
+export const Config: z<{
+  sidecarCommand?: string[]
+  healthTimeoutMs?: number
+  invokeTimeoutMs?: number
+  invokeMaxTimeoutMs?: number
+}> = z.object({
   sidecarCommand: z.array(z.string()).default([...DEFAULT_SIDECAR_COMMAND]),
   healthTimeoutMs: z.number().min(1000).default(DEFAULT_HEALTH_TIMEOUT_MS),
+  invokeTimeoutMs: z.number().min(1000).default(DEFAULT_INVOKE_TIMEOUT_MS),
+  invokeMaxTimeoutMs: z.number().min(1000).default(MAX_INVOKE_TIMEOUT_MS),
 })
 
 /** apply 收到的已解析配置(可选字段,缺省见 DEFAULT_* 常量)。 */
 export interface BridgeConfig {
   sidecarCommand?: string[]
   healthTimeoutMs?: number
+  invokeTimeoutMs?: number
+  invokeMaxTimeoutMs?: number
 }
 
 /** 工具输出:模型可读文本(与 starhub-tools 的 TEXT_OUTPUT 同形)。 */
@@ -135,6 +146,10 @@ function extractProtocol(value: unknown): string {
 export async function apply(ctx: Context, config: BridgeConfig = {}): Promise<void> {
   const command = config.sidecarCommand ?? [...DEFAULT_SIDECAR_COMMAND]
   const healthTimeoutMs = config.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS
+  const invokeOptions = {
+    timeoutMs: config.invokeTimeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS,
+    maxTimeoutMs: config.invokeMaxTimeoutMs ?? MAX_INVOKE_TIMEOUT_MS,
+  }
 
   const handle = await spawnSidecar(command, healthTimeoutMs)
   const sidecar = handle.transport
@@ -168,7 +183,7 @@ export async function apply(ctx: Context, config: BridgeConfig = {}): Promise<vo
       () => ctx.webServer.register({
         kind: 'exact',
         path: '/starhub/api/invoke',
-        handler: invokeHandler(sidecar),
+        handler: invokeHandler(sidecar, invokeOptions),
       }),
       'starhub-bridge: /starhub/api/invoke route',
     )
