@@ -19,6 +19,17 @@ use crate::{
     PendingHostKeyResponses, PendingKeyboardResponses, SshConfig, SshSessionInfo, SshWriteChannels,
 };
 
+/// 记录多少条「最近连接」会话(同一资产多窗口时只用于排序,不持有会话本身)。
+const RECENT_SESSION_LIMIT: usize = 64;
+
+/// 会话在「最近连接」顺序里的排名:越新越大,无记录为 0。
+fn recent_rank(recent_newest_first: &[String], id: &str) -> usize {
+    recent_newest_first
+        .iter()
+        .position(|candidate| candidate == id)
+        .map_or(0, |index| recent_newest_first.len() - index)
+}
+
 /// SSH 会话管理器:会话实体唯一所有者 + 代次守卫 + 在途 exec 取消句柄。
 ///
 /// 域工具执行器(sidecar 的 `ssh_*` 方法面)与本命令面共用同一张会话表:
@@ -35,6 +46,9 @@ pub struct SshManager {
     /// 放在 manager 层而不是 SshSession 里:exec 期间 session 锁被持有,
     /// `ssh_exec_abort` 只需要拿这把独立的 map 锁就能中断,不会死锁。
     exec_aborts: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    /// 成功连接的会话 id,按连接先后排列(最近的在末尾);主壳 AI 无页面上下文
+    /// 时用它优先复用「最近连的那一页」。
+    recent_sessions: Arc<Mutex<Vec<String>>>,
     /// TOFU 主机密钥策略存储(宿主注入:SQLite / sidecar 自有存储)。
     pub known_hosts: Arc<dyn KnownHostsStore>,
 }
@@ -49,6 +63,7 @@ impl SshManager {
             pending_hostkey: Arc::new(Mutex::new(HashMap::new())),
             attempts: Arc::new(Mutex::new(HashMap::new())),
             exec_aborts: Arc::new(Mutex::new(HashMap::new())),
+            recent_sessions: Arc::new(Mutex::new(Vec::new())),
             known_hosts,
         }
     }
@@ -125,10 +140,18 @@ impl SshManager {
 
     /// 解析资产当前复用的用户终端会话(新模型 v0.140.0:AI 不自建连接)。
     ///
-    /// 同资产多个终端窗口时,按会话 id 序取**第一个存活者**——确定性选择,
-    /// 用户新开/关闭窗口后自然顺延。死会话(心跳判死/已断开)跳过。
+    /// 同资产多个终端页时,**优先最近一次连接的会话**({@link note_recent_session}
+    /// 记录顺序,v0.141.5):主壳 AI 没有页面上下文,落到用户刚连的那一页比落到
+    /// 字典序第一条更接近用户预期。没有连接记录(测试/旧路径)时按会话 id 序,
+    /// 保留确定性兜底。死会话(心跳判死/已断开)跳过。
     /// @returns 会话 id;无存活会话时 None(调用方提示用户去连接)。
     pub async fn find_asset_session(&self, asset_id: &str) -> Option<String> {
+        let recent: Vec<String> = {
+            let order = self.recent_sessions.lock().await;
+            order.iter().rev().cloned().collect()
+        };
+        // 最近连接优先:rank 越大越靠前;没有记录的一律 rank 0(按 id 兜底排序)。
+        let rank = |id: &str| recent_rank(&recent, id);
         let mut entries: Vec<(String, Arc<Mutex<SshSession>>)> = {
             let sessions = self.sessions.lock().await;
             sessions
@@ -136,7 +159,7 @@ impl SshManager {
                 .map(|(id, arc)| (id.clone(), Arc::clone(arc)))
                 .collect()
         };
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        entries.sort_by(|a, b| rank(&b.0).cmp(&rank(&a.0)).then_with(|| a.0.cmp(&b.0)));
         for (id, arc) in entries {
             let session = arc.lock().await;
             if session.is_alive() && session.asset_id() == Some(asset_id) {
@@ -144,6 +167,19 @@ impl SshManager {
             }
         }
         None
+    }
+
+    /// 记录一次成功连接,供 {@link find_asset_session} 做「最近连接优先」排序。
+    ///
+    /// 只保留最近 [`RECENT_SESSION_LIMIT`] 条(同一 id 重复连接移到末尾)。
+    /// @param id - 刚连上的会话 id。
+    pub async fn note_recent_session(&self, id: &str) {
+        let mut order = self.recent_sessions.lock().await;
+        order.retain(|candidate| candidate != id);
+        order.push(id.to_string());
+        while order.len() > RECENT_SESSION_LIMIT {
+            order.remove(0);
+        }
     }
 
     /// 取指定终端页会话(存活且归属该资产时)供 AI 复用(v0.140.1:
@@ -264,6 +300,11 @@ pub async fn connect_session(
     // 跳板机本身的 MFA 不算「连接成功」。发射前先取 mfa_used,再把 session 移入 Arc。
     let mfa_used = session.mfa_used();
     sessions.insert(id.clone(), Arc::new(Mutex::new(session)));
+    drop(sessions);
+    drop(attempts);
+    // 最近连接顺序(主壳 AI 无页面上下文时优先复用它);在会话锁之外更新,
+    // 避免在锁内 await 另一把锁。
+    manager.note_recent_session(&id).await;
     if mfa_used {
         sink.emit_ser(&format!("ssh:mfa-connected:{id}"), id.clone());
     }
@@ -409,6 +450,27 @@ mod tests {
             .unwrap();
         assert!(result.unwrap_err().contains("[EXEC_ABORTED]"));
         assert!(manager.sessions.lock().await.contains_key("busy"));
+    }
+
+    #[tokio::test]
+    async fn recent_sessions_put_the_latest_connection_first() {
+        let manager = SshManager::new(Arc::new(MemoryKnownHostsStore::default()));
+        manager.note_recent_session("asset__a1").await;
+        manager.note_recent_session("asset__b2").await;
+        let order: Vec<String> = manager.recent_sessions.lock().await.clone();
+        assert_eq!(order, vec!["asset__a1".to_string(), "asset__b2".to_string()]);
+        // 新连接排到最后,find_asset_session 反序读取 → 最近的那一页优先。
+        assert!(recent_rank(&["asset__b2".into(), "asset__a1".into()], "asset__b2") > 0);
+        assert_eq!(recent_rank(&["asset__b2".into()], "unknown"), 0);
+        // 同一 id 重连只保留一条(移到末尾),列表不会因为反复重连膨胀。
+        manager.note_recent_session("asset__a1").await;
+        let order: Vec<String> = manager.recent_sessions.lock().await.clone();
+        assert_eq!(order, vec!["asset__b2".to_string(), "asset__a1".to_string()]);
+        // 超出上限时丢最旧的。
+        for index in 0..RECENT_SESSION_LIMIT + 5 {
+            manager.note_recent_session(&format!("s{index}")).await;
+        }
+        assert_eq!(manager.recent_sessions.lock().await.len(), RECENT_SESSION_LIMIT);
     }
 
     #[tokio::test]

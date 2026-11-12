@@ -9,6 +9,14 @@
 
 ---
 
+## [0.141.5] - 2026-11-12
+
+### 修复
+- 🐛 **主壳 AI 不再「猜」用哪条终端连接:同资产多页面时优先最近连接的那一页**:AI 复用用户终端连接(`find_asset_session`)此前在**同一资产开了多个终端页**时按会话 id 字典序取第一条存活会话——id 是随机后缀,等于随机挑一页,用户在看 es-redis-3、命令却落到 es-redis2(页内助手的页面级绑定覆盖不到主壳对话)。现在 `SshManager` 记录成功连接的先后顺序(`note_recent_session`,同 id 重连去重、上限 64 条),`find_asset_session` 优先「最近一次连接的会话」,没有连接记录时仍按 id 序兜底(确定性不变);页内助手的 `terminalSessionId` 显式绑定照旧优先于这条启发式。
+
+### 测试
+- ✅ `starhub-domain-ssh` 新增 `recent_sessions_put_the_latest_connection_first`(记录顺序、同 id 去重、条数上限、无记录排序);`cargo test -p starhub-domain-ssh -p starhub-sidecar --lib` 120 通过。
+
 ## [0.141.4] - 2026-11-12
 
 ### 优化
