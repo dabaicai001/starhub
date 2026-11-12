@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientSessionContext, InputTriggerPick } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { createStarHubAssets, createToolSelectionBridge, type RustAsset } from '../src/client/store.ts'
 import { assetToolBadge, renderAssetReference, createStarHubAssetSource } from '../src/client/asset-source.ts'
-import { TOOL_CONTEXT_NAMESPACE, type SettingsUpdateWriter } from '../src/client/tool-context.ts'
+import { type SettingsUpdateWriter } from '../src/client/tool-context.ts'
 import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
 
 /** 构造一个最小资产(只带匹配所需的字段)。 */
@@ -43,11 +43,18 @@ function pickOf(candidate: { name: string; description?: string }): InputTrigger
   }
 }
 
-function makeHarness(assets: ReturnType<typeof createStarHubAssets>, update: ReturnType<typeof vi.fn>) {
-  const writer = { update } as unknown as SettingsUpdateWriter
+function makeHarness(assets: ReturnType<typeof createStarHubAssets>, mutate: ReturnType<typeof vi.fn>) {
+  const writer = { update: vi.fn(), mutate } as unknown as SettingsUpdateWriter
   const selection = createToolSelectionBridge()
   const source = createStarHubAssetSource({ writer, assets, selection })
   return { writer, selection, source }
+}
+
+/** 取最近一次按会话绑定写入的条目(`bindings[<sessionId>]` 的 JSON)。 */
+function bindingOf(mutate: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const call = mutate.mock.calls.at(-1) as [string, { path: string[]; value: string }[]] | undefined
+  expect(call?.[1][0]?.path).toEqual(['bindings', 's1'])
+  return JSON.parse(call?.[1][0]?.value ?? '{}') as Record<string, unknown>
 }
 
 afterEach(() => {
@@ -173,8 +180,8 @@ describe('createStarHubAssetSource', () => {
       assets: [rustAsset('a1', 'web-1', { username: 'deploy', host: '10.0.0.5' })],
       loading: false, error: null, preview: false,
     })
-    const update = vi.fn(() => Promise.resolve({ result: { ok: true } }))
-    const { selection, source } = makeHarness(assets, update)
+    const mutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
+    const { selection, source } = makeHarness(assets, mutate)
     // 侧栏当前打开别的工具不影响 @ 绑定:绑定以「被引用资产」为准。
     selection.selectSubcategory('database')
     const [candidate] = await source.candidates(proj(), req(''))
@@ -187,13 +194,16 @@ describe('createStarHubAssetSource', () => {
         clipboardText: '@web-1',
       },
     })
-    // 轻绑定:settings.update 写 starhub-tool-context 补丁——subcategory/routePrefix
-    // 由被引用资产派生(此处为 SSH),不再读侧栏当前打开的工具;并携带 assetType。
-    expect(update).toHaveBeenCalledWith(
-      TOOL_CONTEXT_NAMESPACE,
-      { sessionId: 's1', subcategory: 'terminal', assetId: 'a1', assetName: 'web-1', routePrefix: '/ssh', assetType: 'ssh' },
-      undefined,
-    )
+    // 轻绑定:按会话写 bindings[sessionId]——subcategory/routePrefix 由被引用
+    // 资产派生(此处为 SSH),不再读侧栏当前打开的工具;并携带 assetType。
+    expect(bindingOf(mutate)).toMatchObject({
+      subcategory: 'terminal',
+      assetId: 'a1',
+      assetName: 'web-1',
+      routePrefix: '/ssh',
+      assetType: 'ssh',
+      dbType: '',
+    })
   })
 
   it.each([
@@ -206,24 +216,19 @@ describe('createStarHubAssetSource', () => {
       assets: [{ ...rustAsset(id, `${type}-asset`), type }],
       loading: false, error: null, preview: false,
     })
-    const update = vi.fn(() => Promise.resolve({ result: { ok: true } }))
-    const { selection, source } = makeHarness(assets, update)
+    const mutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
+    const { selection, source } = makeHarness(assets, mutate)
     // 侧栏选中无关工具:@ 绑定必须按被引用资产派生,不被侧栏误导。
     selection.selectSubcategory('database')
     const [candidate] = await source.candidates(proj(), req(''))
     source.onPick(pickOf(candidate!))
-    expect(update).toHaveBeenCalledWith(
-      TOOL_CONTEXT_NAMESPACE,
-      {
-        sessionId: 's1',
-        subcategory,
-        assetId: id,
-        assetName: `${type}-asset`,
-        routePrefix,
-        assetType,
-      },
-      undefined,
-    )
+    expect(bindingOf(mutate)).toMatchObject({
+      subcategory,
+      assetId: id,
+      assetName: `${type}-asset`,
+      routePrefix,
+      assetType,
+    })
   })
 
   it('onPick binds a db asset with its dbType into the tool context', async () => {
@@ -232,15 +237,13 @@ describe('createStarHubAssetSource', () => {
       assets: [{ ...rustAsset('r1', 'redis-1', { dbType: 'redis' }), type: 'db' }],
       loading: false, error: null, preview: false,
     })
-    const update = vi.fn(() => Promise.resolve({ result: { ok: true } }))
-    const { source } = makeHarness(assets, update)
+    const mutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
+    const { source } = makeHarness(assets, mutate)
     const [candidate] = await source.candidates(proj(), req(''))
     source.onPick(pickOf(candidate!))
-    expect(update).toHaveBeenCalledWith(
-      TOOL_CONTEXT_NAMESPACE,
-      { sessionId: 's1', subcategory: 'database', assetId: 'r1', assetName: 'redis-1', routePrefix: '/db/redis', assetType: 'db', dbType: 'redis' },
-      undefined,
-    )
+    expect(bindingOf(mutate)).toMatchObject({
+      subcategory: 'database', assetId: 'r1', assetName: 'redis-1', routePrefix: '/db/redis', assetType: 'db', dbType: 'redis',
+    })
   })
 
   it('onPick falls back to plain text for a candidate this source did not produce', () => {
@@ -266,16 +269,16 @@ describe('createStarHubAssetSource', () => {
     })
   })
 
-  it('light binding swallows settings.update failures', async () => {
-    const update = vi.fn(() => Promise.reject(new Error('namespace missing')))
+  it('light binding swallows settings mutate failures', async () => {
+    const mutate = vi.fn(() => Promise.reject(new Error('namespace missing')))
     const assets = createStarHubAssets()
     assets.source.set({ assets: [rustAsset('a1', 'web-1')], loading: false, error: null, preview: false })
-    const { source } = makeHarness(assets, update)
+    const { source } = makeHarness(assets, mutate)
     const [candidate] = await source.candidates(proj(), req(''))
     const outcome = source.onPick(pickOf(candidate!))
     expect(outcome).toMatchObject({ insert: { ref: 'a1' } })
-    expect(update).toHaveBeenCalled()
-    // update 的 rejection 被 catch 吞掉:让拒绝链落定,不产生未处理拒绝
+    expect(mutate).toHaveBeenCalled()
+    // mutate 的 rejection 被 catch 吞掉:让拒绝链落定,不产生未处理拒绝
     await Promise.resolve()
     await Promise.resolve()
   })

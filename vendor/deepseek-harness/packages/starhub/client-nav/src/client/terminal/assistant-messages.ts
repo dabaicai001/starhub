@@ -246,3 +246,27 @@ export function settleApprovalItem(
     item.kind === 'approval' && item.requestId === requestId ? { ...item, settled: outcome } : item,
   )
 }
+
+/** 随提问附带的终端选中内容上限(字符)。 */
+export const MAX_SELECTION_ATTACHMENT = 4000
+
+/**
+ * 把终端选中内容整理成随提问附带的上下文块。
+ *
+ * 面板不再要求用户「复制 → 粘贴 → 解释」:选中报错/日志后直接提问,助手拿到
+ * 的就是那段原文;`cwd` 一并带上,模型不必再问「你在哪个目录」。
+ * @param selection - 终端选区原文。
+ * @param cwd - 终端当前目录(未知时留空)。
+ * @returns 附带块;没有选中内容时返回空串(调用方据此跳过附带)。
+ */
+export function formatSelectionAttachment(selection: string, cwd: string | undefined): string {
+  const text = selection.trim()
+  if (text === '') return ''
+  const capped = text.length > MAX_SELECTION_ATTACHMENT
+    ? `${text.slice(0, MAX_SELECTION_ATTACHMENT)}\n[…已截断 ${String(text.length - MAX_SELECTION_ATTACHMENT)} 字符]`
+    : text
+  const header = cwd === undefined || cwd === ''
+    ? '[终端选中内容]'
+    : `[终端选中内容 · 当前目录 ${cwd}]`
+  return `${header}\n${capped}`
+}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import {
-  foldFrame, formatToolArgs, settleApprovalItem, type ChatItem,
+  foldFrame, formatSelectionAttachment, formatToolArgs, MAX_SELECTION_ATTACHMENT, settleApprovalItem, type ChatItem,
 } from '../src/client/terminal/assistant-messages.ts'
 import type { AssistantFrame, AssistantSessionEvent, AssistantStreamFrame } from '../src/client/terminal/assistant-service.ts'
 
@@ -231,5 +231,24 @@ describe('formatToolArgs', () => {
 
   it('passes through non-JSON verbatim', () => {
     expect(formatToolArgs('not json')).toBe('not json')
+  })
+})
+
+describe('formatSelectionAttachment', () => {
+  it('returns empty when nothing is selected', () => {
+    expect(formatSelectionAttachment('', '/var/log')).toBe('')
+    expect(formatSelectionAttachment('  \n ', undefined)).toBe('')
+  })
+
+  it('carries the cwd when known and omits it otherwise', () => {
+    expect(formatSelectionAttachment('boom', '/var/log')).toBe('[终端选中内容 · 当前目录 /var/log]\nboom')
+    expect(formatSelectionAttachment('boom', '')).toBe('[终端选中内容]\nboom')
+  })
+
+  it('caps very long selections and says how much was dropped', () => {
+    const text = 'x'.repeat(MAX_SELECTION_ATTACHMENT + 10)
+    const attachment = formatSelectionAttachment(text, undefined)
+    expect(attachment).toContain('[…已截断 10 字符]')
+    expect(attachment.length).toBeLessThan(MAX_SELECTION_ATTACHMENT + 100)
   })
 })

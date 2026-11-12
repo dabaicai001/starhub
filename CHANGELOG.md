@@ -9,6 +9,14 @@
 
 ---
 
+## [0.141.3] - 2026-11-12
+
+### 新增
+- ✨ **AI 知道你在看什么:工具上下文按会话保存 + 面板「当前目标」条 + 附带终端选中内容**:此前 `starhub-tool-context` 只有一份单槽快照(`sessionId`/`assetId`/… 各一个字段),同一资产开两个终端页或两个助手会话时,后绑定的那份把前一份挤掉——host 按 `agent.session.id` 过滤,于是先绑定的会话静默失联(不报错,只是之后每条提问都不带资产上下文);面板里也看不到目录与选中的报错,用户仍要复制粘贴、再解释一遍。现在:① namespace 新增 `bindings`(会话 id → 一条 JSON:子类/资产/路由/类型/dbType/updatedAt),client 经 `settings.mutate` 写路径 `['bindings', sessionId]`——以服务端已存 section 为基准合并,不是读-改-写整份 namespace,两个窗口并发绑定互不覆盖;host 的 pre-step 只读 `bindings[agent.session.id]`,旧的单槽字段留作升级兜底,条目超过 48 条按 `updatedAt` 裁掉最旧的。② 助手面板新增「当前目标」条(资产名 · cwd)与「已附带选中 N 行」:overlay 把状态栏同源的 cwd 与一个选区读取器传进面板(面板 1s 轮询,避免在 overlay 上挂 `onSelectionChange` 让拖选时整个工作台重渲染);发送时把选区(上限 4000 字符,带 `[终端选中内容 · 当前目录 …]` 头)附在提问后面,同一段选区只附带一次,点 × 可立即不附带。
+
+### 测试
+- ✅ 新增 `packages/starhub/tool-context/tests/bindings.spec.ts`(两会话各读各的、旧单槽只对它自己的会话生效、单槽优先被 bindings 覆盖、坏条目跳过);`assistant-messages` 补 `formatSelectionAttachment` 的空/截断/无 cwd 用例;`assistant-panel` 补「目标条 + 附带选区 + 只附带一次 + 点 × 不附带」用例;`asset-source` / `ask-ai` / `starhub-apply` 的绑定断言改到按会话的路径写入上。
+
 ## [0.141.2] - 2026-11-12
 
 ### 修复

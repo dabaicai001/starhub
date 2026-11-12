@@ -378,6 +378,56 @@
   line-height: 1.6;
 }
 
+/* ── 当前目标条 ──────────────────────────────────────────────── */
+
+.targetBar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.targetLabel {
+  flex: none;
+}
+
+.targetValue {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.targetChip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--dsw-radius-sm);
+  padding: 1px 4px 1px 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.targetChipClear {
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.targetChipClear:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
 /* ── 输入区 ──────────────────────────────────────────────────── */
 
 .composer {

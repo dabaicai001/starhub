@@ -102,6 +102,55 @@ describe('SshAssistantPanel', () => {
     expect(input.value).toBe('')
   })
 
+  it('shows the current target (asset + cwd) and attaches the terminal selection', async () => {
+    render(
+      <SshAssistantPanel
+        sshSessionId="s1"
+        assetId="ssh-1"
+        assetName="server"
+        cwd="/var/log"
+        getTerminalSelection={() => 'error: disk full'}
+      />,
+    )
+    await waitReady()
+    expect(screen.getByText('server · /var/log')).toBeTruthy()
+    expect(screen.getByText('已附带选中 1 行')).toBeTruthy()
+    const input = screen.getByLabelText('AI 助手输入框') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '这是什么错' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => { expect(calls.some(call => call.path.endsWith('/prompt'))).toBe(true) })
+    const body = calls.find(call => call.path.endsWith('/prompt'))?.body
+    expect(String(body?.text)).toContain('这是什么错')
+    expect(String(body?.text)).toContain('[终端选中内容 · 当前目录 /var/log]')
+    expect(String(body?.text)).toContain('error: disk full')
+    // 同一段选区只附带一次:发完后不再重复携带。
+    expect(screen.queryByText('已附带选中 1 行')).toBeNull()
+    fireEvent.change(input, { target: { value: '继续' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => { expect(calls.filter(call => call.path.endsWith('/prompt'))).toHaveLength(2) })
+    const second = calls.filter(call => call.path.endsWith('/prompt'))[1]?.body
+    expect(second?.text).toBe('继续')
+  })
+
+  it('drops the selection attachment when the user clears the chip', async () => {
+    render(
+      <SshAssistantPanel
+        sshSessionId="s1"
+        assetId="ssh-1"
+        assetName="server"
+        getTerminalSelection={() => 'tail -n 2 app.log'}
+      />,
+    )
+    await waitReady()
+    fireEvent.click(screen.getByLabelText('不附带选中内容'))
+    expect(screen.queryByText(/已附带选中/)).toBeNull()
+    const input = screen.getByLabelText('AI 助手输入框') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '看下' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => { expect(calls.some(call => call.path.endsWith('/prompt'))).toBe(true) })
+    expect(calls.find(call => call.path.endsWith('/prompt'))?.body).toEqual({ assistantId: 'ssh-assistant-1', text: '看下' })
+  })
+
   it('folds streamed frames into messages', async () => {
     render(
       <SshAssistantPanel sshSessionId="s1" assetId="ssh-1" assetName="server" />,

@@ -883,6 +883,9 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
   /** 清空终端缓冲。 */
   const clearTerminal = useCallback(() => { termRef.current?.clear() }, [termRef])
 
+  /** 读终端选区(AI 面板据此提示「已附带」并把内容随下一条提问发送)。 */
+  const readTerminalSelection = useCallback(() => termRef.current?.getSelection() ?? '', [termRef])
+
   /** 复制终端选中内容到剪贴板。 */
   const copySelection = useCallback(async (): Promise<void> => {
     const selection = termRef.current?.getSelection()
@@ -1291,6 +1294,8 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
                       sshSessionId={sessionId}
                       assetId={asset.id}
                       assetName={asset.name}
+                      cwd={sshCwd}
+                      getTerminalSelection={readTerminalSelection}
                       onOpened={(id) =>{  assistantIdRef.current = id }}
                     />
                   </TabPane>

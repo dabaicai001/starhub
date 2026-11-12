@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.141.2-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.141.3-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,8 +59,8 @@
 
 ## 当前版本
 
-### v0.141.2 (2026-11-12)
-- 🐛 **助手「重试」与「审批」不再假装成功**:打开失败后的「重试」现在真的重跑打开请求(此前只把界面切回「正在打开…」);审批改为先提交、成功才显示已结算——提交中按钮禁用,失败保留卡片、写明错误并可直接再点。
+### v0.141.3 (2026-11-12)
+- ✨ **AI 知道你在看什么**:工具上下文按会话保存(两个终端页/助手互不覆盖);助手面板新增「当前目标」条(资产 · cwd),终端选中内容随下一条提问附带(只带一次,可点 × 取消)。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

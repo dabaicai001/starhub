@@ -67,8 +67,13 @@ export const ToolContextSchema: z<StarHubToolContextValue> = z.object({
 
 /**
  * 插件 Config(DSH 0.1.7 起 settings 命名空间由插件 Config 的 volatile 字段派生,
- * 旧 `ctx.settings.register` 面已移除)。client-nav 经 `settings.update` 写同一
- * 命名空间的这些字段;volatile 引用由 Loader 热提交,pre-step 时 `.get()` 即活值。
+ * 旧 `ctx.settings.register` 面已移除)。client-nav 经 `settings.mutate` 按会话
+ * 写入 `bindings[<sessionId>]`(JSON 字符串);volatile 引用由 Loader 热提交,
+ * pre-step 时 `.get()` 即活值。
+ *
+ * 顶层的 `sessionId`/`assetId`/… 单槽字段是 v0.141.2 之前的写法:两个终端页
+ * (或两个助手)先后绑定会互相覆盖,后绑定的会话把前一个的上下文挤掉。它们现在
+ * 只作为升级前的存量数据兜底保留,新写入一律走 `bindings`。
  */
 export interface Config {
   sessionId: Volatile<string>
@@ -78,6 +83,8 @@ export interface Config {
   routePrefix: Volatile<string>
   assetType: Volatile<string>
   dbType: Volatile<string>
+  /** 会话 id → 该会话绑定的上下文(JSON 字符串);按会话隔离,互不覆盖。 */
+  bindings: Volatile<Record<string, string>>
 }
 
 /** Plugin Config: every GUI-editable namespace field as one live volatile reference. */
@@ -89,7 +96,90 @@ export const Config = z.object({
   routePrefix: z.string().default('').volatile(),
   assetType: z.string().default('').volatile(),
   dbType: z.string().default('').volatile(),
+  bindings: z.dict(z.string()).default({}).volatile(),
 })
+
+/** 一个会话的绑定条目(client-nav 写入 `bindings[sessionId]` 的 JSON 形状)。 */
+export interface ToolContextBinding {
+  /** 当前子类 key(terminal / database / docker);空 = 未选中。 */
+  subcategory?: string
+  /** 当前选中资产的 id。 */
+  assetId?: string
+  /** 当前选中资产的显示名。 */
+  assetName?: string
+  /** 子类段路由前缀(如 /ssh)。 */
+  routePrefix?: string
+  /** 资产大类 id(db / ssh / docker / local)。 */
+  assetType?: string
+  /** 数据库子类型(redis / mysql / clickhouse / …)。 */
+  dbType?: string
+  /** 写入时间(毫秒);client-nav 据此裁剪过期条目。 */
+  updatedAt?: number
+}
+
+/**
+ * Parse the `bindings` settings value into per-session entries.
+ *
+ * Tolerant by design: one malformed entry (hand-edited settings, an older
+ * client) must not silence every other session's context. Field values are
+ * re-typed here because this is a durable/user-editable boundary.
+ * @param raw - `bindings` config value (session id → JSON string).
+ * @returns parsed entries keyed by session id; malformed entries are skipped.
+ */
+export function parseBindings(raw: Record<string, string> | undefined): Record<string, ToolContextBinding> {
+  const result: Record<string, ToolContextBinding> = {}
+  for (const [sessionId, text] of Object.entries(raw ?? {})) {
+    if (typeof text !== 'string') continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      // 该条目的写入方已经坏掉(或手改坏了):跳过它,不影响其它会话。
+      continue
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue
+    const record = parsed as Record<string, unknown>
+    const field = (key: string): string | undefined =>
+      typeof record[key] === 'string' ? record[key] : undefined
+    result[sessionId] = {
+      subcategory: field('subcategory'),
+      assetId: field('assetId'),
+      assetName: field('assetName'),
+      routePrefix: field('routePrefix'),
+      assetType: field('assetType'),
+      dbType: field('dbType'),
+      updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : undefined,
+    }
+  }
+  return result
+}
+
+/**
+ * Resolve one session's tool context.
+ *
+ * Per-session bindings win; the pre-v0.141.3 single-slot fields are only a
+ * fallback for values written before the upgrade (they keep working because
+ * the stored settings file still carries them).
+ * @param config - live plugin config.
+ * @param sessionId - the agent session being stepped.
+ * @returns the session's context, or an empty value when it has none.
+ */
+export function readToolContextFor(config: Config, sessionId: string): StarHubToolContextValue {
+  const bound = parseBindings(config.bindings.get())[sessionId]
+  if (bound !== undefined) {
+    return {
+      sessionId,
+      subcategory: bound.subcategory ?? '',
+      assetId: bound.assetId ?? '',
+      assetName: bound.assetName ?? '',
+      routePrefix: bound.routePrefix ?? '',
+      assetType: bound.assetType ?? '',
+      dbType: bound.dbType ?? '',
+    }
+  }
+  const legacy = readToolContext(config)
+  return legacy.sessionId === sessionId ? legacy : { sessionId: '' }
+}
 
 /** Detach the live config references into the plain value shape the injector renders. */
 export function readToolContext(config: Config): StarHubToolContextValue {
@@ -170,11 +260,9 @@ export function apply(ctx: Context, config: Config): void {
   ): Promise<PreStepDecision> => {
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted) return decision
-    const value = readToolContext(config)
-    // 会话级作用域:仅当本次触发绑定的会话(agent.session.id)与 namespace
-    // 里记录的 sessionId 一致时才注入;普通对话/其他会话不注入,避免全局粘性
-    // 让每条对话都带上 starhub-tool-context 上下文。
-    if (value.sessionId === undefined || value.sessionId === '' || value.sessionId !== agent.session.id) return decision
+    // 会话级作用域:只读本会话自己的绑定(按会话保存,两个终端页/助手互不覆盖);
+    // 没有绑定的会话不注入,避免全局粘性让每条对话都带上工具上下文。
+    const value = readToolContextFor(config, agent.session.id)
     const text = renderToolContext(value)
     if (text === null) return decision
     return {

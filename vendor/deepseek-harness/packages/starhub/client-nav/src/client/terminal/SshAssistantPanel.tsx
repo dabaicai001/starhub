@@ -24,7 +24,7 @@ import {
   type AssistantModelOption, type AssistantProviderOption,
 } from './assistant-service.ts'
 import {
-  foldFrame, formatToolArgs, settleApprovalItem, type ChatItem,
+  foldFrame, formatSelectionAttachment, formatToolArgs, settleApprovalItem, type ChatItem,
 } from './assistant-messages.ts'
 import css from './SshAssistantPanel.module.css'
 
@@ -33,6 +33,10 @@ export interface SshAssistantPanelProps {
   sshSessionId: string
   assetId: string
   assetName: string
+  /** 终端当前目录(与状态栏同源),显示在「当前目标」条并随提问附带。 */
+  cwd?: string
+  /** 读终端选区:有选中内容时面板显示「已附带」并把内容附在下一条提问里。 */
+  getTerminalSelection?: () => string
   /** 助手打开后回传 assistantId(overlay 据此在卸载时销毁会话)。 */
   onOpened?: (assistantId: string | null) => void
 }
@@ -45,10 +49,10 @@ type PanelPhase =
 
 /**
  * 渲染 AI 助手面板。
- * @param props - 终端会话 id 与资产身份。
+ * @param props - 终端会话 id 与资产身份,以及终端侧的目标信息(目录/选区)。
  * @returns 面板元素。
  */
-export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }: SshAssistantPanelProps) {
+export function SshAssistantPanel({ sshSessionId, assetId, assetName, cwd, getTerminalSelection, onOpened }: SshAssistantPanelProps) {
   const [phase, setPhase] = useState<PanelPhase>({ kind: 'opening' })
   const [assistantId, setAssistantId] = useState<string | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
@@ -65,7 +69,26 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
   const [bootAttempt, setBootAttempt] = useState(0)
   // 审批提交状态:requestId → 错误文案('' = 提交中)。成功后该项标记为已结算。
   const [decisions, setDecisions] = useState<ReadonlyMap<string, string>>(new Map())
+  // 终端选区(轮询自 xterm,避免在 overlay 上挂常驻 onSelectionChange 导致
+  // 拖选时整页重渲染);dismissedSelection = 用户点过「不附带」的那段文本。
+  const [selection, setSelection] = useState('')
+  const [dismissedSelection, setDismissedSelection] = useState<string | null>(null)
+  const readSelection = useRef(getTerminalSelection)
+  readSelection.current = getTerminalSelection
   const listRef = useRef<HTMLDivElement | null>(null)
+
+  // 1s 轮询当前选区:只在 AI 面板挂载期间跑,拿到的是字符串比较后的稳定值,
+  // 选区没变时不触发重渲染。
+  useEffect(() => {
+    if (getTerminalSelection === undefined) return
+    const tick = (): void => {
+      const next = readSelection.current?.() ?? ''
+      setSelection(current => (current === next ? current : next))
+    }
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => { clearInterval(timer) }
+  }, [getTerminalSelection])
 
   // 帧回调:折叠消息 + 跟踪状态/模型/关闭。
   const onFrame = useCallback((frame: AssistantFrame) => {
@@ -128,19 +151,27 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
     node.scrollTop = node.scrollHeight
   }, [items])
 
-  /** 发送一条提问。 */
+  /** 附带的选区:用户没点「不附带」且有选中内容时才随提问发送。 */
+  const attachment = selection !== '' && selection !== dismissedSelection
+    ? formatSelectionAttachment(selection, cwd)
+    : ''
+
+  /** 发送一条提问(终端有选中内容时一并附带)。 */
   const submitDraft = useCallback(async (): Promise<void> => {
     const text = draft.trim()
     if (text === '' || assistantId === null) return
     setDraft('')
+    const payload = attachment === '' ? text : `${text}\n\n${attachment}`
     try {
-      await promptAssistant(assistantId, text)
+      await promptAssistant(assistantId, payload)
+      // 同一段选区只附带一次:发完标记为「已附带」,等用户重新选择再带。
+      if (attachment !== '') setDismissedSelection(selection)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       setItems(prev => [...prev, { kind: 'error', id: `send-${String(prev.length)}`, message }])
       setDraft(text)
     }
-  }, [assistantId, draft])
+  }, [assistantId, attachment, draft, selection])
 
   const stop = async (): Promise<void> => {
     if (assistantId === null || stopPending.current) return
@@ -352,6 +383,24 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
         ))}
         {closed && <div className={css.closed}>会话已关闭</div>}
         {dropped && !closed && <div className={css.dropped}>连接中断,重新打开本页签可恢复</div>}
+      </div>
+      <div className={css.targetBar}>
+        <span className={css.targetLabel}>当前目标</span>
+        <span className={css.targetValue}>{assetName}{cwd !== undefined && cwd !== '' ? ` · ${cwd}` : ''}</span>
+        {attachment !== '' && (
+          <span className={css.targetChip}>
+            已附带选中 {String(selection.trim().split('\n').length)} 行
+            <button
+              type="button"
+              className={css.targetChipClear}
+              onClick={() => { setDismissedSelection(selection) }}
+              title="这条提问不附带选中内容"
+              aria-label="不附带选中内容"
+            >
+              ×
+            </button>
+          </span>
+        )}
       </div>
       <form
         className={css.composer}

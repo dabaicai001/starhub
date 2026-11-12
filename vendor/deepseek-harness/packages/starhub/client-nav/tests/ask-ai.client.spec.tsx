@@ -60,10 +60,11 @@ function harness(overrides: HarnessOverrides = {}) {
     ? undefined
     : { input: { for: inputFor } } as unknown as IConversation
   const update = vi.fn(() => Promise.resolve({ result: { ok: true } }))
-  const writer: SettingsUpdateWriter = { update }
+  const mutate = vi.fn(() => Promise.resolve({ ok: true, result: { value: {} } }))
+  const writer: SettingsUpdateWriter = { update, mutate }
   const selection = createToolSelectionBridge()
   const handler = createAskAiHandler({ writer, selection, sessions, workspaces, uiWorkspace, conversation })
-  return { handler, openSession, create, setDraft, inputFor, binding, update, selection }
+  return { handler, openSession, create, setDraft, inputFor, binding, update, mutate, selection }
 }
 
 afterEach(() => {
@@ -113,24 +114,36 @@ describe('createAskAiHandler', () => {
   })
 
   it('light-binds the referenced asset onto the tool-context settings namespace', () => {
-    const { handler, update, selection } = harness({ current: 's1' })
+    const { handler, mutate, selection } = harness({ current: 's1' })
     selection.selectSubcategory('terminal')
     handler({ text: 'web-1 报错', assetId: 'a1', assetName: 'web-1' })
-    expect(update).toHaveBeenCalledWith(
-      TOOL_CONTEXT_NAMESPACE,
-      { sessionId: 's1', subcategory: 'terminal', assetId: 'a1', assetName: 'web-1', routePrefix: '', assetType: '' },
-      undefined,
-    )
+    expect(mutate).toHaveBeenCalledTimes(1)
+    const [ns, ops] = mutate.mock.calls[0] as [string, { op: string; path: string[]; value: string }[]]
+    expect(ns).toBe(TOOL_CONTEXT_NAMESPACE)
+    // 按会话写入:路径带上 sessionId,值是该会话自己的 JSON 条目。
+    expect(ops[0]?.op).toBe('set')
+    expect(ops[0]?.path).toEqual(['bindings', 's1'])
+    expect(JSON.parse(ops[0]?.value ?? '')).toMatchObject({
+      subcategory: 'terminal',
+      assetId: 'a1',
+      assetName: 'web-1',
+      routePrefix: '',
+      assetType: '',
+      dbType: '',
+    })
   })
 
   it('light-binds with an empty name when the payload omits assetName', () => {
-    const { handler, update } = harness({ current: 's1' })
+    const { handler, mutate } = harness({ current: 's1' })
     handler({ text: 'x', assetId: 'a1' })
-    expect(update).toHaveBeenCalledWith(
-      TOOL_CONTEXT_NAMESPACE,
-      { sessionId: 's1', subcategory: '', assetId: 'a1', assetName: '', routePrefix: '', assetType: '' },
-      undefined,
-    )
+    const [, ops] = mutate.mock.calls[0] as [string, { value: string }[]]
+    expect(JSON.parse(ops[0]?.value ?? '')).toMatchObject({
+      subcategory: '',
+      assetId: 'a1',
+      assetName: '',
+      routePrefix: '',
+      assetType: '',
+    })
   })
 
   it('skips prefill but still focuses when the conversation service is absent', () => {
