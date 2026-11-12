@@ -90,10 +90,12 @@ pub async fn ssh_session_status_method(
     if let Some(soft) = check_asset_family(runtime, "ssh_session_status", &asset_id) {
         return Ok(soft);
     }
-    let text = runtime
-        .execute_ssh_status(&asset_id, terminal_session.as_deref())
-        .await
-        .map_err(domain_error)?;
+    let cancellation = runtime.cancellation(params);
+    let text = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(domain_error("[EXEC_ABORTED] Operation cancelled by user".to_string())),
+        result = runtime.execute_ssh_status(&asset_id, terminal_session.as_deref()) => result.map_err(domain_error)?,
+    };
     Ok(json!({ "text": text }))
 }
 

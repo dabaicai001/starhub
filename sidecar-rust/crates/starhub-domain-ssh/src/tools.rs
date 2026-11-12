@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use crate::events::{EventSink, EventSinkExt, StoreFuture};
-use crate::manager::{ssh_exec_core, SshManager};
+use crate::manager::SshManager;
 use crate::sftp::transfer::TransferManager;
 use crate::SshConfig;
 
@@ -208,6 +208,7 @@ pub struct ToolContext<'a> {
     pub assets: &'a dyn AssetSource,
     pub sink: &'a Arc<dyn EventSink>,
     pub tracker: &'a dyn ExecTracker,
+    pub cancellation: crate::cancellation::Cancellation,
 }
 
 /// 丢弃一个(死)SSH 会话:map 条目 + 代次 + pending 应答通道一并清理,
@@ -230,6 +231,18 @@ pub async fn drop_ssh_session(ctx: &ToolContext<'_>, conn_id: &str) {
 ///   结果返回给模型,由模型提示用户去连接;
 /// - `Err`:资产不存在等硬错误。
 pub async fn resolve_user_session(
+    ctx: &ToolContext<'_>,
+    asset_id: &str,
+    terminal_session: Option<&str>,
+) -> Result<Option<String>, String> {
+    tokio::select! {
+        biased;
+        _ = ctx.cancellation.cancelled() => Err("[EXEC_ABORTED] Operation cancelled by user".to_string()),
+        result = resolve_user_session_inner(ctx, asset_id, terminal_session) => result,
+    }
+}
+
+async fn resolve_user_session_inner(
     ctx: &ToolContext<'_>,
     asset_id: &str,
     terminal_session: Option<&str>,
@@ -277,12 +290,12 @@ async fn exec_ssh_command(
 ) -> Result<String, String> {
     let exec_id = format!("dsh-exec-{}", uuid::Uuid::new_v4());
     ctx.tracker.register(&exec_id, conn_id);
-    let result = ssh_exec_core(
+    let result = crate::manager::ssh_exec_cancellable_core(
         ctx.manager,
         conn_id,
         command,
-        Some(timeout_sec),
-        Some(&exec_id),
+        timeout_sec,
+        &ctx.cancellation,
     )
     .await;
     ctx.tracker.unregister(&exec_id);
@@ -585,6 +598,9 @@ async fn wait_for_transfer(
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_millis(TRANSFER_TIMEOUT_MS);
     loop {
+        if ctx.cancellation.is_cancelled() {
+            ctx.transfers.cancel(transfer_id).await;
+        }
         let task = ctx
             .transfers
             .list_tasks(conn_id)
@@ -629,7 +645,15 @@ async fn wait_for_transfer(
         if std::time::Instant::now() > deadline {
             return Err(format!("SFTP 传输等待超过 30 分钟: {transfer_id}"));
         }
-        tokio::time::sleep(std::time::Duration::from_millis(TRANSFER_POLL_MS)).await;
+        if ctx.cancellation.is_cancelled() {
+            // Wait for the transfer worker's terminal state, not only its token.
+            tokio::time::sleep(std::time::Duration::from_millis(TRANSFER_POLL_MS)).await;
+        } else {
+            tokio::select! {
+                _ = ctx.cancellation.cancelled() => {},
+                _ = tokio::time::sleep(std::time::Duration::from_millis(TRANSFER_POLL_MS)) => {},
+            }
+        }
     }
 }
 

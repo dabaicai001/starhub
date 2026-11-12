@@ -336,6 +336,34 @@ pub async fn ssh_exec_core(
     result
 }
 
+/// Execute one AI command, allowing cancellation while waiting for its session.
+pub async fn ssh_exec_cancellable_core(
+    manager: &SshManager,
+    id: &str,
+    command: &str,
+    timeout_sec: u64,
+    cancellation: &crate::cancellation::Cancellation,
+) -> Result<String, String> {
+    let acquire = async {
+        let session_arc = manager
+            .sessions
+            .lock()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("SSH session {id} not found"))?;
+        Ok::<_, String>(session_arc.lock_owned().await)
+    };
+    let mut session = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err("[EXEC_ABORTED] Operation cancelled by user".to_string()),
+        session = acquire => session?,
+    };
+    session
+        .exec_cancellable(command, timeout_sec, cancellation)
+        .await
+}
+
 /// ssh_exec_abort 的进程内核心(停止生成时中断在途命令)。
 pub async fn ssh_exec_abort_core(
     manager: &SshManager,
@@ -361,6 +389,27 @@ pub async fn ssh_exec_abort_core(
 mod tests {
     use super::*;
     use crate::events::MemoryKnownHostsStore;
+
+    #[tokio::test]
+    async fn cancelled_exec_does_not_wait_for_a_busy_terminal() {
+        let manager = SshManager::new(Arc::new(MemoryKnownHostsStore::default()));
+        insert_session(&manager, "busy", Some("asset")).await;
+        let session = manager.sessions.lock().await.get("busy").unwrap().clone();
+        let _held = session.lock().await;
+        let cancellation = crate::cancellation::Cancellation::default();
+        let exec = ssh_exec_cancellable_core(&manager, "busy", "must-not-run", 30, &cancellation);
+        tokio::pin!(exec);
+        // Poll once while the session lock is held, then cancel that queued call.
+        assert!(tokio::time::timeout(std::time::Duration::ZERO, &mut exec)
+            .await
+            .is_err());
+        cancellation.cancel();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), exec)
+            .await
+            .unwrap();
+        assert!(result.unwrap_err().contains("[EXEC_ABORTED]"));
+        assert!(manager.sessions.lock().await.contains_key("busy"));
+    }
 
     #[tokio::test]
     async fn reconnect_uses_a_fresh_attempt_generation() {

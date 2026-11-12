@@ -9,6 +9,14 @@
 
 ---
 
+## [0.141.1] - 2026-11-12
+
+### 修复
+- 🐛 **AI 操作的「停止」真的停了:取消信号贯通工具桥 → sidecar → SSH 执行层,排队中的命令也不再下发**:此前主壳对话与 SSH 终端页助手两处点「停止生成」,回合计数停了,但已经在服务器上跑的命令继续跑完(输出还进执行记录),排队等会话锁的命令随后照样执行——三处断点叠加:① `starhub-tools` 的工具体只发 `starhub/tool.execute`,从不读 `ToolRunContext.signal`,请求里也没有「这一次调用」的身份(`starhub/exec.abort` 只有旧 Tauri 壳在用);② sidecar 的 `abort_exec` 按 `inflight`(exec_id → conn_id)找在途 exec,而那个 id 由域内 `dsh-exec-<uuid>` 现生成,宿主发来的 id 永远「未知或已结束」,排队中的调用更是连登记都没有;③ 助手面板的「停止」用空 catch 吞掉失败,停了没停用户看不出来。现在链路是:面板/主壳停止 → agent 回合 abort → `ToolRunContext.signal` → 工具随请求下发宿主生成的 `execId`,abort 时发 `starhub/exec.abort { execId }` 并**等域应答**再抛 `AbortError`(不提前放弃在途命令);桥兼容层把 `execId` 摊平成 `_starhubExecId`(`record.args` 同名键被覆盖,模型伪造不了);sidecar 读帧线程**派发前**先登记请求级 `CancellationToken`,stop 通知也按 stdin 顺序就地处理,因此排队在会话锁上的调用同样可取消;域层的 `resolve_user_session`、`exec_inner` 建通道/exec/采集三段、`ssh_session_status`、SFTP 传输等待全部 select 同一令牌,运行中的 exec 先 `SIGTERM` 再关通道并带部分输出返回 `[EXEC_ABORTED]`;面板停止按钮改 `stopping` 状态,失败落一行错误并恢复可点(可重试)。停止只关那一条执行通道,用户终端连接保留。
+
+### 测试
+- ✅ **「停止生成」真链路验收 `npm run verify:ai-cancel`**:真 Rust sidecar + 真 paramiko SSH fixture(`test-sftp/cancel_server.py`,只报 exec 通道生命周期、不跑宿主命令),三条断言——运行中的命令通道真的关闭、排队中的命令一条都没下发、停止后用户终端连接照常可用。配套单测:`packages/starhub/tools/tests/cancellation.spec.ts`(只取消本请求、失败可重试)、Rust `cancelled_exec_does_not_wait_for_a_busy_terminal` 与 `stop_before_dispatch_is_sticky_and_scoped_to_one_call`。
+
 ## [0.141.0] - 2026-11-11
 
 ### 变更

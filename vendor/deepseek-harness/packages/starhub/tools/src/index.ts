@@ -14,6 +14,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { randomUUID } from 'node:crypto'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { JsonRpcTransportPeer } from '@deepseek-ai/dsh-sdk-protocol'
 
@@ -63,11 +64,23 @@ async function callHost(
   if (sessionId === undefined) {
     throw new Error(`starhub tool ${toolName} requires an agent session`)
   }
-  const result = await transport.request(BRIDGE_METHOD, {
-    sessionId: String(sessionId),
-    name: toolName,
-    args,
+  exec.signal.throwIfAborted()
+  const execId = randomUUID()
+  // Queue the request before its cancellation on the same ordered transport.
+  // Await the domain's response: stopping must not abandon a running command.
+  const pending = transport.request(BRIDGE_METHOD, {
+    sessionId: String(sessionId), name: toolName, args, execId,
   })
+  const cancel = (): void => { transport.notify('starhub/exec.abort', { execId }) }
+  exec.signal.addEventListener('abort', cancel, { once: true })
+  let result: unknown
+  try {
+    if (exec.signal.aborted) cancel()
+    result = await pending
+    exec.signal.throwIfAborted()
+  } finally {
+    exec.signal.removeEventListener('abort', cancel)
+  }
   if (typeof result !== 'string') {
     throw new Error(`starhub host returned a non-string result for ${toolName}`)
   }

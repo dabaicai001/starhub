@@ -58,6 +58,8 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
   const [draft, setDraft] = useState('')
   const [closed, setClosed] = useState(false)
   const [dropped, setDropped] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const stopPending = useRef(false)
   const listRef = useRef<HTMLDivElement | null>(null)
 
   // 帧回调:折叠消息 + 跟踪状态/模型/关闭。
@@ -134,6 +136,21 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
       setDraft(text)
     }
   }, [assistantId, draft])
+
+  const stop = async (): Promise<void> => {
+    if (assistantId === null || stopPending.current) return
+    stopPending.current = true
+    setStopping(true)
+    try {
+      await stopAssistant(assistantId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setItems(prev => [...prev, { kind: 'error', id: `stop-${String(prev.length)}`, message }])
+    } finally {
+      stopPending.current = false
+      setStopping(false)
+    }
+  }
 
   /** 结算审批。 */
   const decide = async (requestId: string, outcome: AssistantApprovalOutcome): Promise<void> => {
@@ -336,7 +353,8 @@ export function SshAssistantPanel({ sshSessionId, assetId, assetName, onOpened }
             <button
               type="button"
               className={css.stopButton}
-              onClick={() => { if (assistantId !== null) void stopAssistant(assistantId) }}
+              onClick={() => { void stop() }}
+              disabled={stopping}
               title="停止当前回合"
               aria-label="停止"
             >

@@ -165,6 +165,27 @@ describe('SshAssistantPanel', () => {
     expect(calls.find(call => call.path.endsWith('/stop'))?.body).toEqual({ assistantId: 'ssh-assistant-1' })
   })
 
+  it('shows a failed stop and lets the user retry', async () => {
+    let attempts = 0
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.endsWith('/stop') && ++attempts === 1) {
+        return jsonResponse({ ok: false, error: 'stop transport unavailable' })
+      }
+      return assistantFetch(input, init)
+    })
+    render(<SshAssistantPanel sshSessionId="s1" assetId="ssh-1" assetName="server" />)
+    await waitReady()
+    act(() => { emitHostEvent('starhub-assistant', { t: 'status', status: 'running' }) })
+    fireEvent.click(screen.getByLabelText('停止'))
+    await screen.findByText('stop transport unavailable')
+    expect(screen.getByLabelText<HTMLButtonElement>('停止').disabled).toBe(false)
+    fireEvent.click(screen.getByLabelText('停止'))
+    await waitFor(() => { expect(attempts).toBe(2) })
+    // 第一次失败的提交没有进到路由;重试真正重发了一次。
+    expect(calls.filter(call => call.path.endsWith('/stop'))).toHaveLength(1)
+  })
+
   it('disables the composer once the session is closed', async () => {
     render(
       <SshAssistantPanel sshSessionId="s1" assetId="ssh-1" assetName="server" />,

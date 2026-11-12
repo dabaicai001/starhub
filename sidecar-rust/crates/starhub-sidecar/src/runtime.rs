@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use starhub_domain_ssh::cancellation::Cancellation;
 use starhub_domain_ssh::events::{EventSink, KnownHostsStore, StoreFuture};
 use starhub_domain_ssh::manager::SshManager;
 use starhub_domain_ssh::sftp::transfer::TransferManager;
@@ -46,6 +47,19 @@ pub struct SshRuntime {
     ///
     /// std 锁:register/unregister 在 async 执行体里被调用,持锁期间不 await。
     inflight: std::sync::Mutex<HashMap<String, String>>,
+    requests: Arc<std::sync::Mutex<HashMap<String, Cancellation>>>,
+}
+
+/// Removes a request's cancellation state after its worker has settled.
+pub struct PendingExec {
+    requests: Arc<std::sync::Mutex<HashMap<String, Cancellation>>>,
+    id: String,
+}
+
+impl Drop for PendingExec {
+    fn drop(&mut self) {
+        self.requests.lock().unwrap().remove(&self.id);
+    }
 }
 
 impl SshRuntime {
@@ -66,6 +80,7 @@ impl SshRuntime {
             bindings,
             registry: crate::session_registry::SessionRegistry::new(),
             inflight: std::sync::Mutex::new(HashMap::new()),
+            requests: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -82,6 +97,26 @@ impl SshRuntime {
     /// SSH 会话管理器(UI 面 `ui.ssh_*` / `ui.sftp_*` 的会话实体入口)。
     pub fn manager(&self) -> &SshManager {
         &self.manager
+    }
+
+    /// Reserve cancellation before starting a worker, preserving stdin order.
+    pub fn prepare_exec(&self, id: &str) -> PendingExec {
+        self.requests
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), Cancellation::default());
+        PendingExec {
+            requests: Arc::clone(&self.requests),
+            id: id.to_string(),
+        }
+    }
+
+    /// Resolve the host-owned execution identity; legacy calls remain uncancelled.
+    pub fn cancellation(&self, args: &serde_json::Value) -> Cancellation {
+        args.get("_starhubExecId")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| self.requests.lock().unwrap().get(id).cloned())
+            .unwrap_or_default()
     }
 
     /// 资产存储(全局方法 `starhub_list_assets` 用)。
@@ -147,6 +182,7 @@ impl SshRuntime {
             assets: self.assets.as_ref(),
             sink: &self.sink,
             tracker: self,
+            cancellation: Cancellation::default(),
         }
     }
 
@@ -163,14 +199,10 @@ impl SshRuntime {
         terminal_session: Option<&str>,
         args: &serde_json::Value,
     ) -> Result<String, String> {
-        starhub_domain_ssh::tools::execute_ssh(
-            &self.context(),
-            name,
-            asset_id,
-            terminal_session,
-            args,
-        )
-        .await
+        let mut context = self.context();
+        context.cancellation = self.cancellation(args);
+        starhub_domain_ssh::tools::execute_ssh(&context, name, asset_id, terminal_session, args)
+            .await
     }
 
     /// 查询当前绑定资产 SSH 会话状态(不触发连接)。
@@ -179,12 +211,8 @@ impl SshRuntime {
         asset_id: &str,
         terminal_session: Option<&str>,
     ) -> Result<String, String> {
-        starhub_domain_ssh::tools::execute_ssh_status(
-            &self.context(),
-            asset_id,
-            terminal_session,
-        )
-        .await
+        starhub_domain_ssh::tools::execute_ssh_status(&self.context(), asset_id, terminal_session)
+            .await
     }
 
     /// 执行 sftp_list / sftp_stat / sftp_upload / sftp_download。
@@ -195,18 +223,18 @@ impl SshRuntime {
         terminal_session: Option<&str>,
         args: &serde_json::Value,
     ) -> Result<String, String> {
-        starhub_domain_ssh::tools::execute_sftp(
-            &self.context(),
-            name,
-            asset_id,
-            terminal_session,
-            args,
-        )
-        .await
+        let mut context = self.context();
+        context.cancellation = self.cancellation(args);
+        starhub_domain_ssh::tools::execute_sftp(&context, name, asset_id, terminal_session, args)
+            .await
     }
 
     /// 中断一条在途 exec(停止生成);exec_id 未知(已结束)按未中断返回。
     pub async fn abort_exec(&self, exec_id: &str) -> Result<bool, String> {
+        if let Some(cancellation) = self.requests.lock().unwrap().get(exec_id) {
+            cancellation.cancel();
+            return Ok(true);
+        }
         let conn_id = self
             .inflight
             .lock()
@@ -441,5 +469,33 @@ mod tests {
         let err = runtime.abort_exec("exec-1").await.unwrap_err();
         assert!(err.contains("未知或已结束"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---------- 停止生成(请求级取消):排队中就点停止 ----------
+
+    #[tokio::test]
+    async fn stop_before_dispatch_is_sticky_and_scoped_to_one_call() {
+        let (runtime, dir) = runtime_in_temp("cancel");
+        let request = runtime.prepare_exec("first");
+        let other = runtime.prepare_exec("second");
+        assert!(runtime.abort_exec("first").await.unwrap());
+        let cancelled = runtime.cancellation(&serde_json::json!({ "_starhubExecId": "first" }));
+        assert!(cancelled.is_cancelled());
+        assert!(!runtime
+            .cancellation(&serde_json::json!({ "_starhubExecId": "second" }))
+            .is_cancelled());
+        let result = runtime
+            .execute_ssh(
+                "ssh_exec",
+                "unused",
+                None,
+                &serde_json::json!({ "command": "must-not-run", "_starhubExecId": "first" }),
+            )
+            .await;
+        assert!(result.unwrap_err().contains("[EXEC_ABORTED]"));
+        drop(request);
+        drop(other);
+        assert!(runtime.requests.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

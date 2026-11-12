@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.141.0(🎨 **工作台 UI 基座统一:字重/字号/圆角/描边/动效按 DSH 规范收敛**:此前 107 处 ≥600 字重、15 种字号(含 10.5/11.5/12.5)、16 种圆角(79 处 6px,DSH 是 8)、277 处 1px 中性描边、12 种动效时长各写各的,同一产品里页面松紧/粗细/手感不一致。现在字重只留 400/500,字号收成 10–18,圆角映射到 `--dsw-radius-*`,中性描边改 0.5px,时长/缓动统一走 `--ds-transition-duration*`/`--ds-ease-in-out`;近 40 处 `50%`/`999px` 圆角补 `corner-shape: round`,修复 DSH 全局 superellipse 把圆点/胶囊压成超椭圆;DB/Dashboard/Broker/settings 的持续动画补 reduced-motion。) |
+| 当前版本 | v0.141.1(🐛 **AI 操作的「停止」真的停了**:取消信号贯通工具桥 → sidecar → SSH 执行层——运行中的 exec 先 `SIGTERM` 再关通道,排队在会话锁上的调用在派发前就退出,停止只关那一条执行通道、用户终端连接保留;详见 CHANGELOG 与 `docs/踩坑记录.md` §79) |
 
 ## 架构一句话
 
@@ -97,6 +97,7 @@ npm run plugin:pack          # 同上并打 tarball(Windows PowerShell 下 `npm 
 npm run plugin:publish       # 把组装好的 bundle 发到注册表(DSH 0.2.2+ 插件页原地更新;先 --dry-run 验)
 npm run smoke:plugin-bundle  # 纯插件形态:真 pnpm 安装 + 宿主冒烟(五条断言)
 npm run verify:bridge-compat # 真 sidecar 二进制 ↔ 桥兼容层全工具面验收
+npm run verify:ai-cancel     # 「停止生成」真链路验收:运行中关闭通道 / 排队中不下发 / 连接仍可用
 
 npm run package:dsh-runtime  # 打包 dsh 运行时(→ dsh-runtime/)
 npm run provision:dsh        # 把 StarHub 组合装进一个 dsh profile
@@ -146,4 +147,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-11-11 (v0.141.0)*
+*最后更新: 2026-11-12 (v0.141.1)*

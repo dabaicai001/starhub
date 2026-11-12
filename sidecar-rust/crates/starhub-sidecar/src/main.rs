@@ -94,7 +94,13 @@ fn handle_frame(frame: &InboundFrame, ctx: &FrameContext) -> Option<OutboundResp
         FrameKind::Request { id, method, params } => {
             let params = params.unwrap_or(serde_json::Value::Null);
             let started = std::time::Instant::now();
-            let outcome = if method == EXEC_ABORT_METHOD {
+            let outcome = if bridge::is_tool_method(&method)
+                && ctx.ssh.cancellation(&params).is_cancelled()
+            {
+                Err(starhub_sidecar::jsonrpc::RpcError::internal(
+                    "[EXEC_ABORTED] Operation cancelled by user",
+                ))
+            } else if method == EXEC_ABORT_METHOD {
                 // 停止生成:中断在途 exec(以请求形态调用时同样受理,便于对端确认)
                 handle_exec_abort(&ctx.ssh, &ctx.runtime, &params)
             } else {
@@ -303,11 +309,32 @@ fn main() {
         let Some(frame) = InboundFrame::parse(&line) else {
             continue; // malformed line: ignored per protocol contract
         };
+        // Reserve before dispatch: the next stdin frame may already be a stop,
+        // while this worker has not yet acquired a terminal/session lock.
+        let pending_exec = match frame.kind() {
+            starhub_sidecar::jsonrpc::FrameKind::Request { method, params, .. }
+                if bridge::is_tool_method(&method) =>
+            {
+                params
+                    .as_ref()
+                    .and_then(|params| params.get("_starhubExecId"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|id| context.ssh.prepare_exec(id))
+            }
+            _ => None,
+        };
+        // Stops are processed in stdin order too, before a later request can run.
+        if matches!(frame.kind(), starhub_sidecar::jsonrpc::FrameKind::Notification { ref method, .. } if method == EXEC_ABORT_METHOD)
+        {
+            handle_frame(&frame, &context);
+            continue;
+        }
         // 每条帧一个工作线程:域 handler 在内部 block_on 到完成(SSH 连接最长可等
         // 370s 的认证窗口),读取线程绝不替它等——否则对端为了回答这个请求而发的
         // 下一帧(主机密钥/MFA/堡垒机的应答)会排在管道里读不进来,形成自锁。
         let worker = context.clone();
         std::thread::spawn(move || {
+            let _pending_exec = pending_exec;
             if let Some(response) = handle_frame(&frame, &worker) {
                 write_line(&response.to_line());
             }

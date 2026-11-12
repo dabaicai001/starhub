@@ -6,6 +6,7 @@
 
 pub mod asset_config;
 pub mod auth;
+pub mod cancellation;
 pub mod events;
 pub mod known_hosts;
 pub mod manager;

@@ -945,7 +945,8 @@ impl SshSession {
     }
 
     pub async fn exec(&mut self, command: &str, timeout_sec: u64) -> Result<String, String> {
-        self.exec_inner(command, timeout_sec, None).await
+        self.exec_inner(command, timeout_sec, std::future::pending())
+            .await
     }
 
     /// 带中断接收端的 exec:`abort_rx` 触发时关闭 channel,
@@ -956,33 +957,48 @@ impl SshSession {
         timeout_sec: u64,
         abort_rx: oneshot::Receiver<()>,
     ) -> Result<String, String> {
-        self.exec_inner(command, timeout_sec, Some(abort_rx)).await
+        self.exec_inner(command, timeout_sec, async {
+            let _ = abort_rx.await;
+        })
+        .await
+    }
+
+    /// Execute a request with sticky cancellation through channel setup and output.
+    pub async fn exec_cancellable(
+        &mut self,
+        command: &str,
+        timeout_sec: u64,
+        cancellation: &crate::cancellation::Cancellation,
+    ) -> Result<String, String> {
+        self.exec_inner(command, timeout_sec, cancellation.cancelled())
+            .await
     }
 
     async fn exec_inner(
         &mut self,
         command: &str,
         timeout_sec: u64,
-        abort_rx: Option<oneshot::Receiver<()>>,
+        cancelled: impl std::future::Future<Output = ()>,
     ) -> Result<String, String> {
+        tokio::pin!(cancelled);
         let handle = self
             .handle
             .as_mut()
             .ok_or_else(|| "SSH session not connected".to_string())?;
-        let mut channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| format!("[EXEC_FAILED] Failed to open exec channel: {}", e))?;
-        channel
-            .exec(true, command)
-            .await
-            .map_err(|e| format!("Failed to exec command: {}", e))?;
-
-        // 无中断接收端时用一对 keepalive channel 顶替:发送端存活到函数结束,
-        // 保证 select 的 abort 分支永远不会因 sender drop 而误触发。
-        let (keepalive_tx, keepalive_rx) = oneshot::channel::<()>();
-        let mut abort_rx = abort_rx.unwrap_or(keepalive_rx);
-        let _keepalive_tx = keepalive_tx;
+        let mut channel = tokio::select! {
+            biased;
+            _ = &mut cancelled => return Err("[EXEC_ABORTED] Operation cancelled by user".to_string()),
+            channel = handle.channel_open_session() => channel
+                .map_err(|e| format!("[EXEC_FAILED] Failed to open exec channel: {e}"))?,
+        };
+        tokio::select! {
+            biased;
+            _ = &mut cancelled => {
+                let _ = channel.close().await;
+                return Err("[EXEC_ABORTED] Operation cancelled by user".to_string());
+            },
+            result = channel.exec(true, command) => result.map_err(|e| format!("Failed to exec command: {e}"))?,
+        }
 
         let mut output = Vec::<u8>::new();
         let mut truncated = false;
@@ -1004,7 +1020,7 @@ impl SshSession {
                             _ => {}
                         }
                     }
-                    _ = &mut abort_rx => {
+                    _ = &mut cancelled => {
                         aborted = true;
                         break;
                     }
@@ -1030,6 +1046,7 @@ impl SshSession {
             ));
         }
         if aborted {
+            let _ = channel.signal(russh::Sig::TERM).await;
             let _ = channel.close().await;
             let partial = stdout.trim();
             return Err(format!(
