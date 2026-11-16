@@ -1,6 +1,0 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
-#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-16-starhub-client-nav-scope-split.md
-2026-08-16-starhub-client-nav-scope-split.md: 9aa1d1e84aaf269cfedacc669e80c19485a0fec7
-2026-08-16-starhub-client-nav-scope-split.zh.md: 83e61935077b066313e5ca3b101643a0a1601a3c

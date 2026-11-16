@@ -240,11 +240,10 @@ function usage() {
   ].join('\n')
 }
 
-/** 取 YAML 解析器(根 devDependency 的 js-yaml;老 checkout 里 vendor 自带的作兜底)。 */
+/** 取 YAML 解析器(根 devDependency 的 js-yaml;vendor 树已随 v0.143.0 删除)。 */
 function loadYamlParser() {
   for (const candidate of [
     join(repoRoot, 'node_modules', 'js-yaml'),
-    join(repoRoot, 'vendor', 'deepseek-harness', 'node_modules', 'js-yaml'),
   ]) {
     try {
       return require(candidate)

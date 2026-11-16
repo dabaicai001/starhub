@@ -10,15 +10,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# 去 Tauri 化 M4 第 3 步:原来的 linux-compat 门是 Tauri 链(webkit2gtk 依赖 +
-# src-tauri 的 cargo test + tauri build)。壳换成上游 Electron 之后,能离线验的
-# 门变成了这三类:域单测(sidecar-rust / Go / 前端纯逻辑)、provisioning 单测、
-# 以及 **provisioning + 宿主进程冒烟**。后两类是新的关键门——它们证的是
-# 「StarHub 组合装进 dsh profile 之后真的能跑」,正是发布链换掉的东西。
+# 能离线验的门分四类:域单测(sidecar-rust / Go / 前端纯逻辑)、StarHub 自己的
+# vitest 套件、插件组装,以及 **把 tarball 装进官方宿主进程的冒烟**。最后一类是
+# 关键门——它证的是「StarHub 插件装进官方 dsh 之后真的能跑」。
 #
-# 为什么不跑 Electron:窗口层要等一次真安装包(见 release.yml 的打包步骤),
-# 而宿主进程 + 插件 + sidecar 的启动链在无头环境就能完整验证(上游
-# apps/desktop/scripts/smoke-runtime.ts 同款路径)。
+# 不跑 Electron、也不自建壳:品牌安装包已退役(v0.143.0),发布物是插件 bundle。
 
 jobs:
   verify:
@@ -73,9 +69,6 @@ jobs:
         # npm ci 只装根 devDependencies,装不到 workspace 包的依赖。
         run: pnpm install --frozen-lockfile
 
-      - name: Install dsh runtime dependencies
-        run: pnpm --dir vendor/deepseek-harness install --frozen-lockfile
-
       - name: Validate workflow YAML
         # 工作流文件本身非法时 GitHub 一个 job 都不起、秒级 failure,后面所有步骤
         # 根本不会跑——所以这道门拦在最早、最便宜的地方(贡献者本地跑同一条
@@ -103,9 +96,6 @@ jobs:
         env:
           CARGO_BUILD_JOBS: ${{ matrix.name == 'ARM64' && '2' || '4' }}
         run: cargo test --manifest-path sidecar-rust/Cargo.toml
-
-      - name: Test provisioning merge logic
-        run: npm run test:provision
 
       - name: Test Tauri→sidecar data migration
         # src-tauri 已删,但用户机器上的老数据(SQLite + Keyring)还在;导入工具

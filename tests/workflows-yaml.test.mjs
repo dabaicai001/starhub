@@ -10,7 +10,7 @@
  * 本机单测的绿。
  *
  * 两个断言各自钉住一半:
- * 1. `js-yaml` 能解析(解析器从 vendor 树取,不给仓库根加依赖);
+ * 1. `js-yaml` 能解析(解析器来自根 devDependency);
  * 2. 没有任何**裸标量**的值里含 `: `——这是那类事故的直接形态,比「等 YAML
  *    解析器报错」更早、更具体地指出该给哪一行加引号。
  */
@@ -24,11 +24,10 @@ import { createRequire } from 'node:module'
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const workflowsDir = join(repoRoot, '.github', 'workflows')
 
-/** 与 provisioning 同一套解析器解析顺序:仓库根 → vendor 树。 */
+/** 解析器来自根 devDependency(vendor 树已随 v0.143.0 删除)。 */
 function loadYamlParser() {
   const candidates = [
     join(repoRoot, 'node_modules', 'js-yaml'),
-    join(repoRoot, 'vendor', 'deepseek-harness', 'node_modules', 'js-yaml'),
   ]
   for (const candidate of candidates) {
     try {
@@ -50,7 +49,7 @@ test('工作流目录里至少有一个工作流文件', () => {
 
 test('每个工作流文件都是合法 YAML 且声明了至少一个 job', () => {
   const yaml = loadYamlParser()
-  assert.ok(yaml, '找不到 js-yaml(仓库根与 vendor 树都没有)——本测试需要它才能跑')
+  assert.ok(yaml, '找不到 js-yaml(根 devDependency 没装)——本测试需要它才能跑')
   for (const name of workflowFiles) {
     const text = readFileSync(join(workflowsDir, name), 'utf8')
     let doc

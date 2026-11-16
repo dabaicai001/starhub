@@ -32,7 +32,6 @@ import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const vendorRoot = join(repoRoot, 'vendor', 'deepseek-harness')
 
 /** 启动总预算(冷启动:Node + 首次物化 profile + sidecar ping)。 */
 const DEFAULT_TIMEOUT_MS = 90_000
@@ -121,43 +120,36 @@ async function waitForToken(read, timeoutMs) {
 }
 
 /**
- * 挑一个能跑 dsh CLI 的 Node 与 CLI 入口。
+ * 挑一个能跑 dsh CLI 的入口,并固定用当前 Node。
  *
- * 解析顺序(P2 起不再以 vendor 为主要来源):
+ * 解析顺序:
  * 1. `STARHUB_DSH_CLI` 环境变量(指定任意已装的 dsh 入口);
  * 2. 根 workspace 的 `@deepseek-ai/dsh`(官方精确版本,根 devDependency)——
- *    这才是「装进官方宿主」的验收形态;
- * 3. `dsh-runtime/`(自建壳时代打好的便携运行时,仍在的 checkout 可用);
- * 4. 最后才回退 vendor 的 `apps/cli`(只为老 checkout 可用,会打印警告)。
+ *    这才是「装进官方宿主」的验收形态。
  *
- * 用打包进去的便携 node 优先于 process.execPath:CLI 入口用 `import.meta.main`
- * 自决是否执行,需要 Node ≥24.2。
+ * 品牌 Electron 安装包与自建 `dsh-runtime/` 已在 v0.143.0 退役,所以没有第三条
+ * 兜底:找不到官方入口就 fail loud,而不是悄悄退回一棵已删除的 vendor 树。
+ *
+ * Node 要求 ≥24.2:CLI 入口用 `import.meta.main` 自决是否执行。
  * @returns `{ executable, cliBin }`。
  */
 function resolveNode() {
-  const runtimeRoot = join(repoRoot, 'dsh-runtime')
-  const bundled = join(runtimeRoot, process.platform === 'win32' ? 'node.exe' : 'node')
   const officialCli = join(repoRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
-  const runtimeCli = join(runtimeRoot, 'apps', 'cli', 'lib', 'bin.js')
-  const vendorCli = join(vendorRoot, 'apps', 'cli', 'lib', 'bin.js')
+  const fromEnv = process.env.STARHUB_DSH_CLI
+  const cliBin =
+    fromEnv !== undefined && fromEnv !== ''
+      ? resolve(fromEnv)
+      : officialCli
 
-  let cliBin
-  if (process.env.STARHUB_DSH_CLI !== undefined && process.env.STARHUB_DSH_CLI !== '') {
-    cliBin = resolve(process.env.STARHUB_DSH_CLI)
-  } else if (existsSync(officialCli)) {
-    cliBin = officialCli
-  } else if (existsSync(runtimeCli)) {
-    cliBin = runtimeCli
-  } else {
-    console.warn('[plugin-smoke] 未找到官方 @deepseek-ai/dsh 入口,回退 vendor/apps/cli(老 checkout 兼容路径)')
-    cliBin = vendorCli
-  }
-  const executable = existsSync(bundled) ? bundled : process.execPath
-  if (!existsSync(bundled)) {
-    console.log('[plugin-smoke] 未找到 dsh-runtime/node,使用 process.execPath(要求 Node ≥24.2)')
+  if (!existsSync(cliBin)) {
+    console.error(`[plugin-smoke] 找不到 dsh CLI:${cliBin}`)
+    console.error('             先跑 pnpm install(根 workspace 装了官方 @deepseek-ai/dsh),')
+    console.error('             或用 STARHUB_DSH_CLI 指向任一已安装的 dsh 入口。')
+    process.exit(1)
   }
   console.log(`[plugin-smoke] dsh CLI: ${cliBin}`)
-  return { executable, cliBin }
+  console.log(`[plugin-smoke] node    ${process.execPath}`)
+  return { executable: process.execPath, cliBin }
 }
 
 /**
@@ -280,7 +272,7 @@ async function main() {
 
   // ── 2. boot 宿主进程(刻意不设 STARHUB_GO_SIDECAR / STARHUB_WINDOW_DIST) ──
   const child = spawn(node.executable, [node.cliBin, 'web'], {
-    cwd: vendorRoot,
+    cwd: home,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
@@ -365,7 +357,7 @@ async function main() {
         page.status === 200 && html.includes(BUNDLE_NAME),
         `status=${page.status} 含包名=${html.includes(BUNDLE_NAME)}`
         + (page.status === 404
-          ? '(索引路由不可用:宿主安装树里没有 apps/web/dist——先 npm run build:web 或 npm run package:dsh-runtime)'
+          ? '(索引路由不可用:宿主安装树里没有 apps/web/dist——检查官方 @deepseek-ai/dsh 安装是否完整)'
           : ''))
     }
   } catch (error) {

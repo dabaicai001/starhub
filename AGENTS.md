@@ -13,11 +13,11 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.142.1(🔧 **P2 发布解耦:冒烟改打官方宿主,StarHub 自有单测接回根 workspace**:`smoke-plugin-bundle` 的 dsh CLI 解析顺序改为「`STARHUB_DSH_CLI` → 根 `@deepseek-ai/dsh@0.2.2-rc.3`（新增根 devDependency）→ `dsh-runtime/` → vendor 兜底」，目录形态与 tarball 形态（真 `pnpm add`）两种冒烟的五条断言都在官方宿主上跑通；新增 `vitest.config.ts` + `npm run test:starhub`，把 P1 随源码迁出的 71 个测试文件接回来（1191 例通过 / 2 例显式 skip）；工具链对齐上游矩阵（vite 8 / `@vitejs/plugin-react` 6 / esbuild 0.28 / vitest 4），工作台不再需要 es2022 兜底。CI 去掉 vendor install 与自建壳打包/冒烟步骤，改跑 `test:starhub` + 官方宿主 bundle 冒烟，Node 22→24、pnpm 对齐生成 lockfile 的 10.15。详见 [docs/P2-发布解耦记录.md](docs/P2-发布解耦记录.md)。) |
+| 当前版本 | v0.143.0(🗑️ **P3 删除 vendor：上游改为纯 npm 消费，发布物只剩插件 tarball**：品牌 Electron 安装包（`starhub-windows-x86_64-<tag>.exe`）退役，`vendor/deepseek-harness/`（约 2.8 GB）整棵删除；`release.yml` 的装机链（Electron 打包、`.env.windows`、`DOWNLOAD_TEST_RELEASE_ID` / `DSH_DESKTOP_*` secrets、installer 上传、publish job 的 exe 分支）一并移除，publish 只发布 `starhub-dsh-plugin-<版本>-win-x64.tgz`。同时删掉只服务装机链的 `provision-dsh.mjs` / `lib/provision-patch.mjs` / `smoke-dsh-desktop.mjs` / `verify-web-dist.mjs` / `package:dsh-runtime` / `profiles/starhub-{web,agent}`。安装路径因此收敛为：装官方 DeepSeek Harness → 插件页粘贴 `@starhub/dsh-plugin@<版本>` 或 Release 上的 tarball。顺带修掉一处潜在红灯：release 以前靠 vendor 的运行时打包脚本顺带编出 `packages/starhub/*/lib`，现在显式跑 `build:lib` + `build:lib:client`。详见 [docs/P3-删除vendor记录.md](docs/P3-删除vendor记录.md)。) |
 
 ## 架构一句话
 
-三层进程:**上游 Electron 壳(零改动)** 跑 dsh Host(Node)进程 → Host 里的 **starhub-bridge 插件** spawn 两个 sidecar:**Rust sidecar(`sidecar-rust/`,ssh/sftp/android/browser 契约层 + 直播帧枢纽)** 与 **Go Sidecar(`sidecar/`,数据库/中间件适配)**,均经 stdio 换行分帧 JSON-RPC 通话 → **前端**是 DSH 主壳 + StarHub React 工作台(`packages/starhub/client-nav` 的客户端半边 + `apps/starhub-workbench` 的独立资产入口;**P1 起 StarHub 自有源码不在 vendor 里**)。
+三层进程:**上游 Electron 壳** 跑 dsh Host(Node)进程 → Host 里的 **starhub-bridge 插件** spawn 两个 sidecar:**Rust sidecar(`sidecar-rust/`,ssh/sftp/android/browser 契约层 + 直播帧枢纽)** 与 **Go Sidecar(`sidecar/`,数据库/中间件适配)**,均经 stdio 换行分帧 JSON-RPC 通话 → **前端**是 DSH 主壳 + StarHub React 工作台(`packages/starhub/client-nav` 的客户端半边 + `apps/starhub-workbench` 的独立资产入口)。上游(v0.143.0 起)只按官方 npm 包消费,仓库内不再 vendored。
 
 ## 目录结构
 
@@ -44,35 +44,32 @@ starhub/
 │   └── shims/client-runtime # @deepseek-ai/dsh-client-runtime 兼容垫片(上游已删该包,整体是 StarHub 的)
 │
 ├── apps/starhub-workbench/  # React 工作台独立资产入口(Vite,产物 dist-starhub-react/,base=/starhub-react/)
-├── profiles/                # profile 组合模板:starhub-desktop / starhub-web / starhub-agent
+├── profiles/starhub-desktop # profile 组合模板(cordis.patch.yml;bundle 的行 id 以它为准)
 ├── pnpm-workspace.yaml      # StarHub 自己的工作区(packages/*/*、apps/*)
 ├── .npmrc                   # node-linker=hoisted(声明文件可移植性,见 docs/P1 迁移记录)
 ├── tsconfig.{base,base.client,host,client}.json  # 两个编译聚合面,官方包从 node_modules 解析
 │
-├── vendor/deepseek-harness/ # 上游 deepseek-ai/deepseek-harness 的 vendored 副本(随仓库版本化;
-│                            # 上游 commit 记录于 vendor/deepseek-harness/UPSTREAM_COMMIT.txt)。
-│                            # P1 起 StarHub 自有源码已全部迁出,这里只剩上游本体 + 发布链用的 Electron 壳;
-│                            # P2/P3 决定自建壳产物去留后整棵删除。
-│   ├── apps/                # web / cli / desktop / desktop-host(上游自家应用)
-│   └── packages/            # 上游全部包(StarHub 只经 npm 已发布包消费它们)
+│   # 上游 DeepSeek Harness 不在仓库里了(v0.143.0 起):宿主运行时、客户端包、cordis 全部
+│   # 按官方已发布 npm 包消费(@deepseek-ai/dsh@0.2.2-rc.3 是根 devDependency)。
 │
 ├── scripts/
-│   ├── provision-dsh.mjs     # M4:把 StarHub 组合装进 dsh profile
-│   ├── smoke-dsh-desktop.mjs # M4:provisioning + 宿主进程冒烟
 │   ├── build-plugin-bundle.mjs  # 纯插件形态:拼出自包含 bundle(→ dist-plugin/,--pack 出 .tgz)
-│   ├── smoke-plugin-bundle.mjs  # 纯插件形态:pnpm 安装 + 宿主冒烟(五条断言)
+│   ├── smoke-plugin-bundle.mjs  # 纯插件形态:pnpm 安装 + 官方宿主冒烟(五条断言)
+│   ├── publish-plugin-bundle.mjs # 把 bundle 发到注册表(插件页原地更新)
+│   ├── build-client-bundle.mjs  # client-nav 客户端半边(esbuild + CSS Modules 内联)
+│   ├── clean-lib.mjs         # 清各包 lib/ 与工作台 dist/
 │   ├── build-sidecar.*       # Go sidecar 构建
-│   ├── build-window.mjs      # React 工作台构建
+│   ├── build-window.mjs      # React 工作台构建(Vite Node API)
 │   ├── bump-version.mjs      # 版本号同步
+│   ├── migrate-tauri-data.mjs # 旧 Tauri 数据导入(用户机器老数据)
 │   ├── cargo-sidecar.bat     # Windows 上跑 sidecar-rust 的 cargo(MSVC + 工具链)
 │   └── cargo-sidecar.mjs     # 上面的跨平台包装:Windows 转 .bat,其它平台直调 cargo
 │
-├── dsh-runtime/             # 打包好的 dsh 运行时(gitignore;package:dsh-runtime 产出)
 ├── dist-starhub-react/      # React 工作台产物(gitignore)
 ├── dist-plugin/             # 纯插件 bundle 组装产物(gitignore;plugin:bundle 产出,--pack 另出 .tgz)
-├── docs/                    # 技术方案 / 设计系统 / 踩坑记录 / 已知坑索引 / 去Tauri化 M1-M4 清单
+├── docs/                    # 技术方案 / 设计系统 / 踩坑记录 / 已知坑索引 / 去Tauri化 M1-M4 清单 / P0-P3 迁移记录
 ├── test-sftp/               # SSH/SFTP stub + 桥兼容验收脚本
-└── tests/                   # node --test 单测(utils、AI 上下文/滚动/记忆、SSH prompt/cwd/后台任务、provisioning)
+└── tests/                   # node --test 单测(utils、AI 上下文/滚动/记忆、SSH prompt/cwd/后台任务、bundle 组装、workflow YAML)
 ```
 
 ## 技术栈速查
@@ -82,7 +79,7 @@ starhub/
 - **Go**:go-sql-driver/mysql、jackc/pgx、modernc.org/sqlite(纯 Go)、go-redis、clickhouse-go、go-mssqldb、go-elasticsearch、docker/docker、zerolog
 - **Node**:上游 dsh Host(desktop profile)+ starhub-bridge 插件。**仓库根是 StarHub 自己的 pnpm workspace**(`packages/*/*` + `apps/*`),devDependencies 只有工具链(typescript / tsx / esbuild / vite / js-yaml);每个 StarHub 包按需声明官方 `@deepseek-ai/dsh-*@0.2.2-rc.3`(编译期类型与运行期宿主供给)与 `@deepseek-ai/cordis@~4.1.0` / `@deepseek-ai/schemastery@~3.19.0`。根 `scripts/` 与 `tests/` 只 import node 内置模块。
 
-**铁律 — 新功能优先以 dsh 插件形式注入,不改上游内核源码。** 新能力落在 `packages/starhub/*`(P1 起 StarHub 自有源码在这里,不在 vendor),经槽位系统(`ctx.slots.register` / `slots.inject`)或 Cordis 服务(`ctx.provide` / `ctx.get`)接入。上游内核要么用已发布 npm 包,要么在 `vendor/` 里只做「修 DSH 自身 bug(注释标注上游补丁)」这类最小改动 —— 而 P3 之后 vendor 不存在,这条路径也随之消失。不新增 Vue 系依赖。
+**铁律 — 新功能一律以 dsh 插件形式注入,不改上游。** 新能力落在 `packages/starhub/*`,经槽位系统(`ctx.slots.register` / `slots.inject`)或 Cordis 服务(`ctx.provide` / `ctx.get`)接入。上游(v0.143.0 起)**只按官方已发布 npm 包消费**,仓库里没有上游源码,也就不存在「改内核」这条路;需要上游改动时走上游 Issue,或在插件侧用公开扩展点表达。不新增 Vue 系依赖。
 
 ## 关键命令
 
@@ -98,22 +95,19 @@ npm run sidecar-rust:build   # Rust sidecar(scripts/cargo-sidecar.mjs:Windows �
 
 npm run test:utils           # node --test 纯逻辑套件;其余套件见 package.json scripts
 npm run test:starhub         # StarHub 自有 vitest 套件(10 个插件 + 工作台 app 的 tests/)
-npm run test:provision       # provisioning 合并逻辑单测
-npm run smoke:dsh-desktop    # provisioning + 宿主进程冒烟(五条断言)
+npm run test:plugin-bundle   # bundle 组装/行清单/图标单测
 npm run plugin:bundle        # 纯插件形态:组装 dist-plugin/(加 --pack 出 .tgz,粘进 dsh 插件页)
 npm run plugin:pack          # 同上并打 tarball(Windows PowerShell 下 `npm run x -- --pack` 会被吞参,故单列一个脚本)
 npm run plugin:publish       # 把组装好的 bundle 发到注册表(DSH 0.2.2+ 插件页原地更新;先 --dry-run 验)
-npm run smoke:plugin-bundle  # 纯插件形态:真 pnpm 安装 + 宿主冒烟(五条断言)
+npm run smoke:plugin-bundle  # 纯插件形态:真 pnpm 安装 + 官方宿主冒烟(五条断言)
 npm run verify:bridge-compat # 真 sidecar 二进制 ↔ 桥兼容层全工具面验收
 npm run verify:ai-cancel     # 「停止生成」真链路验收:运行中关闭通道 / 排队中不下发 / 连接仍可用
 
-npm run package:dsh-runtime  # 打包 dsh 运行时(→ dsh-runtime/)
-npm run provision:dsh        # 把 StarHub 组合装进一个 dsh profile
 npm run version              # 版本号同步(见下)
-
-# 上游 Electron 壳(发布链)
-pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 ```
+
+> 品牌 Electron 安装包(exe)与自建 `dsh-runtime/`、`provision-dsh.mjs`、`smoke-dsh-desktop.mjs`
+> 已在 v0.143.0 退役:发布物只有插件 tarball,安装路径 = 官方 DSH + 装插件。
 
 ## 开发约定
 
@@ -140,7 +134,7 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 | 前端组件 | Vitest 4 | `npm run test:starhub`(根 workspace:`packages/starhub/*/tests` + `apps/*/tests`;需要 DOM 的用例靠文件首行 `// @vitest-environment jsdom`) |
 | Rust | cargo test | `npm run sidecar-rust:test`(Windows)/ `cargo test --manifest-path sidecar-rust/Cargo.toml` |
 | Go | go test | `cd sidecar && go test ./...` |
-| 发布链 | node --test + 冒烟 | `npm run test:provision` + `npm run smoke:dsh-desktop` |
+| 发布链 | node --test + 冒烟 | `npm run test:plugin-bundle` + `npm run smoke:plugin-bundle`(装进一次性 profile,官方 dsh 宿主) |
 
 ## 文档维护(强制)
 
@@ -155,4 +149,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-11-16 (v0.142.1)*
+*最后更新: 2026-11-16 (v0.143.0)*

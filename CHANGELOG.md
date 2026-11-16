@@ -9,6 +9,14 @@
 
 ---
 
+## [0.143.0] - 2026-11-16
+
+### 变更
+- 🗑️ **P3 删除 vendor：上游改为纯 npm 消费，发布物只剩插件 tarball**：品牌 Electron 安装包（`starhub-windows-x86_64-<tag>.exe`）退役，`vendor/deepseek-harness/`（约 2.8 GB）整棵删除；`release.yml` 的装机链（Electron 打包、`.env.windows`、`DOWNLOAD_TEST_RELEASE_ID` / `DSH_DESKTOP_*` secrets、installer 上传、publish job 的 exe 分支）一并移除，publish 只发布 `starhub-dsh-plugin-<版本>-win-x64.tgz`。同时删掉只服务装机链的 `provision-dsh.mjs` / `lib/provision-patch.mjs` / `smoke-dsh-desktop.mjs` / `verify-web-dist.mjs` / `package:dsh-runtime` / `profiles/starhub-{web,agent}`。安装路径因此收敛为：装官方 DeepSeek Harness → 插件页粘贴 `@starhub/dsh-plugin@<版本>` 或 Release 上的 tarball。顺带修掉一处潜在红灯：release 以前靠 vendor 的运行时打包脚本顺带编出 `packages/starhub/*/lib`，现在显式跑 `build:lib` + `build:lib:client`。详见 [docs/P3-删除vendor记录.md](docs/P3-删除vendor记录.md)。
+
+### 测试
+- ✅ vendor 删除后全链路复验：`build:lib` / `build:lib:client` 0 错误、`build:window` 通过、`test:starhub` 71 files / 1191 passed / 2 skipped、`test:utils` 106、`test:plugin-bundle` 12、`test:workflows` 3、`plugin:bundle` + `plugin:pack` 组装、两种形态冒烟（官方宿主 `0.2.2-rc.3`）全绿。
+
 ## [0.142.1] - 2026-11-16
 
 ### 变更

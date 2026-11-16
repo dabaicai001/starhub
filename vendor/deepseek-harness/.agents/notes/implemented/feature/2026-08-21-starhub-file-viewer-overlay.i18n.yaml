@@ -1,6 +1,0 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
-#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-21-starhub-file-viewer-overlay.md
-2026-08-21-starhub-file-viewer-overlay.md: d5072859c751cfd0ee0e4047e49cef80232479f9
-2026-08-21-starhub-file-viewer-overlay.zh.md: 8084189948188af078bdb4b524a6a9f1ba124115
