@@ -1,0 +1,16 @@
+{
+  // Host 编译面聚合（等价于 vendor 的 tsconfig.host.json 里 StarHub 那几行）。
+  // 只聚合 StarHub 自己的 host 包;官方 @deepseek-ai/dsh-* 从 node_modules 解析。
+  "files": [],
+  "references": [
+    { "path": "./packages/starhub/approval-bridge" },
+    { "path": "./packages/starhub/bridge" },
+    { "path": "./packages/starhub/domain-events" },
+    { "path": "./packages/starhub/host-static" },
+    { "path": "./packages/starhub/live-context" },
+    { "path": "./packages/starhub/session-registry" },
+    { "path": "./packages/starhub/ssh-assistant" },
+    { "path": "./packages/starhub/tool-context" },
+    { "path": "./packages/starhub/tools" }
+  ]
+}

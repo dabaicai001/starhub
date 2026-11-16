@@ -95,11 +95,19 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Install StarHub workspace dependencies
+        # P1 起插件与工作台的依赖都在根 pnpm workspace(官方 @deepseek-ai/dsh-* 包)。
+        run: pnpm install --frozen-lockfile
+
       - name: Install dsh runtime dependencies
         run: pnpm --dir vendor/deepseek-harness install --frozen-lockfile
 
       - name: Build plugin host/client libs
-        run: npm run build:lib
+        # Host 面(9 个插件)+ Client 面(client-nav 的 tsc 与客户端半边)两步都要跑:
+        # 组装脚本会 fail loud 地要 lib/client.js 与各包 lib/types。
+        run: |
+          npm run build:lib
+          npm run build:lib:client
 
       - name: Build StarHub React window resources
         run: npm run build:window

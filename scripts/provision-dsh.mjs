@@ -161,7 +161,7 @@ function usage() {
     '',
     '  --home <dir>          DSH_HOME(profile 的父目录)。',
     '  --profile <name>      profile 名,缺省 desktop。',
-    '  --vendor <dir>        vendor/deepseek-harness 根。',
+    '  --vendor <dir>        StarHub 仓库根(含 packages/starhub 与 profiles/),缺省仓库根。',
     '  --runtime <dir>       打包好的 dsh 运行时根(取其 node_modules 里闭包外的 patch 依赖),缺省 dsh-runtime。',
     '  --resources <dir>     sidecar 与工作台 dist 的落地目录,缺省 <home>/starhub/resources。',
     '  --sidecar-rust <path> starhub-sidecar-rust 二进制(缺省构建输出)。',
@@ -203,9 +203,8 @@ async function copyDirFresh(source, target) {
 }
 
 /**
- * 取 YAML 解析器。优先仓库根的 `node_modules`(将来若加了依赖),否则退回
- * vendor 树——`vendor/deepseek-harness/node_modules/js-yaml` 是上游闭包自带的,
- * 不为这一个校验给仓库根加依赖。
+ * 取 YAML 解析器。仓库根的 `node_modules/js-yaml`(根 devDependency)是主路径;
+ * 老 checkout 里 vendor 树的 js-yaml 作为兜底保留。
  *
  * @returns js-yaml 模块,或 null(解析器不可用:校验跳过而非失败——校验是加固,
  *   不是门槛)。
@@ -316,7 +315,7 @@ async function main() {
   if (goKind !== 'file') problems.push(`sidecar-go 二进制缺失: ${sidecars.go}(先跑 npm run sidecar:build)`)
   const windowKind = await pathKind(options.windowDist)
   if (windowKind !== 'dir') problems.push(`React 工作台 dist 缺失: ${options.windowDist}(先跑 npm run build:window)`)
-  const templatePath = join(vendor, 'examples', 'starhub-desktop', 'cordis.patch.yml')
+  const templatePath = join(vendor, 'profiles', 'starhub-desktop', 'cordis.patch.yml')
   if (!existsSync(templatePath)) problems.push(`patch 模板缺失: ${templatePath}`)
   if (problems.length > 0) {
     console.error('provision-dsh: 前置校验失败:')

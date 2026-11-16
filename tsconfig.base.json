@@ -1,0 +1,30 @@
+{
+  // StarHub 自有 TypeScript 基座（P1 起）。与 vendor 的 tsconfig.base.json 的
+  // 关键差别:**没有任何指向源码的 paths 别名**。官方 @deepseek-ai/dsh-* 包从
+  // node_modules 解析（包内自带 lib/types/*.d.ts），StarHub 自己的包之间用
+  // project references 排序 —— 这样「用已发布包编译」是可验证的,而不是靠
+  // 一棵上游源码树兜住。
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "incremental": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": false,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["node"]
+  }
+}

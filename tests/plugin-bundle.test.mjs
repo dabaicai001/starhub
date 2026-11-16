@@ -46,7 +46,7 @@ const VERSION = '1.2.3'
  */
 function templateRowIds() {
   const text = readFileSync(
-    join(repoRoot, 'vendor', 'deepseek-harness', 'examples', 'starhub-desktop', 'cordis.patch.yml'),
+    join(repoRoot, 'profiles', 'starhub-desktop', 'cordis.patch.yml'),
     'utf8',
   )
   return [...text.matchAll(/^\s*- id: (\S+)$/gm)].map(match => match[1])
@@ -115,7 +115,7 @@ test('客户端半边挂在裸包名行上(子路径行不会被当作客户端�
   assert.equal(manifest.exports['./client'], `./${CLIENT_PLUGIN}/lib/client.js`)
   assert.equal(manifest.exports['.'], `./${CLIENT_PLUGIN}/lib/index.js`)
 
-  const document = require(join(repoRoot, 'vendor', 'deepseek-harness', 'node_modules', 'js-yaml'))
+  const document = require(join(repoRoot, 'node_modules', 'js-yaml'))
     .load(renderPatch(PACKAGE_NAME))
   const rows = document.flatMap(entry => entry.insert)
   const bare = rows.filter(row => row.name === PACKAGE_NAME)
@@ -125,7 +125,7 @@ test('客户端半边挂在裸包名行上(子路径行不会被当作客户端�
 
 test('每个 insert 行都有对应 exports / package.json(缺一个就 failed to import)', () => {
   const manifest = renderManifest(PACKAGE_NAME, VERSION)
-  const document = require(join(repoRoot, 'vendor', 'deepseek-harness', 'node_modules', 'js-yaml'))
+  const document = require(join(repoRoot, 'node_modules', 'js-yaml'))
     .load(renderPatch(PACKAGE_NAME))
   const rows = document.flatMap(entry => entry.insert)
   assert.equal(rows.length, PLUGINS.length)
@@ -140,7 +140,7 @@ test('每个 insert 行都有对应 exports / package.json(缺一个就 failed t
 })
 
 test('bundle 是纯 insert:不覆盖 webserver / permission / session-query-sqlite 等上游行', () => {
-  const document = require(join(repoRoot, 'vendor', 'deepseek-harness', 'node_modules', 'js-yaml'))
+  const document = require(join(repoRoot, 'node_modules', 'js-yaml'))
     .load(renderPatch(PACKAGE_NAME))
   assert.equal(document.length, 1)
   assert.ok(Array.isArray(document[0].insert))
@@ -148,7 +148,7 @@ test('bundle 是纯 insert:不覆盖 webserver / permission / session-query-sqli
 })
 
 test('行 id 与 provisioning 模板一致(id 是用户覆盖与开关的公共标识)', () => {
-  const document = require(join(repoRoot, 'vendor', 'deepseek-harness', 'node_modules', 'js-yaml'))
+  const document = require(join(repoRoot, 'node_modules', 'js-yaml'))
     .load(renderPatch(PACKAGE_NAME))
   const ids = document.flatMap(entry => entry.insert).map(row => row.id)
   for (const id of ids) {
@@ -169,7 +169,7 @@ test('图标是内嵌 SVG 且远小于 256 KiB 上限', () => {
 
 test('客户端注册 id 从源包名改写成安装包名(否则 loaded without registering)', async () => {
   const sourceName = createRequire(import.meta.url)(
-    join(repoRoot, 'vendor', 'deepseek-harness', 'packages', 'starhub', CLIENT_PLUGIN, 'package.json'),
+    join(repoRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'package.json'),
   ).name
   assert.notEqual(sourceName, PACKAGE_NAME, '前提:源包名与安装包名不同,改写才有意义')
 

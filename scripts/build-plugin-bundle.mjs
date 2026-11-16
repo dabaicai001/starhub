@@ -33,13 +33,16 @@ import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const vendorRoot = join(repoRoot, 'vendor', 'deepseek-harness')
+/** StarHub 自己的包根(P1 起插件源码在仓库根的 packages/starhub,不再在 vendor 里)。 */
+const starhubRoot = repoRoot
+/** 工作台 app(P1 起在仓库根的 apps/starhub-workbench)。 */
+const workbenchApp = join(repoRoot, 'apps', 'starhub-workbench')
 const require = createRequire(import.meta.url)
 
 /**
  * 组装进 bundle 的九个 StarHub 内置插件。
  *
- * `row` 是 patch 行的 id(与 `examples/starhub-desktop/cordis.patch.yml` 一致,
+ * `row` 是 patch 行的 id(与 `profiles/starhub-desktop/cordis.patch.yml` 一致,
  * 用户覆盖与插件页开关都按 id 认,不许改名);`license` 承载每行的展示文案。
  */
 const PLUGINS = [
@@ -241,7 +244,7 @@ function usage() {
 function loadYamlParser() {
   for (const candidate of [
     join(repoRoot, 'node_modules', 'js-yaml'),
-    join(vendorRoot, 'node_modules', 'js-yaml'),
+    join(repoRoot, 'node_modules', 'js-yaml'),
   ]) {
     try {
       return require(candidate)
@@ -414,7 +417,7 @@ DSH 0.2.2-rc.1 起,插件页只给「从注册表按本名安装」的第三方 
  */
 async function rewriteClientRegistrationId(outDir, packageName) {
   const sourceName = JSON.parse(await readFile(
-    join(vendorRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'package.json'), 'utf8',
+    join(starhubRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'package.json'), 'utf8',
   )).name
   if (sourceName === packageName) return
   const clientFile = join(outDir, CLIENT_PLUGIN, 'lib', 'client.js')
@@ -607,31 +610,31 @@ async function main() {
   // ── 前置校验:缺一项就 fail loud,不产出半套 ──
   const problems = []
   for (const plugin of PLUGINS) {
-    const source = join(vendorRoot, 'packages', 'starhub', plugin.short)
+    const source = join(starhubRoot, 'packages', 'starhub', plugin.short)
     if (!existsSync(join(source, plugin.entry))) {
       problems.push(`插件产物缺失: packages/starhub/${plugin.short}/${plugin.entry}(先跑 npm run build:lib)`)
     }
   }
-  if (!existsSync(join(vendorRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'lib', 'client.js'))) {
+  if (!existsSync(join(starhubRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'lib', 'client.js'))) {
     problems.push('客户端半边缺失: packages/starhub/client-nav/lib/client.js(先跑 npm run build:lib:client)')
   } else {
     // plugin:bundle 只组装不重 build,client.js 静默装旧代码是最阴的坑
     // (界面「改了但没生效」)。src 比产物新即 fail loud,逼一次重 build。
-    const clientJs = join(vendorRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'lib', 'client.js')
+    const clientJs = join(starhubRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'lib', 'client.js')
     let srcNewest = 0
-    for (const file of await listFilesRecursive(join(vendorRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'src'))) {
+    for (const file of await listFilesRecursive(join(starhubRoot, 'packages', 'starhub', CLIENT_PLUGIN, 'src'))) {
       srcNewest = Math.max(srcNewest, (await stat(file)).mtimeMs)
     }
     if (srcNewest > (await stat(clientJs)).mtimeMs) {
       problems.push(
         '客户端 client.js 比 src/ 旧(plugin:bundle 不自动重 build):先跑 ' +
-        'pnpm --dir vendor/deepseek-harness --filter @deepseek-ai/dsh-starhub-client-nav run bundle')
+        'npm run build:lib:client')
     }
   }
   // 宿主半边(每个插件的 lib/)同样是组装输入:src 比 lib 新即 fail loud。
   // 2026-10-12 起补:改完 bridge 的 workbench.ts 若忘了 build:lib:host,包里还是旧宿主代码。
   for (const plugin of PLUGINS) {
-    const source = join(vendorRoot, 'packages', 'starhub', plugin.short)
+    const source = join(starhubRoot, 'packages', 'starhub', plugin.short)
     const libDir = join(source, 'lib')
     if (!existsSync(libDir) || !existsSync(join(source, 'src'))) continue
     let pluginSrcNewest = 0
@@ -655,9 +658,9 @@ async function main() {
     // 发出 0.133.x 时 dist 还是两天前的构建,新菜单/新图标在 iframe 页里根本不存在。
     // 只扫 src/ 目录:packages/starhub/* 下的 node_modules 是 pnpm 符号链接,
     // 递归进去会打转(listFilesRecursive 跟随链接)→ 栈溢出。
-    const windowSources = [join(vendorRoot, 'apps', 'starhub-window', 'src')]
-    for (const entry of await readdirSafe(join(vendorRoot, 'packages', 'starhub'))) {
-      windowSources.push(join(vendorRoot, 'packages', 'starhub', entry, 'src'))
+    const windowSources = [join(workbenchApp, 'src')]
+    for (const entry of await readdirSafe(join(starhubRoot, 'packages', 'starhub'))) {
+      windowSources.push(join(starhubRoot, 'packages', 'starhub', entry, 'src'))
     }
     let windowSrcNewest = 0
     for (const root of windowSources) {
@@ -722,7 +725,7 @@ async function main() {
   await mkdir(options.out, { recursive: true })
 
   for (const plugin of PLUGINS) {
-    const source = join(vendorRoot, 'packages', 'starhub', plugin.short)
+    const source = join(starhubRoot, 'packages', 'starhub', plugin.short)
     // 不带 sourcemap / 类型声明 / tsc 构建缓存:运行时只要 .js。`.tsbuildinfo`
     // 还带本机绝对路径,发到注册表既泄露路径又白占体积(实测每个插件几十 KB)。
     await cp(join(source, 'lib'), join(options.out, plugin.short, 'lib'), {

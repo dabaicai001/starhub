@@ -1,0 +1,42 @@
+{
+  "name": "@deepseek-ai/dsh-starhub-bridge",
+  "description": "StarHub sidecar bridge: spawns the Go and Rust sidecars, registers their JSON-RPC method surface as dsh model tools, and carries the live-view frame channel (StarHub-local package, not upstream)",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "main": "lib/types/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/types/index.js"
+    },
+    "./compat": {
+      "types": "./lib/types/compat.d.ts",
+      "default": "./lib/types/compat.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "@deepseek-ai/schemastery": "~3.19.0",
+    "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "@types/node": "^22.10.0",
+    "@deepseek-ai/schemastery": "~3.19.0",
+    "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.3",
+    "@deepseek-ai/cosmokit": "1.9.0"
+  }
+}

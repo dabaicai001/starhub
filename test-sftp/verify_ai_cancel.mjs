@@ -20,8 +20,8 @@ import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
-import * as plugin from '../vendor/deepseek-harness/packages/starhub/tools/src/index.ts'
-import { createBridgePeer } from '../vendor/deepseek-harness/packages/starhub/bridge/src/compat.ts'
+import * as plugin from '../packages/starhub/tools/src/index.ts'
+import { createBridgePeer } from '../packages/starhub/bridge/src/compat.ts'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const dir = mkdtempSync(join(tmpdir(), 'starhub-cancel-'))

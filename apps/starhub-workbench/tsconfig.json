@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "lib": [
+      "es2024",
+      "dom",
+      "dom.iterable"
+    ]
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../../packages/starhub/client-nav"
+    },
+    {
+      "path": "../../packages/shims/client-runtime"
+    }
+  ]
+}

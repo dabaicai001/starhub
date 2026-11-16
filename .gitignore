@@ -109,3 +109,8 @@ test-sftp/host_key.pem
 test-sftp/sftp-root/
 # 验收脚本跑出来的审计存储(默认落在 cwd;本地产物,不入库)
 starhub-audit.json
+
+# StarHub 自有包的构建产物(tsc 的 lib/types + 客户端 bundle / 工作台 dist)
+packages/*/*/lib/
+apps/*/lib/
+apps/*/dist/

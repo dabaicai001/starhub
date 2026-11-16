@@ -40,7 +40,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
-import { createBridgePeer, NotificationDispatcher } from '../vendor/deepseek-harness/packages/starhub/bridge/src/compat.ts'
+import { createBridgePeer, NotificationDispatcher } from '../packages/starhub/bridge/src/compat.ts'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const binary = join(repoRoot, 'sidecar-rust', 'target', 'debug', 'starhub-sidecar-rust.exe')

@@ -28,7 +28,7 @@ const RUNTIME_HOSTED_PATCH_DEPS = ['dsh-tool-session-query']
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const scriptPath = join(repoRoot, 'scripts', 'provision-dsh.mjs')
-const templatePath = join(repoRoot, 'vendor', 'deepseek-harness', 'examples', 'starhub-desktop', 'cordis.patch.yml')
+const templatePath = join(repoRoot, 'profiles', 'starhub-desktop', 'cordis.patch.yml')
 
 const STARHUB_PACKAGES = [
   'client-nav', 'host-static', 'tool-context', 'bridge', 'tools',
@@ -129,7 +129,7 @@ function buildFakeTree() {
     mkdirSync(join(pkg, 'src'), { recursive: true })
     writeFileSync(join(pkg, 'src', 'index.ts'), 'export {}\n')
   }
-  const examples = join(vendor, 'examples', 'starhub-desktop')
+  const examples = join(vendor, 'profiles', 'starhub-desktop')
   mkdirSync(examples, { recursive: true })
   writeFileSync(join(examples, 'cordis.patch.yml'), readFileSync(templatePath))
   const bin = join(root, 'bin')
@@ -353,7 +353,7 @@ test('a rendered patch that is not valid YAML fails loud instead of being writte
     writeFileSync(join(pkg, 'package.json'), `${JSON.stringify({ name: `@deepseek-ai/dsh-starhub-${name}`, version: '0.0.1', type: 'module' }, undefined, 2)}\n`)
     writeFileSync(join(pkg, 'lib', 'index.js'), 'export function apply() {}\n')
   }
-  const examples = join(vendor, 'examples', 'starhub-desktop')
+  const examples = join(vendor, 'profiles', 'starhub-desktop')
   mkdirSync(examples, { recursive: true })
   const good = readFileSync(templatePath, 'utf8')
   // 坏在一个非受管行上:单引号不闭(YAML 到行尾都在字符串里,下一行的结构被吞)

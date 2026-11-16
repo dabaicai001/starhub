@@ -13,11 +13,11 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.141.6(🐛 **修 v0.141.5 的发布构建失败**:`exactOptionalPropertyTypes` 下可选字段不能显式赋 `undefined`(TS2375)、测试解析器类型不匹配(TS2322),并把带签名的 settings 写入替身补进 `tsconfig.client.json`(TS2352/TS6307)。发布前必须跑两个聚合面 `tsc -b tsconfig.host.json` 与 `tsc -b tsconfig.client.json`;详见 `docs/踩坑记录.md` §28) |
+| 当前版本 | v0.142.0(🔧 **P1 独立构建:StarHub 源码与构建链整体迁出 `vendor/deepseek-harness`**:10 个内置插件 → `packages/starhub/`、React 工作台 app → `apps/starhub-workbench/`（包名 `@starhub/workbench`）、`dsh-client-runtime` 垫片 → `packages/shims/client-runtime/`、profile 模板 → `profiles/`；仓库根新增自有 pnpm workspace 与两个 tsc 聚合面（`tsconfig.host.json` / `tsconfig.client.json`），编译改用官方已发布 `@deepseek-ai/dsh-*@0.2.2-rc.3`（cordis `~4.1.0` / schemastery `~3.19.0`），不再读取 vendor 源码树。客户端半边与工作台改为自建构建（`scripts/build-client-bundle.mjs` 用 esbuild 做 CSS Modules 作用域化 + 样式内联 + `__ModuleLoader__.load` 包装；`scripts/build-window.mjs` 改用 Vite Node API）。代码侧只动了「把私有补丁换成本地定义」的 5 处：`sdk-notifications` 类型改从 `@deepseek-ai/dsh-starhub-bridge/compat` 导入（bridge 增开该子路径）、`client-nav` 补 settings controller 的 remote 类型合并、`Menu` 的右键锚点从 `getAnchorRect` 改 `anchorPoint` + `contextual`、bridge 补齐 schemastery / host-webserver 依赖。运行期契约（包名、行 id、服务名、路由、sidecar 名、settings 命名空间、`engines.dsh`）一字未改。详见 [docs/P1-独立构建迁移记录.md](docs/P1-独立构建迁移记录.md)。) |
 
 ## 架构一句话
 
-三层进程:**上游 Electron 壳(零改动)** 跑 dsh Host(Node)进程 → Host 里的 **starhub-bridge 插件** spawn 两个 sidecar:**Rust sidecar(`sidecar-rust/`,ssh/sftp/android/browser 契约层 + 直播帧枢纽)** 与 **Go Sidecar(`sidecar/`,数据库/中间件适配)**,均经 stdio 换行分帧 JSON-RPC 通话 → **前端**是 DSH 主壳 + StarHub React 工作台(`vendor/deepseek-harness/`,上游 `deepseek-ai/deepseek-harness` 的 vendored 副本,随仓库直接版本化)。
+三层进程:**上游 Electron 壳(零改动)** 跑 dsh Host(Node)进程 → Host 里的 **starhub-bridge 插件** spawn 两个 sidecar:**Rust sidecar(`sidecar-rust/`,ssh/sftp/android/browser 契约层 + 直播帧枢纽)** 与 **Go Sidecar(`sidecar/`,数据库/中间件适配)**,均经 stdio 换行分帧 JSON-RPC 通话 → **前端**是 DSH 主壳 + StarHub React 工作台(`packages/starhub/client-nav` 的客户端半边 + `apps/starhub-workbench` 的独立资产入口;**P1 起 StarHub 自有源码不在 vendor 里**)。
 
 ## 目录结构
 
@@ -37,20 +37,24 @@ starhub/
 │   ├── pool/  rpc/           # 连接池 / JSON-RPC 协议
 │   └── bin/                  # 构建输出 starhub-sidecar[.exe]
 │
-├── vendor/deepseek-harness/ # DSH 主壳与 StarHub React 工作台(上游 deepseek-ai/deepseek-harness
-│                            # 的 vendored 副本,随仓库直接版本化;上游 commit 记录于
-│                            # vendor/deepseek-harness/UPSTREAM_COMMIT.txt)
-│   ├── apps/
-│   │   ├── starhub-window/   # StarHub 资产工作台构建入口(产物 dist-starhub-react/)
-│   │   ├── web/  cli/        # DSH 自身应用
-│   │   └── desktop/ desktop-host/  # 上游 DSH 自家 Electron 桌面壳(发布链用它打包)
-│   ├── examples/
-│   │   ├── starhub-web/      # web 组合的 profile 模板(旧 Tauri 壳用)
-│   │   └── starhub-desktop/  # desktop 组合的 profile 模板(provisioning 用)
-│   └── packages/starhub/     # 10 个内置插件:approval-bridge / bridge / client-nav /
-│                             # domain-events / host-static / live-context /
-│                             # session-registry / ssh-assistant / tool-context /
-│                             # tools
+├── packages/                # StarHub 自有 workspace(P1 起;P1 详情见 docs/P1-独立构建迁移记录.md)
+│   ├── starhub/             # 10 个内置插件:approval-bridge / bridge / client-nav /
+│   │                        # domain-events / host-static / live-context /
+│   │                        # session-registry / ssh-assistant / tool-context / tools
+│   └── shims/client-runtime # @deepseek-ai/dsh-client-runtime 兼容垫片(上游已删该包,整体是 StarHub 的)
+│
+├── apps/starhub-workbench/  # React 工作台独立资产入口(Vite,产物 dist-starhub-react/,base=/starhub-react/)
+├── profiles/                # profile 组合模板:starhub-desktop / starhub-web / starhub-agent
+├── pnpm-workspace.yaml      # StarHub 自己的工作区(packages/*/*、apps/*)
+├── .npmrc                   # node-linker=hoisted(声明文件可移植性,见 docs/P1 迁移记录)
+├── tsconfig.{base,base.client,host,client}.json  # 两个编译聚合面,官方包从 node_modules 解析
+│
+├── vendor/deepseek-harness/ # 上游 deepseek-ai/deepseek-harness 的 vendored 副本(随仓库版本化;
+│                            # 上游 commit 记录于 vendor/deepseek-harness/UPSTREAM_COMMIT.txt)。
+│                            # P1 起 StarHub 自有源码已全部迁出,这里只剩上游本体 + 发布链用的 Electron 壳;
+│                            # P2/P3 决定自建壳产物去留后整棵删除。
+│   ├── apps/                # web / cli / desktop / desktop-host(上游自家应用)
+│   └── packages/            # 上游全部包(StarHub 只经 npm 已发布包消费它们)
 │
 ├── scripts/
 │   ├── provision-dsh.mjs     # M4:把 StarHub 组合装进 dsh profile
@@ -76,16 +80,19 @@ starhub/
 - **前端**:React + TypeScript 5(strict)+ Vite 5;xterm.js 6(终端)、CodeMirror 6(SQL)、zmodem.js
 - **Rust**:tokio、russh 0.62 + russh-sftp 2、serde、thiserror/anyhow;sidecar-rust 是独立 workspace(零 tauri 依赖,`cargo tree` 不应出现 tauri crate)
 - **Go**:go-sql-driver/mysql、jackc/pgx、modernc.org/sqlite(纯 Go)、go-redis、clickhouse-go、go-mssqldb、go-elasticsearch、docker/docker、zerolog
-- **Node**:上游 dsh Host(desktop profile)+ starhub-bridge 插件。**仓库根 `package.json` 零 runtime 依赖**(唯一 devDependency 是 `typescript`,供 `tests/` 现编译 vendored TS)——React 工作台的全部依赖在 `vendor/deepseek-harness` 的 pnpm workspace 里,`npm ci` 在根目录只装一个包;根 `scripts/` 与 `tests/` 只 import node 内置模块。
+- **Node**:上游 dsh Host(desktop profile)+ starhub-bridge 插件。**仓库根是 StarHub 自己的 pnpm workspace**(`packages/*/*` + `apps/*`),devDependencies 只有工具链(typescript / tsx / esbuild / vite / js-yaml);每个 StarHub 包按需声明官方 `@deepseek-ai/dsh-*@0.2.2-rc.3`(编译期类型与运行期宿主供给)与 `@deepseek-ai/cordis@~4.1.0` / `@deepseek-ai/schemastery@~3.19.0`。根 `scripts/` 与 `tests/` 只 import node 内置模块。
 
-**铁律 — 新功能优先以 dsh 插件形式注入,禁止改 vendor 内核源码。** 新能力落在 `vendor/deepseek-harness/packages/starhub/*`,经槽位系统(`ctx.slots.register` / `slots.inject`)或 Cordis 服务(`ctx.provide` / `ctx.get`)接入。仅两种例外可动 vendor 源码:(1) 修 DSH 自身的 bug(注释标注「上游补丁」);(2) 扩展点上无法表达且改动最小。不新增 Vue 系依赖。
+**铁律 — 新功能优先以 dsh 插件形式注入,不改上游内核源码。** 新能力落在 `packages/starhub/*`(P1 起 StarHub 自有源码在这里,不在 vendor),经槽位系统(`ctx.slots.register` / `slots.inject`)或 Cordis 服务(`ctx.provide` / `ctx.get`)接入。上游内核要么用已发布 npm 包,要么在 `vendor/` 里只做「修 DSH 自身 bug(注释标注上游补丁)」这类最小改动 —— 而 P3 之后 vendor 不存在,这条路径也随之消失。不新增 Vue 系依赖。
 
 ## 关键命令
 
 ```bash
-npm install && pnpm --dir vendor/deepseek-harness install   # 安装依赖
+npm install && pnpm install     # 根 workspace 装依赖(StarHub 自有包 + 官方 @deepseek-ai/dsh-*)
 
+npm run build:lib            # Host 面:官方包类型下编 9 个 host 插件 → lib/types/
+npm run build:lib:client     # Client 面:client-nav 的 tsc + 自建客户端半边(lib/client.js / lib/index.js)
 npm run build:window         # 构建 React 工作台(→ dist-starhub-react/)
+npm run clean:lib            # 清掉上面几步的产物
 npm run sidecar:build        # Go Sidecar(加 :release 为 release 构建)
 npm run sidecar-rust:build   # Rust sidecar(scripts/cargo-sidecar.mjs:Windows 转 .bat 加载 MSVC,其它平台直调 cargo)
 
@@ -129,7 +136,7 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 | 层 | 工具 | 命令 |
 |---|---|---|
 | 前端纯逻辑 | node --test | `npm run test:utils` 等(见 package.json scripts) |
-| 前端组件 | Vitest | `vendor/deepseek-harness` 内 `pnpm` 脚本 |
+| 前端组件 | Vitest | `vendor/deepseek-harness` 内的上游包测试(StarHub 自己的包已迁出,单测仍待 P2 迁) |
 | Rust | cargo test | `npm run sidecar-rust:test`(Windows)/ `cargo test --manifest-path sidecar-rust/Cargo.toml` |
 | Go | go test | `cd sidecar && go test ./...` |
 | 发布链 | node --test + 冒烟 | `npm run test:provision` + `npm run smoke:dsh-desktop` |
@@ -147,4 +154,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-11-12 (v0.141.6)*
+*最后更新: 2026-11-16 (v0.142.0)*

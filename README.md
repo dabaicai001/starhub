@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.141.6-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.142.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,8 +59,11 @@
 
 ## 当前版本
 
-### v0.141.6 (2026-11-12)
-- 🐛 **修 v0.141.5 的发布构建失败**:`exactOptionalPropertyTypes` 下可选字段不能显式赋 `undefined`、测试解析器类型不匹配,测试辅助文件未列进 `tsconfig.client.json`;已在本地补跑 host/client 两个聚合面 tsc + 四个包 1100 测试。
+### v0.142.0 (2026-11-16)
+- 🔧 🔧 **P1 独立构建:StarHub 源码与构建链整体迁出 `vendor/deepseek-harness`**:10 个内置插件 → `packages/starhub/`、React 工作台 app → `apps/starhub-workbench/`（包名 `@starhub/workbench`）、`dsh-client-runtime` 垫片 → `packages/shims/client-runtime/`、profile 模板 → `profiles/`；仓库根新增自有 pnpm workspace 与两个 tsc 聚合面（`tsconfig.host.json` / `tsconfig.client.json`），编译改用官方已发布 `@deepseek-ai/dsh-*@0.2.2-rc.3`（cordis `~4.1.0` / schemastery `~3.19.0`），不再读取 vendor 源码树。客户端半边与工作台改为自建构建（`scripts/build-client-bundle.mjs` 用 esbuild 做 CSS Modules 作用域化 + 样式内联 + `__ModuleLoader__.load` 包装；`scripts/build-window.mjs` 改用 Vite Node API）。代码侧只动了「把私有补丁换成本地定义」的 5 处：`sdk-notifications` 类型改从 `@deepseek-ai/dsh-starhub-bridge/compat` 导入（bridge 增开该子路径）、`client-nav` 补 settings controller 的 remote 类型合并、`Menu` 的右键锚点从 `getAnchorRect` 改 `anchorPoint` + `contextual`、bridge 补齐 schemastery / host-webserver 依赖。运行期契约（包名、行 id、服务名、路由、sidecar 名、settings 命名空间、`engines.dsh`）一字未改。详见 [docs/P1-独立构建迁移记录.md](docs/P1-独立构建迁移记录.md)。
+- 📝 📝 新增 [StarHub 独立插件与宿主工作区改造方案](docs/StarHub-独立插件与宿主工作区改造方案.md)：以官方 DSH `0.2.2-rc.3` 为基线，列出源码迁出、构建发布解耦、vendor 删除门槛和宿主资源面板接入步骤；当前仅方案，尚未实施。
+- 📝 📝 新增 [P0 依赖盘点](docs/P0-依赖盘点.md)：逐项给出 vendor 引用的迁出/替代/删除结论，并实测「官方 npm 包能编过 StarHub 源码」（当时只剩 6 个错误）。
+- ✅ ✅ P1 验证：`tsc -b tsconfig.host.json`、`tsc -b tsconfig.client.json` 两个聚合面 0 错误；`test:plugin-bundle` 12 例、`test:provision` 13 例、`test:utils` 106 例等全部 node --test 套件全绿；`build:window` 与 `plugin:bundle` 组装通过（`dist-plugin/` 61.3 MB）。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

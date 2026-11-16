@@ -65,6 +65,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Install StarHub workspace dependencies
+        # P1 起 StarHub 自己的包与官方 @deepseek-ai/dsh-* 都在根 pnpm workspace 里;
+        # npm ci 只装根 devDependencies,装不到 workspace 包的依赖。
+        run: pnpm install --frozen-lockfile
+
       - name: Install dsh runtime dependencies
         run: pnpm --dir vendor/deepseek-harness install --frozen-lockfile
 

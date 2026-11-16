@@ -1,0 +1,16 @@
+# StarHub 自有 pnpm workspace（P1 起不再依赖 vendor/deepseek-harness 的 workspace）。
+#
+# 只装两类包：
+# 1. StarHub 自己维护的包（10 个内置插件 + 客户端垫片 + 工作台 app）；
+# 2. 官方已发布的 @deepseek-ai/dsh-* 包（编译期类型 + 运行期宿主供给）。
+#
+# 宿主与插件的共享模块（react / cordis / ui-primitives / client-store）不在这里
+# 各装一份，客户端半边把它们当 external，由 DSH 的 module table 供给。
+packages:
+  - packages/*/*
+  - apps/*
+
+# pnpm 10 默认拦依赖的安装脚本。esbuild 自带平台二进制，构建要用。
+onlyBuiltDependencies:
+  - esbuild
+

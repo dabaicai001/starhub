@@ -1,0 +1,9 @@
+{
+  // 浏览器侧（client）编译面的共享底座:JSX + DOM lib。
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "types": ["node"]
+  }
+}

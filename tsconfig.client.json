@@ -1,0 +1,11 @@
+{
+  // Client 编译面聚合:客户端垫片 + client-nav(工作台组件)+ 工作台 app。
+  // client-nav 的 src 里同时有 host 入口(src/index.ts,空 apply)与 client 入口
+  // (src/client/index.ts);两者并到一个 program 里编,和 vendor 时代的做法一致。
+  "files": [],
+  "references": [
+    { "path": "./packages/shims/client-runtime" },
+    { "path": "./packages/starhub/client-nav" },
+    { "path": "./apps/starhub-workbench" }
+  ]
+}
