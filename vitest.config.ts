@@ -1,9 +1,12 @@
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 const require = createRequire(import.meta.url)
+const repoRoot = dirname(fileURLToPath(import.meta.url))
 const rendererDir = dirname(require.resolve('@deepseek-ai/dsh-client-ui-renderer/package.json'))
+const starhubPkg = (name, ...rest) => join(repoRoot, 'packages', 'starhub', name, 'src', ...rest)
 
 /**
  * StarHub 自有单测(vitest)。P1 把各包的 `tests/` 随源码一起迁出了 vendor,
@@ -13,9 +16,13 @@ const rendererDir = dirname(require.resolve('@deepseek-ai/dsh-client-ui-renderer
  * - 默认 node 环境;需要 DOM 的用例在文件首行写 `// @vitest-environment jsdom`
  *   (所以 `jsdom` 是根 devDependency)。
  * - 用例直接 `import '../src/xxx.ts'`,不依赖构建产物——测的是源码行为。
- * - 官方包的 **`/client` 条目是 loader 包装产物**(首行就调
- *   `window.__ModuleLoader__.load`),测试里必须解析到它的 `src/`;否则在 node
- *   环境里连导入都会炸。这也是上游「测试解析到源码」策略的原因。
+ *
+ * 两条 alias 都是「测试解析到源码」这条规矩的落点:
+ * 1. 官方包的 **`/client` 条目是 loader 包装产物**(首行就调
+ *    `window.__ModuleLoader__.load`),node 环境里连导入都会炸 → 指到它的 `src/`;
+ * 2. StarHub 内部包之间的 import(`@deepseek-ai/dsh-starhub-*`)若走 node_modules,
+ *    会解析到 `lib/types/index.js`——那是 `build:lib` 的产物。CI 里单测先于构建跑,
+ *    必须指回 `src/`,否则 `pnpm clean:lib` 之后套件直接失败。
  */
 export default defineConfig({
   resolve: {
@@ -24,6 +31,13 @@ export default defineConfig({
         find: /^@deepseek-ai\/dsh-client-ui-renderer\/client$/,
         replacement: join(rendererDir, 'src', 'client', 'index.ts'),
       },
+      { find: /^@deepseek-ai\/dsh-starhub-bridge\/compat$/, replacement: starhubPkg('bridge', 'compat.ts') },
+      {
+        find: /^@deepseek-ai\/dsh-starhub-client-nav\/src\/(.+)$/,
+        replacement: starhubPkg('client-nav', '$1'),
+      },
+      { find: /^@deepseek-ai\/dsh-starhub-([a-z0-9-]+)\/src\/(.+)$/, replacement: join(repoRoot, 'packages', 'starhub', '$1', 'src', '$2') },
+      { find: /^@deepseek-ai\/dsh-starhub-([a-z0-9-]+)$/, replacement: join(repoRoot, 'packages', 'starhub', '$1', 'src', 'index.ts') },
     ],
   },
   esbuild: {

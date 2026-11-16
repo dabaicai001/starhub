@@ -52,6 +52,13 @@ tag v*.*.* → windows job:
 
 ## 4. 验证（vendor 已不存在的情况下）
 
+> 首轮 CI 在这里抓到一个**从 P1 就埋着的红灯**：根 `package-lock.json` 与 package.json 早已漂移
+> （本地一直用 `pnpm install`，没暴露），CI/Release 的 `npm ci` 直接失败。已收敛为
+> **单一安装器 pnpm**：删掉 `package-lock.json`，三个 workflow 统一
+> 「`pnpm/action-setup` → `setup-node(cache: pnpm)` → `pnpm install --frozen-lockfile`」，
+> 去掉 `npm ci` 与 `cache: npm`；README / AGENTS 的安装命令同步为 `pnpm install`。
+> `npm run <script>` 不受影响（脚本执行走根 `node_modules/.bin`）。
+
 | 检查 | 命令 | 结果 |
 |---|---|---|
 | 依赖安装 | `pnpm install --frozen-lockfile` | ✅ 不触碰 vendor |
