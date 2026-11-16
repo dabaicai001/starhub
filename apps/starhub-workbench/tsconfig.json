@@ -10,7 +10,12 @@
     ]
   },
   "include": [
-    "src"
+    "src",
+    // app 直接 import client-nav 的 `src/*.tsx`(Vite 侧也按源码解析),于是那些
+    // 源文件会进本 program;它们依赖的**环境声明**必须一起进来,否则
+    // `zmodem.js/src/zmodem_browser.js` 这类无 d.ts 的模块会报 TS7016
+    // (CI 上必现,本地因产物存在可能被 project-reference redirect 掩盖)。
+    "../../packages/starhub/client-nav/src/*.d.ts"
   ],
   "references": [
     {
