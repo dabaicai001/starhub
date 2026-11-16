@@ -121,18 +121,43 @@ async function waitForToken(read, timeoutMs) {
 }
 
 /**
- * 挑一个能跑 dsh CLI 的 Node:优先打包进去的便携 node(`dsh-runtime/node.exe`),
- * 因为 CLI 入口用 `import.meta.main` 自决是否执行,而它要 Node ≥24.2。
+ * 挑一个能跑 dsh CLI 的 Node 与 CLI 入口。
+ *
+ * 解析顺序(P2 起不再以 vendor 为主要来源):
+ * 1. `STARHUB_DSH_CLI` 环境变量(指定任意已装的 dsh 入口);
+ * 2. 根 workspace 的 `@deepseek-ai/dsh`(官方精确版本,根 devDependency)——
+ *    这才是「装进官方宿主」的验收形态;
+ * 3. `dsh-runtime/`(自建壳时代打好的便携运行时,仍在的 checkout 可用);
+ * 4. 最后才回退 vendor 的 `apps/cli`(只为老 checkout 可用,会打印警告)。
+ *
+ * 用打包进去的便携 node 优先于 process.execPath:CLI 入口用 `import.meta.main`
+ * 自决是否执行,需要 Node ≥24.2。
  * @returns `{ executable, cliBin }`。
  */
 function resolveNode() {
   const runtimeRoot = join(repoRoot, 'dsh-runtime')
   const bundled = join(runtimeRoot, process.platform === 'win32' ? 'node.exe' : 'node')
-  const cliFromRuntime = join(runtimeRoot, 'apps', 'cli', 'lib', 'bin.js')
-  const cli = existsSync(cliFromRuntime) ? cliFromRuntime : join(vendorRoot, 'apps', 'cli', 'lib', 'bin.js')
-  if (existsSync(bundled)) return { executable: bundled, cliBin: cli }
-  console.log('[plugin-smoke] 未找到 dsh-runtime/node,回退 process.execPath(若其 <24.2,CLI 会静默退出)')
-  return { executable: process.execPath, cliBin: cli }
+  const officialCli = join(repoRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+  const runtimeCli = join(runtimeRoot, 'apps', 'cli', 'lib', 'bin.js')
+  const vendorCli = join(vendorRoot, 'apps', 'cli', 'lib', 'bin.js')
+
+  let cliBin
+  if (process.env.STARHUB_DSH_CLI !== undefined && process.env.STARHUB_DSH_CLI !== '') {
+    cliBin = resolve(process.env.STARHUB_DSH_CLI)
+  } else if (existsSync(officialCli)) {
+    cliBin = officialCli
+  } else if (existsSync(runtimeCli)) {
+    cliBin = runtimeCli
+  } else {
+    console.warn('[plugin-smoke] 未找到官方 @deepseek-ai/dsh 入口,回退 vendor/apps/cli(老 checkout 兼容路径)')
+    cliBin = vendorCli
+  }
+  const executable = existsSync(bundled) ? bundled : process.execPath
+  if (!existsSync(bundled)) {
+    console.log('[plugin-smoke] 未找到 dsh-runtime/node,使用 process.execPath(要求 Node ≥24.2)')
+  }
+  console.log(`[plugin-smoke] dsh CLI: ${cliBin}`)
+  return { executable, cliBin }
 }
 
 /**

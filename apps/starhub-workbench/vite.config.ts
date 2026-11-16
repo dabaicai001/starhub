@@ -38,11 +38,7 @@ export default defineConfig({
     react(),
   ],
   base: '/starhub-react/',
-  // tsc 面用 target es2024(声明产物);Vite 5 自带的 esbuild 只认到 es2022,
-  // 不覆写的话每个文件都会报 "Unrecognized target environment"。
-  esbuild: { target: 'es2022' },
   build: {
-    target: 'es2022',
     sourcemap: true,
     outDir: 'dist',
   },

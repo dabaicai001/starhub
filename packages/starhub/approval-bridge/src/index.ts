@@ -346,9 +346,19 @@ export function apply(ctx: Context, config: ApprovalBridgeConfig = {}): void {
   //    「完全权限」被降级成进程默认沙箱(2026-10-10 实测)。
   const hasPermissionPresets = (): boolean => ctx.get('permissionPresets') !== undefined
   ctx.on('session/created', (session) => {
-    if (hasPermissionPresets()) return
-    if (ctx.approval.overrideOf(session) !== undefined) return
-    setApprovalPolicy(session, 'ask')
+    // 0.2.2 起 session/created 派发期间 Session 是只读的:派发中 append 会抛
+    // `session "…" cannot append before session/created completes`。该派发是同步
+    // 完成的(派发结束才把 announcement 标成 complete),所以把钉权限推到本轮
+    // 微任务末尾;顺带复查会话仍然存活,避免给已释放的会话写事实。
+    queueMicrotask(() => {
+      // `sessions` 不在本插件的 inject 里(桥对会话存储是可选的):按 Cordis 规矩
+      // 用 ctx.get 读全局服务,读不到就当会话已不在。
+      const sessions = ctx.get('sessions') as { get(id: string): unknown } | undefined
+      if (sessions?.get(session.id) !== session) return
+      if (hasPermissionPresets()) return
+      if (ctx.approval.overrideOf(session) !== undefined) return
+      setApprovalPolicy(session, 'ask')
+    })
   })
 
   // 2. starhub_* 工具风险门:写操作/风险命令/不确定形态升级为 ask。门只产出

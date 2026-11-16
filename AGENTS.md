@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.142.0(🔧 **P1 独立构建:StarHub 源码与构建链整体迁出 `vendor/deepseek-harness`**:10 个内置插件 → `packages/starhub/`、React 工作台 app → `apps/starhub-workbench/`（包名 `@starhub/workbench`）、`dsh-client-runtime` 垫片 → `packages/shims/client-runtime/`、profile 模板 → `profiles/`；仓库根新增自有 pnpm workspace 与两个 tsc 聚合面（`tsconfig.host.json` / `tsconfig.client.json`），编译改用官方已发布 `@deepseek-ai/dsh-*@0.2.2-rc.3`（cordis `~4.1.0` / schemastery `~3.19.0`），不再读取 vendor 源码树。客户端半边与工作台改为自建构建（`scripts/build-client-bundle.mjs` 用 esbuild 做 CSS Modules 作用域化 + 样式内联 + `__ModuleLoader__.load` 包装；`scripts/build-window.mjs` 改用 Vite Node API）。代码侧只动了「把私有补丁换成本地定义」的 5 处：`sdk-notifications` 类型改从 `@deepseek-ai/dsh-starhub-bridge/compat` 导入（bridge 增开该子路径）、`client-nav` 补 settings controller 的 remote 类型合并、`Menu` 的右键锚点从 `getAnchorRect` 改 `anchorPoint` + `contextual`、bridge 补齐 schemastery / host-webserver 依赖。运行期契约（包名、行 id、服务名、路由、sidecar 名、settings 命名空间、`engines.dsh`）一字未改。详见 [docs/P1-独立构建迁移记录.md](docs/P1-独立构建迁移记录.md)。) |
+| 当前版本 | v0.142.1(🔧 **P2 发布解耦:冒烟改打官方宿主,StarHub 自有单测接回根 workspace**:`smoke-plugin-bundle` 的 dsh CLI 解析顺序改为「`STARHUB_DSH_CLI` → 根 `@deepseek-ai/dsh@0.2.2-rc.3`（新增根 devDependency）→ `dsh-runtime/` → vendor 兜底」，目录形态与 tarball 形态（真 `pnpm add`）两种冒烟的五条断言都在官方宿主上跑通；新增 `vitest.config.ts` + `npm run test:starhub`，把 P1 随源码迁出的 71 个测试文件接回来（1191 例通过 / 2 例显式 skip）；工具链对齐上游矩阵（vite 8 / `@vitejs/plugin-react` 6 / esbuild 0.28 / vitest 4），工作台不再需要 es2022 兜底。CI 去掉 vendor install 与自建壳打包/冒烟步骤，改跑 `test:starhub` + 官方宿主 bundle 冒烟，Node 22→24、pnpm 对齐生成 lockfile 的 10.15。详见 [docs/P2-发布解耦记录.md](docs/P2-发布解耦记录.md)。) |
 
 ## 架构一句话
 
@@ -77,7 +77,7 @@ starhub/
 
 ## 技术栈速查
 
-- **前端**:React + TypeScript 5(strict)+ Vite 5;xterm.js 6(终端)、CodeMirror 6(SQL)、zmodem.js
+- **前端**:React + TypeScript 5(strict)+ Vite 8;xterm.js 6(终端)、CodeMirror 6(SQL)、zmodem.js;单测 Vitest 4(jsdom 用例 per-file pragma)
 - **Rust**:tokio、russh 0.62 + russh-sftp 2、serde、thiserror/anyhow;sidecar-rust 是独立 workspace(零 tauri 依赖,`cargo tree` 不应出现 tauri crate)
 - **Go**:go-sql-driver/mysql、jackc/pgx、modernc.org/sqlite(纯 Go)、go-redis、clickhouse-go、go-mssqldb、go-elasticsearch、docker/docker、zerolog
 - **Node**:上游 dsh Host(desktop profile)+ starhub-bridge 插件。**仓库根是 StarHub 自己的 pnpm workspace**(`packages/*/*` + `apps/*`),devDependencies 只有工具链(typescript / tsx / esbuild / vite / js-yaml);每个 StarHub 包按需声明官方 `@deepseek-ai/dsh-*@0.2.2-rc.3`(编译期类型与运行期宿主供给)与 `@deepseek-ai/cordis@~4.1.0` / `@deepseek-ai/schemastery@~3.19.0`。根 `scripts/` 与 `tests/` 只 import node 内置模块。
@@ -97,6 +97,7 @@ npm run sidecar:build        # Go Sidecar(加 :release 为 release 构建)
 npm run sidecar-rust:build   # Rust sidecar(scripts/cargo-sidecar.mjs:Windows 转 .bat 加载 MSVC,其它平台直调 cargo)
 
 npm run test:utils           # node --test 纯逻辑套件;其余套件见 package.json scripts
+npm run test:starhub         # StarHub 自有 vitest 套件(10 个插件 + 工作台 app 的 tests/)
 npm run test:provision       # provisioning 合并逻辑单测
 npm run smoke:dsh-desktop    # provisioning + 宿主进程冒烟(五条断言)
 npm run plugin:bundle        # 纯插件形态:组装 dist-plugin/(加 --pack 出 .tgz,粘进 dsh 插件页)
@@ -136,7 +137,7 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 | 层 | 工具 | 命令 |
 |---|---|---|
 | 前端纯逻辑 | node --test | `npm run test:utils` 等(见 package.json scripts) |
-| 前端组件 | Vitest | `vendor/deepseek-harness` 内的上游包测试(StarHub 自己的包已迁出,单测仍待 P2 迁) |
+| 前端组件 | Vitest 4 | `npm run test:starhub`(根 workspace:`packages/starhub/*/tests` + `apps/*/tests`;需要 DOM 的用例靠文件首行 `// @vitest-environment jsdom`) |
 | Rust | cargo test | `npm run sidecar-rust:test`(Windows)/ `cargo test --manifest-path sidecar-rust/Cargo.toml` |
 | Go | go test | `cd sidecar && go test ./...` |
 | 发布链 | node --test + 冒烟 | `npm run test:provision` + `npm run smoke:dsh-desktop` |
@@ -154,4 +155,4 @@ pnpm --dir vendor/deepseek-harness/apps/desktop run package:win:x64:unsigned
 
 ---
 
-*最后更新: 2026-11-16 (v0.142.0)*
+*最后更新: 2026-11-16 (v0.142.1)*

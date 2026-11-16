@@ -1,6 +1,6 @@
 {
   "name": "starhub",
-  "version": "0.142.0",
+  "version": "0.142.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -36,14 +36,20 @@
     "test:plugin-bundle": "node --test tests/plugin-bundle.test.mjs",
     "test:workflows": "node --test tests/workflows-yaml.test.mjs",
     "migrate:tauri-data": "node scripts/migrate-tauri-data.mjs",
-    "test:migrate": "node --test tests/migrate-tauri-data.test.mjs"
+    "test:migrate": "node --test tests/migrate-tauri-data.test.mjs",
+    "test:starhub": "vitest run"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0",
+    "@deepseek-ai/dsh": "0.2.2-rc.3",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@vitejs/plugin-react": "^6.3.0",
+    "esbuild": "^0.28.0",
     "js-yaml": "^4.3.2",
+    "jsdom": "29.1.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vite": "^5.0.0",
-    "@vitejs/plugin-react": "^4.3.0"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
   }
 }

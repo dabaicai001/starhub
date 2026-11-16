@@ -9,6 +9,17 @@
 
 ---
 
+## [0.142.1] - 2026-11-16
+
+### 变更
+- 🔧 **P2 发布解耦:冒烟改打官方宿主,StarHub 自有单测接回根 workspace**:`smoke-plugin-bundle` 的 dsh CLI 解析顺序改为「`STARHUB_DSH_CLI` → 根 `@deepseek-ai/dsh@0.2.2-rc.3`（新增根 devDependency）→ `dsh-runtime/` → vendor 兜底」，目录形态与 tarball 形态（真 `pnpm add`）两种冒烟的五条断言都在官方宿主上跑通；新增 `vitest.config.ts` + `npm run test:starhub`，把 P1 随源码迁出的 71 个测试文件接回来（1191 例通过 / 2 例显式 skip）；工具链对齐上游矩阵（vite 8 / `@vitejs/plugin-react` 6 / esbuild 0.28 / vitest 4），工作台不再需要 es2022 兜底。CI 去掉 vendor install 与自建壳打包/冒烟步骤，改跑 `test:starhub` + 官方宿主 bundle 冒烟，Node 22→24、pnpm 对齐生成 lockfile 的 10.15。详见 [docs/P2-发布解耦记录.md](docs/P2-发布解耦记录.md)。
+
+### 修复
+- 🐛 **`approval-bridge` 在 0.2.2 上不再给全新会话钉 ask**：0.2.2 起 `session/created` 派发期间 Session 只读，直接 `append` 会抛 `cannot append before session/created completes`；改为派发结束后（微任务）追加，并复查会话仍存活。测试组合同时补挂 `dsh-session-projection`（0.2.2 的 `ApprovalService` 静态 inject 它，否则 `ctx.approval` 一直是 undefined）。
+
+### 测试
+- ✅ `test:starhub` 71 files / 1191 passed / 2 skipped；`test:utils` 106、`test:plugin-bundle` 12、`test:provision` 13、`test:workflows` 3 全绿；两个 tsc 聚合面 0 错误；`plugin:bundle` + `plugin:pack`（tarball 20.1 MB）+ 两种形态冒烟（官方宿主 `0.2.2-rc.3`）全绿。
+
 ## [0.142.0] - 2026-11-16
 
 ### 变更

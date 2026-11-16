@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { type Session, SessionId } from '@deepseek-ai/dsh-session'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
 import * as bridge from '../src/index.ts'
@@ -29,6 +30,9 @@ import * as bridge from '../src/index.ts'
 async function mounted(options: { presets?: boolean; policy?: 'ask' | 'never' } = {}): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
+  // 0.2.2 起 ApprovalService 静态 inject 了 sessionProjections(策略事实要投影);
+  // 少挂这一层会让 approval 服务一直处于 pending,ctx.approval 直接是 undefined。
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(ApprovalService, { policy: options.policy ?? 'ask' })
   // 本桥的 inject 仍声明 settings(组合兼容),这里给个空实现:权限命名空间
   // 归上游 permission-presets,本桥不再读写设置。
@@ -63,6 +67,9 @@ describe('session permission pinning', () => {
   it('pins ask for a fresh session in embedded compositions (no preset service)', async () => {
     const ctx = await mounted()
     const session = ctx.sessions.create(SessionId('embedded'))
+    // 0.2.2 起 session/created 派发期间 Session 只读,桥把钉权限推到微任务末尾,
+    // 所以断言前先让出一轮微任务(生产链路里第一轮 append 自然发生在其后)。
+    await Promise.resolve()
     expect(ctx.approval.overrideOf(session)).toBe('ask')
     expect(policyWrites(session)).toHaveLength(1)
   })

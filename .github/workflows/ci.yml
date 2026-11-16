@@ -43,13 +43,16 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 官方 dsh 0.2.2 的 engines 是 node >=24.9;宿主冒烟也要 >=24.2
+          # (`import.meta.main` 自决是否执行 CLI 入口)。
+          node-version: 24
           cache: npm
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 11.7.0
+          # 与生成 pnpm-lock.yaml 的本地版本一致,避免 lockfile 语义漂移。
+          version: 10.15.0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -83,6 +86,11 @@ jobs:
       - name: Test frontend pure logic
         run: npm run test:utils
 
+      - name: Test StarHub plugin/app unit suites
+        # P1 把各包的 tests/ 迁出了 vendor;P2 起由根 workspace 的 vitest 跑
+        # (packages/starhub/*/tests + apps/*/tests,含 jsdom 渲染用例)。
+        run: npm run test:starhub
+
       - name: Test Go sidecar
         working-directory: sidecar
         run: go test ./...
@@ -104,6 +112,12 @@ jobs:
         # 与它的双跑期校验是发布链的一环(§六 / R7)。
         run: npm run test:migrate
 
+      - name: Build plugin host/client libs
+        # Host 面(9 个插件)+ Client 面(client-nav 的 tsc 与客户端半边)。
+        run: |
+          npm run build:lib
+          npm run build:lib:client
+
       - name: Build sidecars and workbench dist
         # 冒烟的前置:两个 sidecar 二进制 + React 工作台 dist。
         run: |
@@ -111,12 +125,12 @@ jobs:
           npm run sidecar-rust:build
           npm run build:window
 
-      - name: Package dsh runtime
-        # 冒烟要用打包进去的便携 node 启动宿主进程(CLI 入口依赖 import.meta.main,
-        # 需 Node ≥24.2;开发机上的 node 24.0 会让进程静默退出 0)。
-        run: npm run package:dsh-runtime
+      - name: Assemble plugin bundle
+        run: npm run plugin:bundle
 
-      - name: 'Smoke: provisioning + host boot'
-        # 五条断言:工作台 index / invoke 打通 / 未知命令错误通路 / SSE 流 /
-        # Go sidecar 活着。见 scripts/smoke-dsh-desktop.mjs。
-        run: npm run smoke:dsh-desktop
+      - name: 'Smoke: install the bundle into a throwaway profile and boot the official host'
+        # 五条断言:包内 dist 供工作台 / API invoke 打通 / 未知命令错误通路 /
+        # SSE 事件面 / 客户端半边进 boot 图。宿主用根 devDependency 的官方
+        # @deepseek-ai/dsh 精确版本(0.2.2-rc.3),不再依赖自建壳产物。
+        # 见 scripts/smoke-plugin-bundle.mjs。
+        run: npm run smoke:plugin-bundle
