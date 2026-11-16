@@ -84,7 +84,7 @@ starhub/
 ## 关键命令
 
 ```bash
-npm install && pnpm install     # 根 workspace 装依赖(StarHub 自有包 + 官方 @deepseek-ai/dsh-*)
+pnpm install                 # 唯一的安装器:根 workspace(StarHub 自有包 + 官方 @deepseek-ai/dsh-*)
 
 npm run build:lib            # Host 面:官方包类型下编 9 个 host 插件 → lib/types/
 npm run build:lib:client     # Client 面:client-nav 的 tsc + 自建客户端半边(lib/client.js / lib/index.js)

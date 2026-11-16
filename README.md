@@ -90,7 +90,7 @@ DSH 0.2.2+ 对注册表安装的 bundle 支持插件页原地更新(Versions / U
 ```bash
 git clone https://github.com/dabaicai001/starhub.git
 cd starhub
-npm install && pnpm install      # 根 workspace:StarHub 自有包 + 官方 @deepseek-ai/dsh-*
+pnpm install                     # 根 workspace:StarHub 自有包 + 官方 @deepseek-ai/dsh-*
 
 npm run build:lib && npm run build:lib:client && npm run build:window
 npm run sidecar:build && npm run sidecar-rust:build

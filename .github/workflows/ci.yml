@@ -36,19 +36,18 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          # 官方 dsh 0.2.2 的 engines 是 node >=24.9;宿主冒烟也要 >=24.2
-          # (`import.meta.main` 自决是否执行 CLI 入口)。
-          node-version: 24
-          cache: npm
-
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
           # 与生成 pnpm-lock.yaml 的本地版本一致,避免 lockfile 语义漂移。
           version: 10.15.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # 官方 dsh 0.2.2 的 engines 是 node >=24.9。
+          node-version: 24
+          cache: pnpm
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -60,9 +59,6 @@ jobs:
         run: |
           rustup toolchain install 1.96.0 --profile minimal
           rustup default 1.96.0
-
-      - name: Install frontend dependencies
-        run: npm ci
 
       - name: Install StarHub workspace dependencies
         # P1 起 StarHub 自己的包与官方 @deepseek-ai/dsh-* 都在根 pnpm workspace 里;
