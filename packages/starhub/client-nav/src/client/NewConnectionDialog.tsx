@@ -20,7 +20,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCloseOutlineMedium, IconLoadingOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isTauriRuntime, tauriInvoke, tauriListen } from './tauri.ts'
 import { interactionMessages } from './interaction-messages.ts'
-import type { RustAsset } from './store.ts'
+import type { InitialConnectionKind } from './sections.ts'
+import type { ConnectionChange, RustAsset } from './store.ts'
 import s from './settings/settings.module.css'
 
 /** 对话框支持的连接类型(展示顺序即数组顺序);db 系经 config.dbType 区分。 */
@@ -93,10 +94,12 @@ function strList(config: Record<string, unknown>, key: string): string[] {
 export interface NewConnectionDialogProps {
   /** 编辑目标;null = 新建。 */
   asset: RustAsset | null
+  /** Default type for a new connection started from a tools category. */
+  initialKind?: InitialConnectionKind | undefined
   /** 关闭(取消 / 提交成功 / 删除成功后)。 */
   onClose: () => void
-  /** 提交或删除成功后刷新资产列表。 */
-  onSaved: () => void
+  /** 收到 sidecar 的成功响应后同步连接列表。 */
+  onSaved: (change: ConnectionChange) => void
 }
 
 /**
@@ -106,17 +109,17 @@ export interface NewConnectionDialogProps {
  * @param props - dialog target + close/save callbacks.
  * @returns the dialog markup.
  */
-export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDialogProps) {
+export function NewConnectionDialog({ asset, initialKind = 'ssh', onClose, onSaved }: NewConnectionDialogProps) {
   const messages = interactionMessages()
   const editing = asset !== null
   // 无宿主桥(裸浏览器预览)只展示提示、禁用提交。
   const preview = typeof window === 'undefined' || !isTauriRuntime()
-  const [kind, setKind] = useState<ConnKind>(() => (asset === null ? 'ssh' : kindOfAsset(asset)))
+  const [kind, setKind] = useState<ConnKind>(() => asset === null ? initialKind : kindOfAsset(asset))
   const [name, setName] = useState(() => asset?.name ?? '')
   const [host, setHost] = useState(() => (asset === null ? '' : str(asset.config, 'host')))
   const [port, setPort] = useState(() => {
-    if (asset !== null) return num(asset.config, 'port', 22)
-    return CONN_KINDS[0].defaultPort
+    const defaultPort = CONN_KINDS.find(item => item.kind === kind)?.defaultPort ?? 22
+    return asset === null ? defaultPort : num(asset.config, 'port', defaultPort)
   })
   const [username, setUsername] = useState(() => (asset === null ? '' : str(asset.config, 'username')))
   const [password, setPassword] = useState('')
@@ -187,6 +190,8 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
   const isDb = kind !== 'ssh' && kind !== 'docker'
   const needsUsername = kind === 'ssh' || kind === 'mysql' || kind === 'postgresql' || kind === 'clickhouse' || kind === 'mssql'
   const hasDatabase = kind === 'mysql' || kind === 'postgresql' || kind === 'clickhouse' || kind === 'mssql'
+  const usesPort = kind !== 'docker' && kind !== 'sqlite' && (kind !== 'elasticsearch' || esMode === 'host')
+  const portValid = !usesPort || (Number.isInteger(port) && port >= 1 && port <= 65535)
   /** 地址/端点有效性:docker 看 transport+地址;sqlite 看文件路径;ES 看三态;其余看 host。 */
   const addressValid = kind === 'docker'
     ? dockerTransport === 'socket' || dockerAddress.trim() !== ''
@@ -198,12 +203,12 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
         : esMode === 'address' ? esAddress.trim() !== '' : host.trim() !== '')
       : host.trim() !== ''
   const canSubmit = !preview && !busy && name.trim() !== ''
-    && addressValid
+    && addressValid && portValid
     && (!needsUsername || username.trim() !== '')
     && (kind !== 'ssh' || sshAuth !== 'key' || editing || privateKey !== '')
   // 测试连接不要求名称;其余必填与提交一致(私钥档新建必须先选文件)。
   const canTest = !preview && !busy
-    && addressValid
+    && addressValid && portValid
     && (!needsUsername || username.trim() !== '')
     && (kind !== 'ssh' || sshAuth !== 'key' || editing || privateKey !== '')
 
@@ -212,6 +217,10 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
     setKind(next)
     const meta = CONN_KINDS.find(k => k.kind === next)
     if (meta !== undefined && meta.defaultPort > 0) setPort(meta.defaultPort)
+  }
+
+  const onPortChange = (value: string) => {
+    setPort(value === '' ? kindMeta.defaultPort : Number(value))
   }
 
   /** 私钥文件选取(web FileReader,不经 fs 插件;2MB 上限与 embed 版一致)。 */
@@ -299,11 +308,12 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
     if (!canSubmit) return
     setMutation('save')
     setError('')
+    let saved: RustAsset
     try {
       if (editing) {
-        await tauriInvoke('update_asset', { id: asset.id, params: { name: name.trim(), config: buildConfig() } })
+        saved = await tauriInvoke<RustAsset>('update_asset', { id: asset.id, params: { name: name.trim(), config: buildConfig() } })
       } else {
-        await tauriInvoke('create_asset', {
+        saved = await tauriInvoke<RustAsset>('create_asset', {
           params: {
             type: kind === 'ssh' ? 'ssh' : kind === 'docker' ? 'docker' : 'db',
             name: name.trim(),
@@ -313,13 +323,14 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
           },
         })
       }
-      onSaved()
-      onClose()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
+      return
     } finally {
       setMutation(null)
     }
+    onSaved({ kind: editing ? 'updated' : 'created', asset: saved })
+    onClose()
   }
 
   const onDelete = async () => {
@@ -333,14 +344,15 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
     setError('')
     try {
       await tauriInvoke('delete_asset', { id: asset.id })
-      onSaved()
-      onClose()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
       setConfirmingDelete(false)
+      return
     } finally {
       setMutation(null)
     }
+    onSaved({ kind: 'deleted', asset })
+    onClose()
   }
 
   /**
@@ -532,11 +544,15 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
 
   return (
     <div className={s.dialogBackdrop} role="presentation" onMouseDown={closeDialog}>
-      <div
+      <form
         className={s.dialogPanel}
         role="dialog"
         aria-modal="true"
         aria-label={editing ? '编辑连接' : '新建连接'}
+        onSubmit={(event) => {
+          event.preventDefault()
+          void onSubmit()
+        }}
         onMouseDown={(event) =>{  event.stopPropagation() }}
       >
         <div className={s.dialogHead}>
@@ -671,7 +687,9 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
                       type="number"
                       value={port}
                       disabled={preview}
-                      onChange={(event) =>{  setPort(Number(event.target.value) || kindMeta.defaultPort) }}
+                      aria-invalid={!portValid}
+                      aria-describedby={portValid ? undefined : 'conn-port-error'}
+                      onChange={(event) => { onPortChange(event.target.value) }}
                     />
                   </div>
                 </>
@@ -711,7 +729,9 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
                   type="number"
                   value={port}
                   disabled={preview}
-                  onChange={(event) =>{  setPort(Number(event.target.value) || kindMeta.defaultPort) }}
+                  aria-invalid={!portValid}
+                  aria-describedby={portValid ? undefined : 'conn-port-error'}
+                  onChange={(event) => { onPortChange(event.target.value) }}
                 />
               </div>
             </>
@@ -864,6 +884,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
             </div>
           )}
         </fieldset>
+        {!portValid && <div id="conn-port-error" className={s.errorText} role="alert">{messages.invalidConnectionPort}</div>}
         {error !== '' && <div className={s.errorText} role="alert">{error}</div>}
         {mutation !== null && (
           <div className={s.testPending} role="status">
@@ -934,11 +955,11 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
             {testStatus === 'testing' ? '测试中…' : '测试连接'}
           </button>
           <button type="button" className={s.btnSecondary} disabled={mutation !== null} onClick={closeDialog}>取消</button>
-          <button type="button" className={s.btnPrimary} disabled={!canSubmit} onClick={() => void onSubmit()}>
+          <button type="submit" className={s.btnPrimary} disabled={!canSubmit}>
             {mutation === 'save' ? (editing ? messages.savingConnection : messages.creatingConnection) : editing ? '保存' : '创建'}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   )
 }

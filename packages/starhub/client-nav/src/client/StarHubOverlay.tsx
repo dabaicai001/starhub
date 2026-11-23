@@ -13,15 +13,15 @@ import type { PropsRuntime, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { NewConnectionDialog } from './NewConnectionDialog.tsx'
-import type { ConnectionManagerState } from './store.ts'
+import type { ConnectionChange, ConnectionManagerState } from './store.ts'
 
 /** Business face injected by the registration: dialog open/close + asset-list refresh. */
 export interface StarHubOverlayInjected {
   /** 打开连接对话框(embed 资产条「去设置添加」经 postMessage 触发)。 */
   openConnectionManager: () => void
   closeConnectionManager: () => void
-  /** 提交/删除成功后刷新工作区资产列表(裸 source 桥,见 store.ts)。 */
-  refreshAssets: () => void
+  /** 将已保存的变更同步到工具面板。 */
+  onConnectionSaved: (change: ConnectionChange) => void
   hooks: {
     connectionManager: SnapshotStore<ConnectionManagerState>
   }
@@ -42,7 +42,7 @@ const EMBED_OPEN_SECTION_MESSAGE = 'starhub-embed-open-section'
  * @returns null when closed; otherwise the dialog layer.
  */
 export function StarHubOverlay({
-  openConnectionManager, closeConnectionManager, refreshAssets,
+  openConnectionManager, closeConnectionManager, onConnectionSaved,
   useConnectionManager,
 }: StarHubOverlayProps) {
   const state = useConnectionManager(s => s)
@@ -65,10 +65,11 @@ export function StarHubOverlay({
 
   return (
     <NewConnectionDialog
-      key={state.asset?.id ?? 'new'}
+      key={state.asset?.id ?? `new-${state.initialKind ?? 'ssh'}`}
       asset={state.asset}
+      initialKind={state.initialKind}
       onClose={closeConnectionManager}
-      onSaved={refreshAssets}
+      onSaved={onConnectionSaved}
     />
   )
 }

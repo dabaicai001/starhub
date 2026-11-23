@@ -157,6 +157,25 @@
   cursor: default;
 }
 
+.createButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.createButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
 .list {
   display: flex;
   flex-direction: column;
@@ -328,6 +347,26 @@
   animation: starhub-notice-in var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
+.connectionNotice {
+  box-sizing: border-box;
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.connectionNoticeText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 @keyframes starhub-notice-in {
   from { opacity: 0; transform: translate(-50%, -4px); }
   to { opacity: 1; transform: translate(-50%, 0); }
@@ -360,6 +399,7 @@
 }
 
 .closeButton:focus-visible,
+.createButton:focus-visible,
 .iconButton:focus-visible,
 .category:focus-visible,
 .row:focus-visible,

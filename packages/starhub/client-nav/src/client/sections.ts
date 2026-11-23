@@ -28,6 +28,9 @@ export interface StarHubAsset {
   config: Record<string, unknown>
 }
 
+/** Default connection type when creating from a tools category. */
+export type InitialConnectionKind = 'ssh' | 'mysql' | 'docker'
+
 /**
  * 一个子类:侧栏子行 + 右侧资产列表过滤 + 缺省段路由前缀。
  * 资产匹配复用 `routeNameForAsset` 的路由名映射(asset.type + config.dbType)。
@@ -39,6 +42,7 @@ export interface StarHubSubcategory {
   label: string
   /** 缺省段路由前缀(无资产空态与 routePrefixForAsset 未命中时的回退)。 */
   routePrefix: string
+  initialConnectionKind?: InitialConnectionKind
   /** 侧栏子行图标(ui-primitives 现成字形)。 */
   Icon: ComponentType<IconProps>
   /** 资产是否属于该子类(复用 routeNameForAsset 语义)。 */
@@ -133,6 +137,7 @@ export const STARHUB_SUBCATEGORIES: readonly StarHubSubcategory[] = [
     key: 'terminal',
     label: '终端',
     routePrefix: '/ssh',
+    initialConnectionKind: 'ssh',
     Icon: IconCodeOutlineMedium,
     matches: (a) => {
       const name = routeNameForAsset(a)
@@ -143,6 +148,7 @@ export const STARHUB_SUBCATEGORIES: readonly StarHubSubcategory[] = [
     key: 'database',
     label: '数据库',
     routePrefix: '/db/mysql',
+    initialConnectionKind: 'mysql',
     Icon: IconDataOutlineMedium,
     matches: (a) => {
       const name = routeNameForAsset(a)
@@ -155,6 +161,7 @@ export const STARHUB_SUBCATEGORIES: readonly StarHubSubcategory[] = [
     key: 'docker',
     label: 'Docker',
     routePrefix: '/docker',
+    initialConnectionKind: 'docker',
     Icon: IconArchiveOutlineMedium,
     matches: a => routeNameForAsset(a) === 'docker',
   },

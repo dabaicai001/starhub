@@ -13,8 +13,7 @@
  *
  * 断言五条:
  *   - 工作台 `GET /starhub-react/` 由**包内 dist** 提供(host-static 自解析);
- *   - `POST /starhub/api/invoke get_assets` 回 `{ok:true}`,证明 bridge 用**包内
- *     sidecar**(Rust 侧 + 按同级兄弟名找到的 Go 侧)真的起来了;
+ *   - `get_assets` 和 SQLite 连接测试均成功，分别验证包内 Rust 和 Go sidecar;
  *   - 未知命令回 `method not found`(错误通路);
  *   - `GET /starhub/api/events` 是 SSE 流;
  *   - `GET /plugins/@starhub/dsh-plugin/client.js` 不是 404(客户端半边被
@@ -271,16 +270,20 @@ async function main() {
   }
 
   // ── 2. boot 宿主进程(刻意不设 STARHUB_GO_SIDECAR / STARHUB_WINDOW_DIST) ──
+  const env = {
+    ...process.env,
+    DSH_HOME: home,
+    DSH_TELEMETRY_DISABLED: '1',
+    STARHUB_ASSETS_FILE: join(home, 'starhub-assets.json'),
+    STARHUB_SECRETS_FILE: join(home, 'starhub-assets.secrets.json'),
+  }
+  // An empty string is still a configured binary path to the Rust sidecar.
+  delete env.STARHUB_GO_SIDECAR
+  delete env.STARHUB_WINDOW_DIST
   const child = spawn(node.executable, [node.cliBin, 'web'], {
     cwd: home,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      DSH_HOME: home,
-      DSH_TELEMETRY_DISABLED: '1',
-      STARHUB_GO_SIDECAR: '',
-      STARHUB_WINDOW_DIST: '',
-    },
+    env,
   })
   const logTail = []
   const remember = (chunk) => {
@@ -312,24 +315,23 @@ async function main() {
       workbench.status === 200 && workbenchText.includes('<html'),
       `status=${workbench.status} body=${workbenchText.slice(0, 120)}`)
 
-    // ② bridge:包内 sidecar 真的起来并打通 JSON-RPC
-    const invoke = await fetch(`http://127.0.0.1:${port}/starhub/api/invoke`, {
+    const invoke = (cmd, args = {}) => fetch(`http://127.0.0.1:${port}/starhub/api/invoke`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ cmd: 'get_assets', args: {} }),
-    })
-    const assets = await invoke.json()
-    check('POST /starhub/api/invoke get_assets → {ok:true,result:[]}',
-      assets?.ok === true && Array.isArray(assets.result),
-      JSON.stringify(assets).slice(0, 200))
+      body: JSON.stringify({ cmd, args }),
+      signal: AbortSignal.timeout(options.timeout),
+    }).then(response => response.json())
+
+    // ② get_assets 只经过 Rust；实际测试 SQLite 才会启动并验证包内 Go sidecar。
+    const assets = await invoke('get_assets')
+    const sqlite = await invoke('db_sqlite_test', { params: { filePath: join(home, 'smoke.db') } })
+    check('包内 Rust/Go sidecar 可列资产并连接 SQLite',
+      assets?.ok === true && Array.isArray(assets.result) && assets.result.length === 0
+        && sqlite?.ok === true && sqlite.result?.ok === true,
+      JSON.stringify({ assets, sqlite }).slice(0, 300))
 
     // ③ 错误通路
-    const bogus = await fetch(`http://127.0.0.1:${port}/starhub/api/invoke`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ cmd: 'definitely_not_a_command', args: {} }),
-    })
-    const bogusBody = await bogus.json()
+    const bogusBody = await invoke('definitely_not_a_command')
     check('未知命令 → {ok:false,error} 且含 method not found',
       bogusBody?.ok === false && String(bogusBody.error).includes('method not found'),
       JSON.stringify(bogusBody).slice(0, 200))

@@ -13,7 +13,7 @@
 import {
   createSnapshotStore, type SnapshotStore,
 } from '@deepseek-ai/dsh-client-store'
-import { routePrefixForAsset, STARHUB_SUBCATEGORIES, type StarHubAsset } from './sections.ts'
+import { routePrefixForAsset, STARHUB_SUBCATEGORIES, type InitialConnectionKind, type StarHubAsset } from './sections.ts'
 
 /** Rust get_assets 返回的 Asset 序列化形态(与 src-tauri/src/commands/asset.rs 一致)。 */
 export interface RustAsset {
@@ -40,6 +40,20 @@ export interface StarHubAssetListState {
   error: string | null
   /** 浏览器预览(无宿主桥):资产后端不可达,组件展示预览提示而非错误。 */
   preview: boolean
+  /** Most recent successful change shown in the tools panel. */
+  recentChange?: ConnectionChangeSummary
+}
+
+/** A completed mutation, with the saved asset returned by the sidecar. */
+export interface ConnectionChange {
+  kind: 'created' | 'updated' | 'deleted'
+  asset: RustAsset
+}
+
+interface ConnectionChangeSummary {
+  kind: ConnectionChange['kind']
+  id: string
+  name: string
 }
 
 /** 顶层帧宿主桥直调(共享桥,见 tauri.ts);无宿主桥(裸浏览器预览)时 reject。 */
@@ -63,6 +77,10 @@ export interface StarHubAssets {
   source: SnapshotStore<StarHubAssetListState>
   /** 重新拉取资产列表(拉取中重复调用会被忽略)。 */
   refresh: () => void
+  /** Reflect a successful mutation immediately and refresh the complete list. */
+  applyChange: (change: ConnectionChange) => void
+  /** Dismiss the visible confirmation. */
+  dismissChange: () => void
 }
 
 /**
@@ -71,25 +89,51 @@ export interface StarHubAssets {
  */
 export function createStarHubAssets(): StarHubAssets {
   const source = createSnapshotStore<StarHubAssetListState>({ assets: [], loading: false, error: null, preview: false })
+  let pending: AbortController | null = null
   const refresh = (): void => {
-    if (source.getSnapshot().loading) return
+    if (pending !== null) return
     // 无宿主桥(裸浏览器预览):不发请求,直接落 preview 态(组件据此展示
     // 「请在桌面应用中使用」提示,而不是一条红错)。
     if (!isTauriRuntime()) {
       source.update((d) => { d.loading = false; d.error = null; d.preview = true })
       return
     }
+    const request = new AbortController()
+    pending = request
     source.update((d) => { d.loading = true; d.error = null; d.preview = false })
-    loadStarHubAssets()
-      .then((list) => { source.update((d) => { d.assets = list; d.loading = false }) })
+    loadStarHubAssets(request.signal)
+      .then((list) => {
+        if (pending !== request) return
+        pending = null
+        source.update((d) => { d.assets = list; d.loading = false })
+      })
       .catch((e: unknown) => {
+        if (pending !== request) return
+        pending = null
         source.update((d) => {
           d.error = e instanceof Error ? e.message : String(e)
           d.loading = false
         })
       })
   }
-  return { source, refresh }
+  const applyChange = ({ kind, asset }: ConnectionChange): void => {
+    // An earlier read can still complete after the mutation has been committed.
+    pending?.abort()
+    pending = null
+    source.update((draft) => {
+      const existing = draft.assets.some(item => item.id === asset.id)
+      draft.assets = kind === 'deleted'
+        ? draft.assets.filter(item => item.id !== asset.id)
+        : existing
+          ? draft.assets.map(item => item.id === asset.id ? asset : item)
+          : [...draft.assets, asset]
+      draft.recentChange = { kind, id: asset.id, name: asset.name }
+    })
+    // The mutation response omits secrets. The list refresh restores the usual
+    // asset shape and includes changes made outside the connection dialog.
+    refresh()
+  }
+  return { source, refresh, applyChange, dismissChange: () => { source.update(draft => { delete draft.recentChange }) } }
 }
 
 /** 连接管理对话框状态:open + 编辑目标(null = 新建)。 */
@@ -97,6 +141,7 @@ export interface ConnectionManagerState {
   open: boolean
   /** 编辑模式的目标资产(get_assets 返回的完整行);null = 新建。 */
   asset: RustAsset | null
+  initialKind?: InitialConnectionKind
 }
 
 /** 跨 scope 的连接管理对话框开关(壳内 React 小对话框,非整幅 iframe 层)。 */
@@ -104,7 +149,7 @@ export interface ConnectionManagerOverlay {
   /** 注入 hooks 舱位的裸 observable。 */
   source: SnapshotStore<ConnectionManagerState>
   /** 打开连接对话框(新建连接入口 / embed 资产条「去设置添加」);传入资产进入编辑模式。 */
-  open: (asset?: RustAsset) => void
+  open: (asset?: RustAsset, initialKind?: InitialConnectionKind) => void
   /** 关闭对话框(关闭钮 / Esc / 提交成功)。 */
   close: () => void
 }
@@ -120,7 +165,9 @@ export function createConnectionManagerOverlay(): ConnectionManagerOverlay {
   const source = createSnapshotStore<ConnectionManagerState>({ open: false, asset: null })
   return {
     source,
-    open: (asset) => { source.set({ open: true, asset: asset ?? null }) },
+    open: (asset, initialKind) => {
+      source.set({ open: true, asset: asset ?? null, ...(initialKind === undefined ? {} : { initialKind }) })
+    },
     close: () => { source.set({ open: false, asset: null }) },
   }
 }

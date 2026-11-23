@@ -55,6 +55,7 @@ function workspaceProps() {
     execRecords,
     refreshAssets: vi.fn(),
     openConnectionManager: vi.fn(),
+    dismissConnectionChange: vi.fn(),
     clearExecRecords: vi.fn(),
     disconnectExecSession: vi.fn(),
     closeTools: vi.fn(),
@@ -170,7 +171,7 @@ describe('StarHubToolWorkspace', () => {
     props.assets.update((d) => { d.assets = [sshAsset] })
     render(<StarHubToolWorkspace {...props} />)
     expect(screen.getByText('1')).toBeTruthy()
-    screen.getByLabelText('新建连接').click()
+    screen.getByRole('button', { name: '新建连接' }).click()
     expect(props.openConnectionManager).toHaveBeenCalledTimes(1)
   })
 
@@ -240,7 +241,27 @@ describe('StarHubToolWorkspace', () => {
     // 头部与空态各有一个「新建连接」,空态按钮在列表区域
     const buttons = screen.getAllByText('新建连接')
     buttons[buttons.length - 1]!.click()
-    expect(props.openConnectionManager).toHaveBeenCalledTimes(1)
+    expect(props.openConnectionManager).toHaveBeenCalledWith(undefined, 'docker')
+    buttons[0]!.click()
+    expect(props.openConnectionManager).toHaveBeenNthCalledWith(2, undefined, 'docker')
+  })
+
+  it('shows a newly created connection and opens it directly even if refreshing the list failed', async () => {
+    const props = workspaceProps()
+    const openAsset = vi.fn()
+    props.bridge.selectSubcategory('terminal')
+    props.assets.update(draft => {
+      draft.assets = [sshAsset]
+      draft.error = 'offline'
+      draft.recentChange = { kind: 'created', id: sshAsset.id, name: sshAsset.name }
+    })
+    render(<StarHubToolWorkspace {...props} openAsset={openAsset} />)
+    expect(screen.getByText('已新建连接 prod-server').getAttribute('role')).toBe('status')
+    expect(screen.getByRole('alert').textContent).toContain('offline')
+    expect(screen.getByTitle('在浏览器中打开 prod-server')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '打开工作台', exact: true }))
+    expect(openAsset).toHaveBeenCalledWith(sshAsset)
+    await waitFor(() => { expect(props.dismissConnectionChange).toHaveBeenCalledOnce() })
   })
 
   it('opens the asset row click in the SYSTEM browser (host sidecar, host origin)', async () => {

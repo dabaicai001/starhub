@@ -16,7 +16,7 @@ import {
 import {
   createConnectionManagerOverlay, createStarHubAssets, createToolSelectionBridge,
 } from '../src/client/store.ts'
-import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
+import { hostBridgeCalls, restoreHostBridge, stubHostBridge } from './host-bridge.ts'
 
 /** 构造一个最小资产(只带匹配所需的字段)。 */
 function asset(type: string, dbType?: string): StarHubAsset {
@@ -207,6 +207,34 @@ describe('createStarHubAssets', () => {
       resolveFetch([{ id: 'a1', type: 'ssh', name: 'n', config: {} }])
       await vi.waitFor(() =>{  expect(holder.source.getSnapshot().loading).toBe(false) })
       expect(holder.source.getSnapshot().assets).toHaveLength(1)
+    } finally {
+      restore()
+    }
+  })
+
+  it('preserves a saved connection when an earlier refresh finishes after the post-save refresh', async () => {
+    const oldRead = Promise.withResolvers<unknown>()
+    const newRead = Promise.withResolvers<unknown>()
+    const saved = {
+      ...asset('docker'), id: 'created', name: 'Local Docker', group_id: null,
+      key_id: null, tags: [], favorite: false, last_used_at: null, created_at: 0, updated_at: 0,
+    }
+    const invoke = vi.fn().mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(newRead.promise)
+    const restore = stubTauriInternals(invoke)
+    try {
+      const holder = createStarHubAssets()
+      holder.refresh()
+      holder.applyChange({ kind: 'created', asset: saved })
+      expect(holder.source.getSnapshot().assets).toEqual([saved])
+      expect(hostBridgeCalls().map(call => call.cmd)).toEqual(['get_assets', 'get_assets'])
+      newRead.resolve([saved])
+      await vi.waitFor(() => { expect(holder.source.getSnapshot().loading).toBe(false) })
+      oldRead.resolve([])
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(holder.source.getSnapshot().assets).toEqual([saved])
+      expect(holder.source.getSnapshot().recentChange).toEqual({ kind: 'created', id: saved.id, name: saved.name })
+      holder.dismissChange()
+      expect(holder.source.getSnapshot().recentChange).toBeUndefined()
     } finally {
       restore()
     }

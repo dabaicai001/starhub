@@ -51,6 +51,42 @@ afterEach(() => {
 })
 
 describe('NewConnectionDialog create', () => {
+  it('uses the originating category and passes the saved asset back after form submission', async () => {
+    const saved = makeAsset({ id: 'docker-created', type: 'docker', name: 'Local Docker', config: { dockerTransport: 'socket' } })
+    const create = vi.fn(() => saved)
+    const restore = stubTauriInternals({ create_asset: create })
+    const onSaved = vi.fn()
+    try {
+      render(<NewConnectionDialog asset={null} initialKind="docker" onClose={() => {}} onSaved={onSaved} />)
+      expect(screen.getByLabelText<HTMLSelectElement>('类型').value).toBe('docker')
+      const name = screen.getByLabelText('名称 *')
+      expect(document.activeElement).toBe(name)
+      fireEvent.change(name, { target: { value: 'Local Docker' } })
+      fireEvent.submit(screen.getByRole('dialog'))
+      await vi.waitFor(() => { expect(onSaved).toHaveBeenCalledWith({ kind: 'created', asset: saved }) })
+      expect(create).toHaveBeenCalledOnce()
+    } finally {
+      restore()
+    }
+  })
+
+  it('prefills the database port and explains invalid values before testing or saving', () => {
+    render(<NewConnectionDialog asset={null} initialKind="mysql" onClose={() => {}} onSaved={() => {}} />)
+    const port = screen.getByLabelText<HTMLInputElement>('端口')
+    expect(port.value).toBe('3306')
+    fireEvent.change(screen.getByLabelText('名称 *'), { target: { value: 'db' } })
+    fireEvent.change(screen.getByLabelText('主机 *'), { target: { value: 'localhost' } })
+    fireEvent.change(screen.getByLabelText('用户名 *'), { target: { value: 'demo' } })
+    fireEvent.change(port, { target: { value: '65536' } })
+    expect(screen.getByRole('alert').textContent).toContain('端口必须是 1 到 65535')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '测试连接' }).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '创建' }).disabled).toBe(true)
+    fireEvent.change(port, { target: { value: '3307' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '测试连接' }).disabled).toBe(false)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '创建' }).disabled).toBe(false)
+  })
+
   it('creates an ssh password asset with the embed-compatible config contract', async () => {
     const create = vi.fn((..._args: unknown[]) => ({}))
     const restore = stubTauriInternals({ create_asset: args => create(args) })

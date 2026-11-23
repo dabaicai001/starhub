@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.143.1-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.143.2-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,10 +59,11 @@
 
 ## 当前版本
 
-### v0.143.1 (2026-11-23)
-- 🐛 打开 StarHub 工作台、刷新连接列表及提交连接表单时显示进度。浏览器打开失败或复制失败时显示原因，资产行可直接打开宿主内工作台。
-- 🐛 工作台区分加载失败和资产不存在，支持原地重试。Docker 和 Elasticsearch 连接失败后可直接重连。
-- 🐛 连接测试期间禁用保存、删除与配置修改，允许关闭弹窗。保存或删除时显示对应进度，SSH 验证码提交失败时保留输入以便重试。
+### v0.143.2 (2026-11-23)
+- 🐛 「新建连接」入口显示文字并按当前分类预选类型。创建成功后自动展开对应分类，显示连接名称，并可直接打开工作台。
+- 🐛 创建、保存和删除立即更新列表。旧的刷新响应不会覆盖已保存的结果，刷新失败时仍可使用已加载的连接。
+- 🐛 新建连接表单支持回车提交，测试或保存前提示无效端口。
+- 🐛 插件冒烟实际连接 SQLite，验证安装包内的 Go sidecar 可用。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

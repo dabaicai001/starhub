@@ -40,7 +40,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { STARHUB_SUBCATEGORIES, assetRowBadge, assetSubtitle, assetWindowUrl, type StarHubAsset, type StarHubSubcategory } from './sections.ts'
 import { tauriInvoke } from './tauri.ts'
-import type { RustAsset, StarHubAssetListState, ToolSelection } from './store.ts'
+import type { ConnectionManagerOverlay, RustAsset, StarHubAssetListState, ToolSelection } from './store.ts'
 import { ContextMenu, useContextMenu } from './ContextMenu.tsx'
 import { ExecRecordList } from './conn/ExecRecordList.tsx'
 import type { ExecRecordsState } from './conn/exec-records.ts'
@@ -117,7 +117,9 @@ export interface StarHubToolWorkspaceInjected {
   openAsset: (asset: StarHubAsset) => void | Promise<void>
   refreshAssets: () => void
   /** 打开连接对话框:不传资产 = 新建;传资产 = 编辑(含删除入口)。 */
-  openConnectionManager: (asset?: RustAsset) => void
+  openConnectionManager: ConnectionManagerOverlay['open']
+  /** Close the confirmation shown after a successful connection change. */
+  dismissConnectionChange: () => void
   /** 清空当前会话的执行记录(执行记录视图头部「清空」,随会话隔离)。 */
   clearExecRecords: () => void
   /** 断开一条执行记录对应的 SSH 连接并移除其记录(v0.100.1 行尾关闭按钮)。 */
@@ -275,7 +277,7 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
  * @returns the panel content (rendered only while the sidebar row selects it).
  */
 export function StarHubToolWorkspace({
-  openAsset, refreshAssets, openConnectionManager,
+  openAsset, refreshAssets, openConnectionManager, dismissConnectionChange,
   clearExecRecords, disconnectExecSession,
   closeTools, selectSubcategory, insertAssetReference,
   useSelection, useAssets, useExecRecords,
@@ -284,8 +286,17 @@ export function StarHubToolWorkspace({
   const loading = useAssets(s => s.loading)
   const error = useAssets(s => s.error)
   const preview = useAssets(s => s.preview)
+  const recentChange = useAssets(s => s.recentChange)
   const activeSubcategory = useSelection(s => s.subcategory)
   const activeAssetId = useSelection(s => s.assetId)
+  const initialKind = STARHUB_SUBCATEGORIES.find(item => item.key === activeSubcategory)?.initialConnectionKind
+  const createdAsset = recentChange?.kind === 'created' ? assets.find(asset => asset.id === recentChange.id) : undefined
+  const messages = interactionMessages()
+  const changeMessages = {
+    created: messages.connectionCreated,
+    updated: messages.connectionUpdated,
+    deleted: messages.connectionDeleted,
+  }
   // 执行记录视图(v0.100.0):hook 未提供时视为关闭 + 空列表(独立渲染兼容)。
   const execViewOpen = useExecRecords?.(s => s.viewOpen) ?? false
   const execRecords = useExecRecords?.(s => s.records) ?? []
@@ -296,6 +307,15 @@ export function StarHubToolWorkspace({
     const timer = window.setTimeout(() => { setNotice(null) }, 6000)
     return () => { window.clearTimeout(timer) }
   }, [notice])
+
+  const openSavedConnection = async (asset: RustAsset): Promise<void> => {
+    try {
+      await openAsset(asset)
+      dismissConnectionChange()
+    } catch (error) {
+      setNotice(messages.workbenchOpenFailed(error instanceof Error ? error.message : String(error)))
+    }
+  }
 
   // 挂载时(以及切换子类时)重新拉取(回调内部对并发拉取去重)。
   useEffect(() => { refreshAssets() }, [activeSubcategory, refreshAssets])
@@ -316,12 +336,11 @@ export function StarHubToolWorkspace({
             <span className={css.spacer} />
             <button
               type="button"
-              className={css.iconButton}
-              title="新建连接"
-              aria-label="新建连接"
-              onClick={() =>{  openConnectionManager() }}
+              className={css.createButton}
+              onClick={() => { openConnectionManager(undefined, initialKind) }}
             >
               <IconPlusOutlineMedium size={13} />
+              {messages.createConnection}
             </button>
             <button
               type="button"
@@ -344,6 +363,19 @@ export function StarHubToolWorkspace({
             </button>
           </header>
           {notice !== null && <div className={css.notice} role="status">{notice}</div>}
+          {recentChange !== undefined && (
+            <div className={css.connectionNotice}>
+              <span className={css.connectionNoticeText} role="status">{changeMessages[recentChange.kind](recentChange.name)}</span>
+              {createdAsset !== undefined && (
+                <button type="button" className={css.retryButton} onClick={() => void openSavedConnection(createdAsset)}>
+                  {messages.openSavedConnection}
+                </button>
+              )}
+              <button type="button" className={css.closeButton} aria-label={messages.dismissConnectionNotice} onClick={dismissConnectionChange}>
+                <IconCloseOutlineMedium size={13} />
+              </button>
+            </div>
+          )}
           <div className={css.tree}>
             {(activeSubcategory === null || activeSubcategory === 'android') && (
               loading ? <div className={css.status} role="status">加载资产…</div>
@@ -356,7 +388,7 @@ export function StarHubToolWorkspace({
               subcategory,
               assets,
               activeSubcategory,
-              activeAssetId,
+              createdAsset?.id ?? activeAssetId,
               loading,
               error,
               preview,
@@ -387,7 +419,7 @@ function renderSubcategory(
   preview: boolean,
   handlers: {
     openAsset: (asset: StarHubAsset) => void | Promise<void>
-    openConnectionManager: (asset?: RustAsset) => void
+    openConnectionManager: ConnectionManagerOverlay['open']
     refreshAssets: () => void
     selectSubcategory: (key: string | null) => void
     insertAssetReference: (asset: RustAsset) => void
@@ -423,19 +455,19 @@ function renderSubcategory(
           )}
           {!isAssetlessSubcategory(subcategory.key) && !loading && !preview && error !== null && (
             <div className={css.status}>
-              <div role="alert">资产加载失败:{error}</div>
+              <div role="alert">{matched.length > 0 ? interactionMessages().refreshConnectionsFailed(error) : `资产加载失败:${error}`}</div>
               <button type="button" className={css.retryButton} onClick={() =>{  handlers.refreshAssets() }}>重试</button>
             </div>
           )}
           {!isAssetlessSubcategory(subcategory.key) && !loading && !preview && error === null && matched.length === 0 && (
             <div className={css.status}>
               <div>暂无 {subcategory.label} 连接。</div>
-              <button type="button" className={css.retryButton} onClick={() =>{  handlers.openConnectionManager() }}>
-                新建连接
+              <button type="button" className={css.retryButton} onClick={() => { handlers.openConnectionManager(undefined, subcategory.initialConnectionKind) }}>
+                {interactionMessages().createConnection}
               </button>
             </div>
           )}
-          {!isAssetlessSubcategory(subcategory.key) && !preview && error === null && matched.length > 0 && (
+          {!isAssetlessSubcategory(subcategory.key) && !preview && matched.length > 0 && (
             <div className={css.list}>
               {matched.map(asset => (
                 <AssetRow

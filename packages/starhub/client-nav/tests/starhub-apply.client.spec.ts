@@ -33,7 +33,7 @@ import { ExecDrawerButton } from '../src/client/conn/ExecDrawerButton.tsx'
 import { AndroidSettingsTab } from '../src/client/settings/android.tsx'
 import { SshSettingsTab } from '../src/client/settings/ssh.tsx'
 import { STARHUB_ASSET_SOURCE } from '../src/client/asset-source.ts'
-import { restoreHostBridge } from './host-bridge.ts'
+import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
 import { createSettingsWriter, lastBinding } from './settings-writer.ts'
 
 afterEach(() => {
@@ -255,15 +255,25 @@ describe('client-nav apply (rc.2)', () => {
     const injected = overlayConfig.inject() as {
       openConnectionManager: () => void
       closeConnectionManager: () => void
-      refreshAssets: () => void
+      onConnectionSaved: (change: unknown) => void
       hooks: { connectionManager: { getSnapshot: () => { open: boolean; asset: null } } }
     }
     expect(injected.openConnectionManager).toBeTypeOf('function')
     expect(injected.closeConnectionManager).toBeTypeOf('function')
-    expect(injected.refreshAssets).toBeTypeOf('function')
+    expect(injected.onConnectionSaved).toBeTypeOf('function')
     expect(injected.hooks.connectionManager.getSnapshot()).toEqual({ open: false, asset: null })
     injected.openConnectionManager()
     expect(injected.hooks.connectionManager.getSnapshot()).toEqual({ open: true, asset: null })
+
+    const tools = mainByKey(register, 'starhub-tools').inject() as {
+      openConnectionManager: (asset: undefined, initialKind: 'docker') => void
+      hooks: { selection: { getSnapshot: () => { subcategory: string | null } } }
+    }
+    tools.openConnectionManager(undefined, 'docker')
+    expect(injected.hooks.connectionManager.getSnapshot()).toEqual({ open: true, asset: null, initialKind: 'docker' })
+    stubHostBridge(() => [])
+    injected.onConnectionSaved({ kind: 'created', asset: { id: 'redis-1', type: 'db', name: 'Redis', config: { dbType: 'redis' } } })
+    expect(tools.hooks.selection.getSnapshot().subcategory).toBe('database')
   })
 
   it('opens every asset page in the in-shell workbench panel (no new window)', () => {

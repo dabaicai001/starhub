@@ -50,10 +50,10 @@ import {
 } from './store.ts'
 import { ExecDrawerButton } from './conn/ExecDrawerButton.tsx'
 import { createExecRecordsBridge, subscribeSshExecEvents } from './conn/exec-records.ts'
-import { assetSubtitle, assetWindowUrl, type StarHubAsset } from './sections.ts'
+import { assetSubtitle, assetWindowUrl, STARHUB_SUBCATEGORIES, type StarHubAsset } from './sections.ts'
 import { bindAssetContext } from './tool-context.ts'
 import { focusWindowByKey, installWorkbenchPageHost, openNewPage, tauriInvoke } from './tauri.ts'
-import { StarHubOverlay } from './StarHubOverlay.tsx'
+import { StarHubOverlay, type StarHubOverlayInjected } from './StarHubOverlay.tsx'
 import { ToolsPanelIcon } from './ToolsPanelIcon.tsx'
 import { StarHubToolWorkspace, type StarHubToolWorkspaceInjected } from './StarHubToolWorkspace.tsx'
 import { StarHubWorkbenchPanel, type StarHubWorkbenchPanelInjected } from './StarHubWorkbenchPanel.tsx'
@@ -210,10 +210,16 @@ export function apply(ctx: Context): void {
     id: 'starhub-overlay',
     order: 100,
     label: 'StarHub',
-    inject: () => ({
+    inject: (): StarHubOverlayInjected => ({
       openConnectionManager: () =>{  connectionManager.open() },
       closeConnectionManager: connectionManager.close,
-      refreshAssets: assets.refresh,
+      onConnectionSaved: (change) => {
+        assets.applyChange(change)
+        if (change.kind === 'created') {
+          const category = STARHUB_SUBCATEGORIES.find(item => item.matches(change.asset))
+          if (category !== undefined) selection.selectSubcategory(category.key)
+        }
+      },
       hooks: {
         connectionManager: connectionManager.source,
       },
@@ -227,6 +233,7 @@ export function apply(ctx: Context): void {
     openAsset: openAssetPage,
     refreshAssets: assets.refresh,
     openConnectionManager: connectionManager.open,
+    dismissConnectionChange: assets.dismissChange,
     clearExecRecords: execRecords.clear,
     // 行内「断开连接」(v0.100.1):先移除记录(UI 即时消失),再异步断开
     // 后端 SSH 连接;断开失败仅记日志——连接可能已自行断开,记录照样不显示。
