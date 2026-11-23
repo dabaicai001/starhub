@@ -236,6 +236,14 @@
   display: flex;
 }
 
+.rowWrap > .row {
+  padding-right: 62px;
+}
+
+.row:disabled {
+  cursor: progress;
+}
+
 .rowEdit {
   position: absolute;
   right: 6px;
@@ -267,6 +275,28 @@
 .rowEdit:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
+}
+
+.rowWorkbench {
+  right: 34px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.spin {
+  animation: starhub-spin 800ms linear infinite;
+}
+
+@keyframes starhub-spin {
+  to { transform: rotate(360deg); }
 }
 
 .status {
@@ -345,6 +375,7 @@
   .rowEdit,
   .retryButton,
   .assetGroup,
+  .spin,
   .notice {
     transition: none;
     animation: none;

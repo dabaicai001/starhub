@@ -197,6 +197,21 @@ describe('DockerWorkbench', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('retries the connection and shows progress before the container list loads', async () => {
+    const connect = vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue({ connId: 'c' })
+    stubHostBridge(cmd => {
+      if (cmd === 'docker_connect') return connect()
+      if (cmd === 'docker_list_containers' || cmd === 'docker_list_images') return []
+      return null
+    })
+    render(<DockerWorkbench asset={asset} />)
+    expect((await screen.findByRole('alert')).textContent).toBe('boom')
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(screen.getByRole('status').textContent).toBe('正在连接…')
+    expect(await screen.findByText(/没有运行中的容器/)).toBeTruthy()
+    expect(connect).toHaveBeenCalledTimes(2)
+  })
+
   it('shows loading then an empty state when no containers exist', async () => {
     ;(globalThis as unknown as { ResizeObserver: typeof ResizeObserverMock }).ResizeObserver = ResizeObserverMock
     const invoke = vi.fn((cmd: string) => {
@@ -493,7 +508,7 @@ describe('DockerWorkbench', () => {
     })
     stubHostBridge(invoke)
     renderWorkbench()
-    fireEvent.click(screen.getByRole('tab', { name: '镜像' }))
+    fireEvent.click(await screen.findByRole('tab', { name: '镜像' }))
     await waitFor(() =>{  expect(screen.getAllByText('sha256:abcde').length).toBeGreaterThan(0) })
   })
 

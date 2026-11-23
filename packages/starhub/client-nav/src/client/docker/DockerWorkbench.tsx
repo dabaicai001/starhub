@@ -32,6 +32,7 @@ import {
 } from './docker-service.ts'
 import { DockerExecTerminal } from './DockerExecTerminal.tsx'
 import { TabPane } from '../TabPane.tsx'
+import { interactionMessages } from '../interaction-messages.ts'
 import css from './DockerWorkbench.module.css'
 
 /** Docker 连接参数(把资产 config 转成 DockerConnectParams;键与 Vue docker.ts 同契约)。 */
@@ -155,7 +156,9 @@ export function countContainers(containers: ContainerInfo[], images: number): Da
  * @param props - the target asset and a close callback.
  * @returns the Docker workbench overlay.
  */
-export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () => void }) {
+export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: () => void }) {
+  const messages = interactionMessages()
+  const [connectionAttempt, setConnectionAttempt] = useState(0)
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [tab, setTab] = useState<WorkbenchTab>('containers')
@@ -221,9 +224,11 @@ export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose:
     }
   }, [])
 
-  // 挂载建连一次,卸载断连;连接按资产只建一次。
+  // 按资产建连，失败可重试，卸载断连。
   useEffect(() => {
     let cancelled = false
+    setConnected(false)
+    setConnectError(null)
     void toDockerConnectParams(asset.config)
       .then((params) => {
         if (params.transport === 'tcp' && params.host === '') {
@@ -232,9 +237,11 @@ export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose:
         return dockerConnect(params)
       })
       .then(async (info) => {
-        /* v8 ignore next -- 卸载竞态:连接在清理后 resolve,防御性守卫 */
-        if (cancelled) return
         if (!info.connId) throw new Error('Docker 连接未返回 connId')
+        if (cancelled) {
+          await dockerDisconnect(info.connId).catch(() => {})
+          return
+        }
         connRef.current = info.connId
         setConnected(true)
         await Promise.all([loadContainers(), loadImages()])
@@ -247,11 +254,13 @@ export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose:
     return () => {
       cancelled = true
       /* v8 ignore start -- fire-and-forget 断连;IPC 失败非致命 */
-      if (connRef.current !== null) void dockerDisconnect(connRef.current).catch(() => {})
+      const id = connRef.current
+      connRef.current = null
+      if (id !== null) void dockerDisconnect(id).catch(() => {})
       /* v8 ignore stop */
     }
-    // 只随资产 id 变化;loadX 恒定,不列入依赖避免重连。
-  }, [asset.id])
+    // 列表筛选变化不触发重连。
+  }, [asset.id, connectionAttempt])
 
   /** 容器行操作:成功后刷新;删除/危险操作已二次确认。 */
   const runContainerAction = useCallback(async (kind: 'start' | 'stop' | 'restart' | 'remove', c: ContainerInfo) => {
@@ -362,26 +371,34 @@ export function DockerWorkbench({ asset, onClose }: { asset: RustAsset; onClose:
       <section className={css.panel} aria-label={`Docker ${asset.name}`}>
         <header className={css.header}>
           <div className={css.headLeft}>
-            <span className={connected ? css.statusOnline : css.statusPending} aria-label={connected ? 'Docker 已连接' : 'Docker 连接中'} />
+            {connectError === null && (
+              <span className={connected ? css.statusOnline : css.statusPending} aria-label={connected ? 'Docker 已连接' : 'Docker 连接中'} />
+            )}
             <div className={css.identity}>
               <span className={css.title}>{asset.name}</span>
               <span className={css.endpoint}>{typeof asset.config.remoteHost === 'string' ? asset.config.remoteHost : (typeof asset.config.socketPath === 'string' ? asset.config.socketPath : '/var/run/docker.sock')}</span>
             </div>
           </div>
           <div className={css.headActions}>
-            <button type="button" className={css.iconButton} onClick={() => { void loadContainers(); void loadImages() }} title="刷新工作台" aria-label="刷新工作台"><IconRefreshOutlineMedium size={15} /></button>
-            <button type="button" className={css.iconButton} onClick={onClose} title="关闭工作区" aria-label="关闭工作区"><IconCloseOutlineMedium size={15} /></button>
+            <button type="button" className={css.iconButton} disabled={!connected || containers.loading || images.loading} onClick={() => { void loadContainers(); void loadImages() }} title="刷新工作台" aria-label="刷新工作台"><IconRefreshOutlineMedium size={15} /></button>
+            {onClose !== undefined && <button type="button" className={css.iconButton} onClick={onClose} title="关闭工作区" aria-label="关闭工作区"><IconCloseOutlineMedium size={15} /></button>}
           </div>
         </header>
 
         {connectError !== null && (
           <div className={css.errorBar}>
-            <span>{connectError}</span>
-            <button type="button" className={css.retryButton} onClick={onClose}>返回</button>
+            <span role="alert">{connectError}</span>
+            <button type="button" className={css.retryButton} onClick={() => {
+              setConnectError(null)
+              setConnectionAttempt(attempt => attempt + 1)
+            }}>{messages.retry}</button>
+            {onClose !== undefined && <button type="button" className={css.retryButton} onClick={onClose}>返回</button>}
           </div>
         )}
 
-        {connectError === null && (
+        {!connected && connectError === null && <div className={css.connecting} role="status">{messages.connecting}</div>}
+
+        {connected && (
           <div className={css.workspace}>
             <main className={css.main}>
               <div className={css.dash}>

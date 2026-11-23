@@ -164,6 +164,26 @@
   visibility: hidden;
 }
 
+.frameLoading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-1);
+  pointer-events: none;
+}
+
+.spin {
+  animation: starhub-workbench-spin 800ms linear infinite;
+}
+
+@keyframes starhub-workbench-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* 空页簿兜底:主面板被恢复/残留时给出明确出口,不留白板。 */
 .empty {
   display: flex;
@@ -210,6 +230,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
   .tabSlot,
   .tab,
   .tabClose,

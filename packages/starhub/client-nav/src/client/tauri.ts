@@ -29,15 +29,17 @@ const EVENTS_URL = '/starhub/api/events'
  * 调一条宿主桥命令(旧 Tauri IPC 的替换,签名不变)。
  * @param cmd - 命令名(bridge 会加 `ui.` 前缀打给 sidecar)。
  * @param args - 命令参数(camelCase 键);缺省时请求体不带 args 键。
+ * @param signal - 放弃等待 HTTP 响应；sidecar 可能仍在处理命令。
  * @returns 命令结果。
  * @throws 响应为 `{ok:false,error}` 时以 error 消息 reject;非 2xx 响应
  *   (宿主桥未挂载/路由不存在)reject `host bridge unavailable (status)`。
  */
-export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   const response = await fetch(INVOKE_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ cmd, args }),
+    ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) {
     throw new Error(`host bridge unavailable (${response.status})`)

@@ -1,15 +1,15 @@
 /**
- * Standalone workbench window: parse the URL, fetch the target asset via the
- * injected Tauri IPC, and render the matching React workbench full-window.
+ * Workbench entry: resolve the asset through the host bridge and render its
+ * React workspace in the system browser or a tab in the DSH shell.
  * Reuses the client-nav workbench components so SSH/SFTP sharing, DB
  * lifecycle, Docker and Redis panels all behave identically to the in-shell
- * versions. The window closes with a header close button.
+ * versions.
  */
 import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
-import { tauriInvoke } from '@deepseek-ai/dsh-starhub-client-nav/src/client/tauri.ts'
-import type { RustAsset } from '@deepseek-ai/dsh-starhub-client-nav/src/client/store.ts'
+import { interactionMessages } from '@deepseek-ai/dsh-starhub-client-nav/src/client/interaction-messages.ts'
+import { loadStarHubAssets, type RustAsset } from '@deepseek-ai/dsh-starhub-client-nav/src/client/store.ts'
 import { DbWorkbench } from '@deepseek-ai/dsh-starhub-client-nav/src/client/DbWorkbench.tsx'
 import { DockerWorkbench } from '@deepseek-ai/dsh-starhub-client-nav/src/client/docker/DockerWorkbench.tsx'
 import { RedisWorkbench } from '@deepseek-ai/dsh-starhub-client-nav/src/client/redis/RedisWorkbench.tsx'
@@ -19,18 +19,18 @@ import { SshTerminalOverlay } from '@deepseek-ai/dsh-starhub-client-nav/src/clie
 import {
   parseWindowParams, workbenchForAsset, workbenchForRouteName, type WindowWorkbench,
 } from './route.ts'
-import './window-shell.css'
 
 /** Shell states: loading, resolved to a workbench, or failed. */
 type ShellState =
   | { kind: 'loading' }
   | { kind: 'no-params' }
+  | { kind: 'load-failed'; message: string }
   | { kind: 'asset-missing'; assetId: string }
   | { kind: 'unsupported'; assetId: string }
   | { kind: 'ready'; asset: RustAsset; workbench: WindowWorkbench }
 
 /** Surface a workbench render failure instead of leaving an empty webview. */
-class WorkbenchErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+class WorkbenchErrorBoundary extends Component<{ children: ReactNode; onRetry: () => void }, { error: Error | null }> {
   override state = { error: null as Error | null }
 
   static getDerivedStateFromError(error: Error): { error: Error } {
@@ -43,29 +43,38 @@ class WorkbenchErrorBoundary extends Component<{ children: ReactNode }, { error:
 
   override render(): ReactNode {
     if (this.state.error !== null) {
-      return (
-        <div className="window-frame window-error" role="alert">
-          <p>工作台加载失败</p>
-          <pre>{this.state.error.message}</pre>
-          <button type="button" onClick={requestWindowClose}>关闭</button>
-        </div>
-      )
+      return <WorkbenchFailure title={interactionMessages().workbenchLoadFailed} detail={this.state.error.message} onRetry={this.props.onRetry} />
     }
     return this.props.children
   }
 }
 
-/** A window-level "close" (the webview has no Tauri close grant here). */
+function WorkbenchFailure({ title, detail, onRetry }: { title: string; detail?: string; onRetry?: () => void }) {
+  return (
+    <div className="window-frame window-status">
+      <div role="alert">
+        <p>{title}</p>
+        {detail !== undefined && <p className="window-error-detail">{detail}</p>}
+      </div>
+      {onRetry !== undefined && <button type="button" onClick={onRetry}>{interactionMessages().retry}</button>}
+    </div>
+  )
+}
+
+/** Workbench actions use the containing browser window when opened as a popup. */
 function requestWindowClose(): void {
-  // Best-effort: try Tauri window close; fall back to self.close().
-  void tauriInvoke('plugin:window|close')
-    .then(() => { /* closed by host */ })
-    .catch(() => { window.close() })
+  if (window.parent === window) window.close()
 }
 
 /** Standalone shell: resolve the URL to a workbench and render it. */
 export function WindowShell() {
   const [state, setState] = useState<ShellState>({ kind: 'loading' })
+  const [attempt, setAttempt] = useState(0)
+  const messages = interactionMessages()
+  const retry = () => {
+    setState({ kind: 'loading' })
+    setAttempt(previous => previous + 1)
+  }
   // 壳内 iframe 与独立浏览器页共用同一入口:embed=1 时去掉整页窗口感
   // (SSH 的遮罩/16px 边距),由主壳标签条承担 chrome。
   const embedded = new URLSearchParams(window.location.search).get('embed') === '1'
@@ -76,10 +85,10 @@ export function WindowShell() {
       setState({ kind: 'no-params' })
       return
     }
-    let cancelled = false
-    tauriInvoke<RustAsset[]>('get_assets')
+    const request = new AbortController()
+    loadStarHubAssets(request.signal)
       .then((assets) => {
-        if (cancelled) return
+        if (request.signal.aborted) return
         const asset = assets.find(a => a.id === params.assetId)
         if (asset === undefined) {
           setState({ kind: 'asset-missing', assetId: params.assetId })
@@ -92,12 +101,13 @@ export function WindowShell() {
         }
         setState({ kind: 'ready', asset, workbench })
       })
-      .catch(() => {
-        if (!cancelled) setState({ kind: 'asset-missing', assetId: params.assetId })
+      .catch((error: unknown) => {
+        if (!request.signal.aborted) {
+          setState({ kind: 'load-failed', message: error instanceof Error ? error.message : String(error) })
+        }
       })
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    return () => { request.abort() }
+  }, [attempt])
 
   const renderWorkbench = (asset: RustAsset, workbench: WindowWorkbench) => {
     switch (workbench) {
@@ -110,38 +120,41 @@ export function WindowShell() {
       case 'db-mssql':
         return <DbWorkbench asset={asset} onClose={requestWindowClose} />
       case 'db-redis':
-        return <RedisWorkbench asset={asset} onClose={requestWindowClose} />
+        return <RedisWorkbench asset={asset} />
       case 'db-elasticsearch':
-        return <ElasticsearchWorkbench asset={asset} onClose={requestWindowClose} />
+        return <ElasticsearchWorkbench asset={asset} />
       case 'broker':
         return <BrokerView asset={asset} />
       case 'docker':
-        return <DockerWorkbench asset={asset} onClose={requestWindowClose} />
+        return <DockerWorkbench asset={asset} />
     }
   }
 
   if (state.kind === 'ready') {
     return (
       <div className={`window-frame standalone-workbench${embedded ? ' embedded-workbench' : ''}`}>
-        <WorkbenchErrorBoundary>{renderWorkbench(state.asset, state.workbench)}</WorkbenchErrorBoundary>
+        <WorkbenchErrorBoundary onRetry={retry}>{renderWorkbench(state.asset, state.workbench)}</WorkbenchErrorBoundary>
       </div>
     )
   }
 
-  const message = state.kind === 'loading'
-    ? '正在加载…'
-    : state.kind === 'no-params'
-      ? '缺少资产参数。'
-      : state.kind === 'asset-missing'
-        ? `未找到资产 ${state.assetId}。`
-        : `该资产类型暂不支持独立窗口(${state.assetId})。`
-
-  return (
-    <div className="window-frame window-error">
-      <p>{message}</p>
-      <button type="button" onClick={requestWindowClose}>关闭</button>
-    </div>
-  )
+  switch (state.kind) {
+    case 'loading':
+      return (
+        <div className="window-frame window-status" role="status">
+          <span className="window-spinner" aria-hidden="true" />
+          <p>{messages.loadingWorkbench}</p>
+        </div>
+      )
+    case 'load-failed':
+      return <WorkbenchFailure title={messages.workbenchLoadFailed} detail={state.message} onRetry={retry} />
+    case 'no-params':
+      return <WorkbenchFailure title={messages.noAssetParameter} />
+    case 'asset-missing':
+      return <WorkbenchFailure title={messages.missingAsset(state.assetId)} onRetry={retry} />
+    case 'unsupported':
+      return <WorkbenchFailure title={messages.unsupportedAsset(state.assetId)} />
+  }
 }
 
 /** Keep a reference so HMR can unmount cleanly (used by main.tsx). */

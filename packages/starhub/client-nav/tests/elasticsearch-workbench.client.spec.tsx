@@ -116,15 +116,20 @@ describe('ElasticsearchWorkbench connect lifecycle', () => {
     }
   })
 
-  it('shows a connect error screen when db_es_connect rejects', async () => {
+  it('retries from the connect error screen and opens the workbench', async () => {
+    const connect = vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue({ connId: 'c1' })
     const restore = stubInvoke((cmd) => {
-      if (cmd === 'db_es_connect') return Promise.reject(new Error('boom'))
-      if (cmd === 'db_es_disconnect') return Promise.resolve(null)
+      if (cmd === 'db_es_connect') return connect()
+      if (cmd === 'db_es_list_indices') return Promise.resolve([])
       return Promise.resolve(null)
     })
     try {
-      render(<ElasticsearchWorkbench asset={esAsset} onClose={vi.fn()} />)
-      expect(await screen.findByText('boom')).toBeTruthy()
+      render(<ElasticsearchWorkbench asset={esAsset} />)
+      expect((await screen.findByRole('alert')).textContent).toBe('boom')
+      fireEvent.click(screen.getByRole('button', { name: '重试' }))
+      expect(screen.getByRole('status').textContent).toBe('正在连接…')
+      expect(await screen.findByText('Elasticsearch · es-prod')).toBeTruthy()
+      expect(connect).toHaveBeenCalledTimes(2)
     } finally {
       restore()
     }

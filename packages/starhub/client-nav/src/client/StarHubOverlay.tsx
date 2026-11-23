@@ -61,16 +61,6 @@ export function StarHubOverlay({
     return () =>{  window.removeEventListener('message', onMessage) }
   }, [openConnectionManager])
 
-  // Esc 关闭(仅在对话框打开时挂,避免吞掉壳内其他 Esc 语义)。
-  useEffect(() => {
-    if (!state.open) return
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeConnectionManager()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () =>{  document.removeEventListener('keydown', onKeyDown) }
-  }, [state.open, closeConnectionManager])
-
   if (!state.open) return null
 
   return (

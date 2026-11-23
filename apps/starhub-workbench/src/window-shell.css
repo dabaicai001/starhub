@@ -39,14 +39,57 @@ button, input, textarea, select {
   flex-direction: column;
 }
 
-.window-error {
+.window-status {
+  box-sizing: border-box;
   align-items: center;
   justify-content: center;
   gap: 12px;
+  padding: 24px;
   text-align: center;
 }
 
-/* Tauri supplies the window close control; hide duplicated workbench header actions. */
-.standalone-workbench :is([aria-label="关闭 SSH 工作区"], [aria-label="关闭工作区"], .closeButton, .closeBtn) {
+.window-status p {
+  margin: 0;
+}
+
+.window-status .window-error-detail {
+  margin-top: 6px;
+  max-width: 52ch;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.window-status button {
+  padding: 6px 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-2);
+  color: inherit;
+  cursor: pointer;
+}
+
+.window-status button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.window-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--dsw-alias-border-l2);
+  border-top-color: var(--dsw-alias-state-business-primary);
+  border-radius: 50%;
+  animation: window-spin 800ms linear infinite;
+}
+
+@keyframes window-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .window-spinner { animation: none; }
+}
+
+/* The shell tab or system browser supplies the close control. */
+.standalone-workbench :is([aria-label="关闭 SSH 工作区"], [aria-label="关闭工作区"]) {
   display: none;
 }

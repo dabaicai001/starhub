@@ -19,15 +19,16 @@
  * 标签交互:v0.141.0 起方向键 / Home / End 在标签间移动并同步激活,
  * 关闭钮常显但降低不透明度;中键单击标签也可关页。
  */
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import clsx from 'clsx'
 import type { PropsRuntime, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: the 'main' SlotMap row (declared by ui-layout).
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { IconCloseOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { WorkbenchPanelState } from './workbench-panel.ts'
+import { IconCloseOutlineMedium, IconLoadingOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
+import { interactionMessages } from './interaction-messages.ts'
+import type { WorkbenchPage, WorkbenchPanelState } from './workbench-panel.ts'
 import css from './StarHubWorkbenchPanel.module.css'
 
 /** Business face injected by the registration: page writes + the page store. */
@@ -48,6 +49,33 @@ export interface StarHubWorkbenchPanelInjected {
 export type StarHubWorkbenchPanelProps =
   & PropsRuntime<'main'>
   & InjectFace<StarHubWorkbenchPanelInjected>
+
+/** Keep loaded pages mounted and show feedback while the active frame navigates. */
+function WorkbenchFrame({ page, index, active }: { page: WorkbenchPage; index: number; active: boolean }) {
+  const [loaded, setLoaded] = useState(false)
+  return (
+    <>
+      <iframe
+        id={`starhub-panel-${index}`}
+        aria-labelledby={`starhub-tab-${index}`}
+        role="tabpanel"
+        className={clsx(css.frame, !active && css.frameHidden)}
+        title={page.title}
+        src={page.url}
+        allow="clipboard-read; clipboard-write; fullscreen"
+        aria-hidden={active ? undefined : true}
+        tabIndex={active ? 0 : -1}
+        onLoad={() => { setLoaded(true) }}
+      />
+      {active && !loaded && (
+        <div className={css.frameLoading} role="status">
+          <IconLoadingOutlineMedium size={16} className={css.spin} />
+          {interactionMessages().loadingWorkbench}
+        </div>
+      )}
+    </>
+  )
+}
 
 /**
  * Render the in-shell workbench: tab strip over a same-origin iframe.
@@ -154,23 +182,9 @@ export function StarHubWorkbenchPanel({
       <div className={css.frameStack}>
         {/* 一页一个常驻 iframe:切标签只改可见性。此前是单个 iframe 改 src,
             Chromium 会重新导航 —— 页面内查询标签、滚动、连接与草稿整页重来。 */}
-        {state.pages.map((page, index) => {
-          const isActive = page.key === active.key
-          return (
-            <iframe
-              key={page.key}
-              id={`starhub-panel-${index}`}
-              aria-labelledby={`starhub-tab-${index}`}
-              role="tabpanel"
-              className={clsx(css.frame, !isActive && css.frameHidden)}
-              title={page.title}
-              src={page.url}
-              allow="clipboard-read; clipboard-write; fullscreen"
-              aria-hidden={isActive ? undefined : true}
-              tabIndex={isActive ? 0 : -1}
-            />
-          )
-        })}
+        {state.pages.map((page, index) => (
+          <WorkbenchFrame key={`${page.key}:${page.url}`} page={page} index={index} active={page.key === active.key} />
+        ))}
       </div>
     </div>
   )

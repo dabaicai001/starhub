@@ -164,8 +164,7 @@ export function apply(ctx: Context): void {
    *  (SSH / 数据库 / Docker / Redis)统一走同一块面板,不再新开独立窗口,
    *   也不再回落 Vue embed。同 key(资产 id)重复打开 = 聚焦已有页——
    *   与 sidecar 侧 `starhub/open.asset` 的 open→focus 预判同语义。 */
-  const openAssetPage = (asset: StarHubAsset): void => {
-    selection.openAsset(asset)
+  const openAssetPage = async (asset: StarHubAsset): Promise<void> => {
     // 独立工作台不跑 ui-theme 插件树:把主壳当前解析主题(dark)经 `dark` 参数
     // 传入,页内据此切换深浅色 token(跟随 DSH 主题,而非固定深色)。
     const baseUrl = assetWindowUrl(asset)
@@ -176,15 +175,14 @@ export function apply(ctx: Context): void {
       // 由主壳标签条承担窗口 chrome(见 App.tsx 的 WindowShell)。
       url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}dark=${dark ? '1' : '0'}&embed=1`
     }
-    openNewPage(url, asset.name, asset.id)
-      // 开页失败(如宿主桥未就绪)打日志,不阻断主壳交互
-      .catch((e: unknown) => { console.error('打开资产页面失败:', e) })
+    await openNewPage(url, asset.name, asset.id)
+    selection.openAsset(asset)
   }
   /** 壳内工作台页簿 + 面板切换:开/聚焦一页并把主面板切到工作台。 */
   const workbench = createWorkbenchPanelStore()
   const openWorkbenchPage = (page: WorkbenchPage): void => {
-    workbench.open(page)
     layout.selectPanel(WORKBENCH_PANEL_ID)
+    workbench.open(page)
   }
   // openNewPage 的壳内宿主:装了宿主就不再用 window.open 开新标签页。
   // ctx.effect 保证 HMR 卸载时摘除(回到 window.open 的老行为)。
@@ -385,7 +383,9 @@ export function apply(ctx: Context): void {
   ctx.effect(() => subscribeHostEvents({
     onOpenAsset: createOpenAssetHandler({
       assets,
-      openAssetPage,
+      openAssetPage: (asset) => {
+        void openAssetPage(asset).catch((error: unknown) => { console.error('打开资产页面失败:', error) })
+      },
       // focus 语义随面板重写(M2 第 6 步):壳内已有该资产的页 → 激活并切到
       // 工作台面板;没有(或壳外窗口)才回退到 starhub-focus 广播,再不行才开新页。
       focusWindow: async (key) => {

@@ -6,8 +6,8 @@
  * (连接)列表;无资产概念的子类(Android)渲染各自的工作面板。
  * 子类行为手风琴:点行展开,再点一次收起(v0.130.0;null = 全部收起)。
  * 资产行交互(v0.133.5 起):**左键点行 = 在系统默认浏览器里打开**该实例的独立
- * 操作页(与壳内面板同一个 URL,方便拖到第二块屏 / 与主壳并排);**右键菜单**里
- * 才是「在页面内打开」(壳内工作台主面板页,即原来的默认动作)。行尾 hover 出编辑钮,
+ * 操作页(与壳内面板同一个 URL,方便拖到第二块屏 / 与主壳并排);行尾与右键菜单都可
+ * 打开壳内工作台主面板页。行尾 hover 出编辑钮,
  * 经 openConnectionManager(asset) 打开连接对话框的编辑模式;列头带资产数、
  * 刷新与「新建连接」入口,右上角 × 回会话视图(selectPanel(null))。
  *
@@ -34,7 +34,7 @@ import type { PropsRuntime, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import {
-  IconCloseOutlineMedium, IconCopyOutlineMedium, IconEditOutlineMedium, IconLinkOutlineMedium,
+  IconCloseOutlineMedium, IconCopyOutlineMedium, IconEditOutlineMedium, IconLinkOutlineMedium, IconLoadingOutlineMedium,
   IconPlusOutlineMedium, IconRefreshOutlineMedium, IconRightUpOutlineMedium, IconTrashOutlineMedium,
   writeClipboard, type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -45,6 +45,7 @@ import { ContextMenu, useContextMenu } from './ContextMenu.tsx'
 import { ExecRecordList } from './conn/ExecRecordList.tsx'
 import type { ExecRecordsState } from './conn/exec-records.ts'
 import { AndroidPanel } from './android/AndroidPanel.tsx'
+import { interactionMessages } from './interaction-messages.ts'
 import css from './StarHubToolWorkspace.module.css'
 
 /** 无资产概念的子类:展开后渲染各自工作面板,不走资产列表逻辑。 */
@@ -85,24 +86,35 @@ async function hostOrigin(): Promise<string> {
  */
 async function openAssetInBrowser(asset: StarHubAsset): Promise<string | null> {
   // 绝对 URL 必须用**宿主源**拼:桌面壳里 location.origin 是 dsh-app://app。
-  const url = new URL(assetWindowUrl(asset), await hostOrigin()).href
+  const url = new URL(assetWindowUrl(asset), await hostOrigin())
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(interactionMessages().browserAddressUnavailable)
+  }
   try {
-    await tauriInvoke('open_external_url', { url })
+    await tauriInvoke('open_external_url', { url: url.href })
     return null
   } catch {
-    // 旧宿主(无该方法)/ 浏览器预览:回落到 window.open(壳转 shell.openExternal)。
+    // 浏览器预览可以自己打开标签页；桌面壳通过下方的链接复制回退。
+    if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+      // noopener 打开成功也会返回 null。先打开空页，断开 opener 后再导航。
+      const popup = window.open('about:blank', '_blank')
+      if (popup !== null) {
+        popup.opener = null
+        popup.location.replace(url.href)
+        return null
+      }
+    }
   }
-  if (window.open(url, '_blank', 'noopener') !== null) return null
   // 两条路都没成:不再静默——复制链接并把提示交给面板展示。
-  const copied = await writeClipboard(url)
+  const copied = await writeClipboard(url.href)
   return copied
     ? '未能唤起系统浏览器,链接已复制到剪贴板'
-    : `未能唤起系统浏览器,请手动访问:${url}`
+    : `未能唤起系统浏览器,请手动访问:${url.href}`
 }
 
 /** Business face injected by the registration: the connection wire + bridge/asset writes. */
 export interface StarHubToolWorkspaceInjected {
-  openAsset: (asset: StarHubAsset) => void
+  openAsset: (asset: StarHubAsset) => void | Promise<void>
   refreshAssets: () => void
   /** 打开连接对话框:不传资产 = 新建;传资产 = 编辑(含删除入口)。 */
   openConnectionManager: (asset?: RustAsset) => void
@@ -135,7 +147,7 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
   /** 当前打开(选中)的资产行高亮。 */
   active: boolean
   /** 在页面内打开:壳内工作台主面板页(右键菜单入口,非默认动作)。 */
-  onOpenInPage: () => void
+  onOpenInPage: () => void | Promise<void>
   /** 引用到当前对话框:插入 `@` 引用 chip 并轻绑定资产上下文。 */
   onReference: () => void
   onEdit: () => void
@@ -145,15 +157,32 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
   onNotice: (text: string) => void
 }) {
   const menu = useContextMenu()
+  const messages = interactionMessages()
   const [copied, setCopied] = useState(false)
+  const [openingBrowser, setOpeningBrowser] = useState(false)
   useEffect(() => {
     if (!copied) return
     const timer = window.setTimeout(() => { setCopied(false) }, 1500)
     return () => { window.clearTimeout(timer) }
   }, [copied])
   const subtitle = assetSubtitle(asset)
-  const openInBrowser = (): void => {
-    void openAssetInBrowser(asset).then((message) => { if (message !== null) onNotice(message) })
+  const openInBrowser = async (): Promise<void> => {
+    setOpeningBrowser(true)
+    try {
+      const message = await openAssetInBrowser(asset)
+      if (message !== null) onNotice(message)
+    } catch (error) {
+      onNotice(messages.browserOpenFailed(error instanceof Error ? error.message : String(error)))
+    } finally {
+      setOpeningBrowser(false)
+    }
+  }
+  const openInPage = async (): Promise<void> => {
+    try {
+      await onOpenInPage()
+    } catch (error) {
+      onNotice(messages.workbenchOpenFailed(error instanceof Error ? error.message : String(error)))
+    }
   }
   const items: MenuEntry[] = [
     { id: 'open-in-page', label: '在页面内打开', icon: <IconRightUpOutlineMedium /> },
@@ -171,13 +200,29 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
         type="button"
         className={`${css.row} ${active ? css.active : ''}`}
         title={`在浏览器中打开 ${asset.name}`}
-        onClick={openInBrowser}
+        disabled={openingBrowser}
+        aria-busy={openingBrowser}
+        onClick={() => void openInBrowser()}
       >
-        <span className={css.badge}>{badgeLabel}</span>
+        <span className={css.badge}>
+          {openingBrowser ? <IconLoadingOutlineMedium className={css.spin} size={13} /> : badgeLabel}
+        </span>
         <span className={css.assetText}>
           <span className={css.rowName}>{asset.name}</span>
-          {subtitle !== '' && <span className={css.rowSub}>{subtitle}</span>}
+          {(openingBrowser || subtitle !== '') && (
+            <span className={css.rowSub}>{openingBrowser ? messages.openingBrowser : subtitle}</span>
+          )}
         </span>
+      </button>
+      <span className={css.srOnly} role="status">{openingBrowser ? messages.openingBrowser : ''}</span>
+      <button
+        type="button"
+        className={`${css.rowEdit} ${css.rowWorkbench}`}
+        title={messages.openInWorkbench(asset.name)}
+        aria-label={messages.openInWorkbench(asset.name)}
+        onClick={() => void openInPage()}
+      >
+        <IconRightUpOutlineMedium size={13} />
       </button>
       <button
         type="button"
@@ -192,12 +237,15 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
         menu={menu}
         items={items}
         onSelect={(id) => {
-          if (id === 'open-in-page') onOpenInPage()
+          if (id === 'open-in-page') void openInPage()
           else if (id === 'reference') onReference()
           else if (id === 'edit') onEdit()
           else if (id === 'copy') {
             const text = subtitle === '' ? asset.name : `${asset.name} ${subtitle}`
-            void writeClipboard(text).then((ok) => { if (ok) setCopied(true) })
+            void writeClipboard(text).then((ok) => {
+              if (ok) setCopied(true)
+              else onNotice(messages.copyFailed)
+            })
           /* v8 ignore start -- 菜单 id 枚举完备(open-in-page/reference/edit/copy/delete),delete 条件的假分支不可达 */
           } else if (id === 'delete') onDelete()
           /* v8 ignore stop */
@@ -283,7 +331,7 @@ export function StarHubToolWorkspace({
               disabled={loading}
               onClick={() =>{  refreshAssets() }}
             >
-              <IconRefreshOutlineMedium size={13} />
+              {loading ? <IconLoadingOutlineMedium className={css.spin} size={13} /> : <IconRefreshOutlineMedium size={13} />}
             </button>
             <button
               type="button"
@@ -297,6 +345,10 @@ export function StarHubToolWorkspace({
           </header>
           {notice !== null && <div className={css.notice} role="status">{notice}</div>}
           <div className={css.tree}>
+            {(activeSubcategory === null || activeSubcategory === 'android') && (
+              loading ? <div className={css.status} role="status">加载资产…</div>
+                : error !== null && <div className={css.status} role="alert">资产加载失败:{error}</div>
+            )}
             {activeSubcategory === null && (
               <div className={css.status}>点击展开一个子类(终端 / 数据库 / Docker / Android)查看内容。</div>
             )}
@@ -334,7 +386,7 @@ function renderSubcategory(
   error: string | null,
   preview: boolean,
   handlers: {
-    openAsset: (asset: StarHubAsset) => void
+    openAsset: (asset: StarHubAsset) => void | Promise<void>
     openConnectionManager: (asset?: RustAsset) => void
     refreshAssets: () => void
     selectSubcategory: (key: string | null) => void
@@ -362,7 +414,7 @@ function renderSubcategory(
         <div className={css.assetGroup}>
           {/* 无资产概念的子类:Android 渲染 adb 设备面板 */}
           {subcategory.key === 'android' && <AndroidPanel />}
-          {!isAssetlessSubcategory(subcategory.key) && loading && <div className={css.status}>加载资产…</div>}
+          {!isAssetlessSubcategory(subcategory.key) && loading && <div className={css.status} role="status">加载资产…</div>}
           {!isAssetlessSubcategory(subcategory.key) && !loading && preview && (
             <div className={css.status}>
               <div className={css.previewTitle}>浏览器预览模式</div>
@@ -371,7 +423,7 @@ function renderSubcategory(
           )}
           {!isAssetlessSubcategory(subcategory.key) && !loading && !preview && error !== null && (
             <div className={css.status}>
-              <div>资产加载失败:{error}</div>
+              <div role="alert">资产加载失败:{error}</div>
               <button type="button" className={css.retryButton} onClick={() =>{  handlers.refreshAssets() }}>重试</button>
             </div>
           )}
@@ -383,7 +435,7 @@ function renderSubcategory(
               </button>
             </div>
           )}
-          {!isAssetlessSubcategory(subcategory.key) && !loading && !preview && error === null && matched.length > 0 && (
+          {!isAssetlessSubcategory(subcategory.key) && !preview && error === null && matched.length > 0 && (
             <div className={css.list}>
               {matched.map(asset => (
                 <AssetRow
@@ -391,7 +443,7 @@ function renderSubcategory(
                   asset={asset}
                   badgeLabel={assetRowBadge(asset, subcategory.label)}
                   active={activeAssetId === asset.id}
-                  onOpenInPage={() =>{  handlers.openAsset(asset) }}
+                  onOpenInPage={() => handlers.openAsset(asset)}
                   onReference={() =>{  handlers.insertAssetReference(asset) }}
                   onEdit={() =>{  handlers.openConnectionManager(asset) }}
                   onDelete={() =>{  handlers.openConnectionManager(asset) }}

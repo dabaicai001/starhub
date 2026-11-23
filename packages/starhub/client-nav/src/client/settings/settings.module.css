@@ -716,8 +716,17 @@
 .dialogPanel > .formGrid {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
+  margin-block: 0;
   overflow: auto;
-  padding-block: 16px;
+  padding: 16px 0;
+  border: 0;
+}
+
+.dialogPanel > .testPending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .dialogPanel > .actionRow {

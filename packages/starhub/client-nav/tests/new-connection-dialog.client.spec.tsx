@@ -568,6 +568,26 @@ describe('NewConnectionDialog test connection', () => {
     return { promise, resolve }
   }
 
+  it('lets the user close the dialog while a connection test is pending', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      const signal = init?.signal
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    })
+    const onClose = vi.fn()
+    const view = render(<NewConnectionDialog asset={null} onClose={onClose} onSaved={() => {}} />)
+    fireEvent.change(screen.getByLabelText('类型'), { target: { value: 'sqlite' } })
+    fireEvent.change(screen.getByLabelText(/数据库文件/), { target: { value: '/tmp/starhub.db' } })
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    const signal = fetch.mock.calls[0]?.[1]?.signal
+    expect(signal?.aborted).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(signal?.aborted).toBe(true)
+    view.unmount()
+  })
+
   it('tests an ssh password connection and shows success with elapsed time', async () => {
     const test = vi.fn((..._args: unknown[]) => ({ ok: true, message: 'OK', elapsed_ms: 12 }))
     const restore = stubTauriInternals({ test_ssh_connection: args => test(args) })
@@ -725,6 +745,7 @@ describe('NewConnectionDialog test connection', () => {
 
   it('drives the kb-interactive prompt and auto-accepts the hostkey during an mfa test', async () => {
     const pending = deferred<{ ok: boolean; message: string }>()
+    const codeResponse = Promise.withResolvers<null>()
     const calls: Array<{ cmd: string; args: Record<string, unknown> | undefined }> = []
     const stub = stubFullInternals({
       test_ssh_connection: (args) => {
@@ -736,13 +757,15 @@ describe('NewConnectionDialog test connection', () => {
         return null
       },
       ssh_kb_response: (args) => {
+        const first = !calls.some(call => call.cmd === 'ssh_kb_response')
         calls.push({ cmd: 'ssh_kb_response', args })
-        return null
+        return first ? codeResponse.promise : null
       },
     })
     try {
       render(<NewConnectionDialog asset={null} onClose={() => {}} onSaved={() => {}} />)
       fireEvent.change(screen.getByLabelText('认证方式'), { target: { value: 'mfa' } })
+      fireEvent.change(screen.getByLabelText('名称 *'), { target: { value: 'MFA host' } })
       fireEvent.change(screen.getByLabelText('主机 *'), { target: { value: 'h' } })
       fireEvent.change(screen.getByLabelText('用户名 *'), { target: { value: 'u' } })
       fireEvent.change(screen.getByLabelText(/MFA 主密码/), { target: { value: 'mpw' } })
@@ -753,6 +776,9 @@ describe('NewConnectionDialog test connection', () => {
       await stub.awaitSubscriptions(testSessionId)
       // 测试中瞬态:按钮与状态行都显示进行中
       expect(screen.getAllByText('测试中…').length).toBeGreaterThan(0)
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: '创建' }).disabled).toBe(true)
+      expect(screen.getByLabelText('主机 *').matches(':disabled')).toBe(true)
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: '取消' }).disabled).toBe(false)
       // hostkey 确认 → 自动接受(不持久化)
       stub.emitHostkey(testSessionId, { hostname: 'h', port: 22 })
       await vi.waitFor(() =>{  expect(calls.some(c => c.cmd === 'ssh_hostkey_response')).toBe(true) })
@@ -778,9 +804,17 @@ describe('NewConnectionDialog test connection', () => {
       expect(await screen.findByText('请输入验证码')).toBeTruthy()
       fireEvent.change(screen.getByLabelText('OTP:'), { target: { value: '789' } })
       fireEvent.click(screen.getByText('提交验证码'))
-      await vi.waitFor(() =>{  expect(calls.some(c => c.cmd === 'ssh_kb_response')).toBe(true) })
-      expect(calls.find(c => c.cmd === 'ssh_kb_response')?.args)
-        .toEqual({ id: testSessionId, responses: ['789'] })
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: '正在提交验证码…' }).disabled).toBe(true)
+      codeResponse.reject(new Error('桥接中断'))
+      expect(await screen.findByText('验证码提交失败：桥接中断')).toBeTruthy()
+      expect(screen.getByLabelText<HTMLInputElement>('OTP:').value).toBe('789')
+      fireEvent.click(screen.getByText('提交验证码'))
+      await vi.waitFor(() => {
+        expect(calls.filter(c => c.cmd === 'ssh_kb_response').map(c => c.args)).toEqual([
+          { id: testSessionId, responses: ['789'] },
+          { id: testSessionId, responses: ['789'] },
+        ])
+      })
       // 测试连接 config 含 kb_interactive 契约
       expect((calls[0]!.args!.config as Record<string, unknown>).kb_interactive)
         .toEqual({ enabled: true, password: 'mpw' })

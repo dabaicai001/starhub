@@ -245,10 +245,11 @@ describe('StarHubToolWorkspace', () => {
 
   it('opens the asset row click in the SYSTEM browser (host sidecar, host origin)', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const launch = Promise.withResolvers<{ ok: true }>()
     // 桌面壳里页面 origin 是 dsh-app://app,真实宿主源要靠桥内 host_origin 问出来
     const invoke = vi.fn((cmd: string) => {
       if (cmd === 'host_origin') return { origin: 'http://127.0.0.1:19387' }
-      if (cmd === 'open_external_url') return { ok: true }
+      if (cmd === 'open_external_url') return launch.promise
       return {}
     })
     stubHostBridge(invoke)
@@ -257,10 +258,16 @@ describe('StarHubToolWorkspace', () => {
       props.bridge.selectSubcategory('terminal')
       props.assets.update((d) => { d.assets = [sshAsset] })
       render(<StarHubToolWorkspace {...props} />)
-      screen.getByText('prod-server').closest('button')!.click()
+      const row = screen.getByTitle<HTMLButtonElement>('在浏览器中打开 prod-server')
+      fireEvent.click(row)
+      expect(row.disabled).toBe(true)
+      expect(row.getAttribute('aria-busy')).toBe('true')
+      fireEvent.click(row)
       await vi.waitFor(() => { expect(invoke).toHaveBeenCalledWith('open_external_url', expect.anything()) })
       expect(hostBridgeCalls().map(call => call.cmd)).toEqual(['host_origin', 'open_external_url'])
       expect(open).not.toHaveBeenCalled()
+      launch.resolve({ ok: true })
+      await waitFor(() => { expect(row.disabled).toBe(false) })
       // 左键 = 系统浏览器:不占壳内工作台面板(选择桥不动)
       expect(props.bridge.source.getSnapshot().assetId).toBeNull()
     } finally {
@@ -280,6 +287,17 @@ describe('StarHubToolWorkspace', () => {
     expect(sel.assetId).toBe('a1')
     expect(sel.routePrefix).toBe('/ssh')
     expect(sel.instanceId).toMatch(/^a1__\d+$/)
+  })
+
+  it('surfaces an error when the inline workbench action fails', async () => {
+    const props = workspaceProps()
+    props.bridge.selectSubcategory('terminal')
+    props.assets.update((d) => { d.assets = [sshAsset] })
+    const openAsset = vi.fn().mockRejectedValue(new Error('panel unavailable'))
+    render(<StarHubToolWorkspace {...props} openAsset={openAsset} />)
+    fireEvent.click(screen.getByRole('button', { name: '在工作台中打开 prod-server' }))
+    expect(openAsset).toHaveBeenCalledWith(sshAsset)
+    expect(await screen.findByText(/打开工作台失败.*panel unavailable/)).toBeTruthy()
   })
 
   it('opens the connection dialog in edit mode from the row edit button (without opening the page)', () => {
@@ -394,7 +412,9 @@ describe('StarHubToolWorkspace', () => {
   })
 
   it('falls back to window.open when the host has no open_external_url (旧宿主/预览)', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const replace = vi.fn()
+    const popup = { opener: window, location: { replace } }
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
     // 旧宿主:两个桥内命令都不认 → tauriInvoke reject → 用页面自身 origin 回落
     stubHostBridge(() => { throw new Error('method not found') })
     try {
@@ -403,10 +423,12 @@ describe('StarHubToolWorkspace', () => {
       props.assets.update((d) => { d.assets = [{ ...sshAsset, config: {} }] })
       render(<StarHubToolWorkspace {...props} />)
       screen.getByText('prod-server').closest('button')!.click()
-      await vi.waitFor(() => { expect(open).toHaveBeenCalledTimes(1) })
-      expect(open.mock.calls[0]?.[0]).toBe(
+      await waitFor(() => { expect(replace).toHaveBeenCalledWith(
         `${window.location.origin}/starhub-react/index.html?asset=a1&workbench=ssh`,
-      )
+      ) })
+      expect(open).toHaveBeenCalledWith('about:blank', '_blank')
+      expect(popup.opener).toBeNull()
+      expect(screen.queryByText(/未能唤起系统浏览器/)).toBeNull()
     } finally {
       restoreHostBridge()
       open.mockRestore()
@@ -454,6 +476,7 @@ describe('StarHubToolWorkspace', () => {
       await vi.waitFor(() =>{  expect(write).toHaveBeenCalled() })
       // 无副标题资产:复制文案只有名称;写失败不置 copied
       expect(write).toHaveBeenCalledWith('prod-server')
+      expect(await screen.findByText('复制连接信息失败，请重试。')).toBeTruthy()
       fireEvent.contextMenu(screen.getByText('prod-server'))
       expect(screen.getByText('复制连接信息')).toBeTruthy()
       expect(screen.queryByText('已复制')).toBeNull()

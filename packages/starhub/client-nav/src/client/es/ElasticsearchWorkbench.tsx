@@ -37,6 +37,7 @@ import {
 import { healthColor, fieldTypeColor } from './es-service.ts'
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
 import { TabPane } from '../TabPane.tsx'
+import { interactionMessages } from '../interaction-messages.ts'
 import css from './ElasticsearchWorkbench.module.css'
 
 /** Connection state. */
@@ -53,7 +54,7 @@ const DEFAULT_PAGE_SIZE = 20
 
 export interface ElasticsearchWorkbenchProps {
   asset: RustAsset
-  onClose: () => void
+  onClose?: () => void
 }
 
 /** Build connect params from the asset config (mirrors Vue initConnection). */
@@ -100,6 +101,8 @@ function fieldRow(f: { name?: unknown; type?: unknown; children?: unknown }): Ma
  * @returns the ES workbench.
  */
 export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenchProps) {
+  const messages = interactionMessages()
+  const [connectionAttempt, setConnectionAttempt] = useState(0)
   const [connState, setConnState] = useState<ConnState>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<EsTab>('overview')
@@ -210,7 +213,7 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
       if (connId !== null) void esDisconnect(connId).catch(() => {})
       connRef.current = null
     }
-  }, [asset, fail])
+  }, [asset, fail, connectionAttempt])
 
   const reloadIndices = useCallback(async () => {
     /* v8 ignore next 1 -- 连接未就绪防护(重载仅在有 connId 的 UI 路径触发) */
@@ -495,7 +498,7 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
     return String(primitive)
   }, [])
   if (connState === 'connecting') {
-    return <div className={css.frame}><div className={css.center}>正在连接…</div></div>
+    return <div className={css.frame}><div className={css.center} role="status">{messages.connecting}</div></div>
   }
   if (connState === 'error') {
     // v8 ignore next 1 -- error 态下 error 恒非空(fail 已 setError),回退文案不可达
@@ -503,8 +506,12 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
     return (
       <div className={css.frame}>
         <div className={css.center}>
-          <p className={css.error}>{message}</p>
-          <button type="button" className={css.closeBtn} onClick={onClose}>关闭</button>
+          <p className={css.error} role="alert">{message}</p>
+          <button type="button" className={css.headerBtn} onClick={() => {
+            setConnState('connecting')
+            setConnectionAttempt(attempt => attempt + 1)
+          }}>{messages.retry}</button>
+          {onClose !== undefined && <button type="button" className={css.closeBtn} onClick={onClose}>关闭</button>}
         </div>
       </div>
     )
@@ -525,7 +532,7 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
           <button type="button" className={tab === 'index' ? css.tabActive : ''} onClick={() =>{  openTab('index') }}>索引</button>
           <button type="button" className={css.headerBtn} onClick={() =>{  setShowNewIndex(true) }}>新建索引</button>
         </nav>
-        <button type="button" className={css.closeBtn} onClick={onClose}>关闭</button>
+        {onClose !== undefined && <button type="button" className={css.closeBtn} onClick={onClose}>关闭</button>}
       </header>
 
       {error !== null && <div className={css.error}>{error}</div>}

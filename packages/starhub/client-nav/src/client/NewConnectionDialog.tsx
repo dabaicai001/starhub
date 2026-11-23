@@ -16,9 +16,10 @@
  * 测试中/成功/失败原因;ssh 测试期间订阅 kb-interactive(内联验证码输入)
  * 与 hostkey-confirm(自动接受、不持久化)事件,与 Vue 版 onTestConnection 一致。
  */
-import { useRef, useState } from 'react'
-import { IconCloseOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { IconCloseOutlineMedium, IconLoadingOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isTauriRuntime, tauriInvoke, tauriListen } from './tauri.ts'
+import { interactionMessages } from './interaction-messages.ts'
 import type { RustAsset } from './store.ts'
 import s from './settings/settings.module.css'
 
@@ -106,6 +107,7 @@ export interface NewConnectionDialogProps {
  * @returns the dialog markup.
  */
 export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDialogProps) {
+  const messages = interactionMessages()
   const editing = asset !== null
   // 无宿主桥(裸浏览器预览)只展示提示、禁用提交。
   const preview = typeof window === 'undefined' || !isTauriRuntime()
@@ -149,15 +151,36 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
     if (asset === null) return ''
     return str(asset.config, 'remoteHost') || str(asset.config, 'socketPath')
   })
-  const [busy, setBusy] = useState(false)
+  const [mutation, setMutation] = useState<'save' | 'delete' | null>(null)
   const [error, setError] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [testStatus, setTestStatus] = useState<TestStatus>('idle')
   const [testMessage, setTestMessage] = useState('')
   const [kbPrompt, setKbPrompt] = useState<KbInteractiveEvent | null>(null)
   const [kbAnswers, setKbAnswers] = useState<string[]>([])
+  const [submittingCode, setSubmittingCode] = useState(false)
+  const testRequestRef = useRef<AbortController | null>(null)
   const testSessionIdRef = useRef('')
   const keyFileRef = useRef<HTMLInputElement | null>(null)
+  const busy = mutation !== null || testStatus === 'testing'
+  const closeDialog = useCallback(() => {
+    if (mutation !== null) return
+    testRequestRef.current?.abort()
+    onClose()
+  }, [mutation, onClose])
+
+  useEffect(() => () => { testRequestRef.current?.abort() }, [])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      closeDialog()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => { document.removeEventListener('keydown', onKeyDown, true) }
+  }, [closeDialog])
 
   /* v8 ignore next -- kind 恒取自 CONN_KINDS,find 必命中;回退仅是类型安全兜底 */
   const kindMeta = CONN_KINDS.find(k => k.kind === kind) ?? CONN_KINDS[0]
@@ -274,7 +297,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
   const onSubmit = async () => {
     /* v8 ignore next -- 提交按钮 disabled(!canSubmit)时已不可触发,防御性保留 */
     if (!canSubmit) return
-    setBusy(true)
+    setMutation('save')
     setError('')
     try {
       if (editing) {
@@ -295,7 +318,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy(false)
+      setMutation(null)
     }
   }
 
@@ -306,7 +329,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
       setConfirmingDelete(true)
       return
     }
-    setBusy(true)
+    setMutation('delete')
     setError('')
     try {
       await tauriInvoke('delete_asset', { id: asset.id })
@@ -316,7 +339,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
       setError(e instanceof Error ? e.message : String(e))
       setConfirmingDelete(false)
     } finally {
-      setBusy(false)
+      setMutation(null)
     }
   }
 
@@ -395,7 +418,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
    */
   const onTestConnection = async () => {
     /* v8 ignore next -- 测试按钮 disabled 时已不可触发,防御性保留 */
-    if (!canTest || testStatus === 'testing') return
+    if (!canTest || testRequestRef.current !== null) return
     setError('')
     if (kind === 'ssh' && editing) {
       if (sshAuth === 'password' && password === '') {
@@ -416,8 +439,18 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
     }
     setTestStatus('testing')
     setTestMessage('')
+    const testRequest = new AbortController()
+    const { signal } = testRequest
+    testRequestRef.current = testRequest
     let unlistenKb: (() => Promise<void>) | null = null
     let unlistenHostkey: (() => Promise<void>) | null = null
+    const unsubscribe = () => {
+      void unlistenKb?.()
+      void unlistenHostkey?.()
+      unlistenKb = null
+      unlistenHostkey = null
+    }
+    signal.addEventListener('abort', unsubscribe, { once: true })
     try {
       if (kind === 'ssh') {
         const testSessionId = `test-${Date.now()}`
@@ -425,14 +458,22 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
         unlistenKb = await tauriListen<KbInteractiveEvent>(
           `ssh:kb-interactive:${testSessionId}`,
           (payload) => {
+            if (signal.aborted) return
             setKbAnswers(payload.autoFill.map(v => v ?? ''))
             setKbPrompt(payload)
           },
         )
+        if (signal.aborted) return
         // 测试连接自动接受 host key(不持久化),与 Vue 版一致
         unlistenHostkey = await tauriListen(`ssh:hostkey-confirm:${testSessionId}`, () => {
-          void tauriInvoke('ssh_hostkey_response', { id: testSessionId, allowed: true, persist: false })
+          void tauriInvoke('ssh_hostkey_response', { id: testSessionId, allowed: true, persist: false }, signal)
+            .catch((error: unknown) => {
+              if (!signal.aborted && testSessionIdRef.current === testSessionId) {
+                setError(error instanceof Error ? error.message : String(error))
+              }
+            })
         })
+        if (signal.aborted) return
         // MFA 档用 mfaPassword 做主认证密码,并启用 keyboard-interactive
         const auth: Record<string, unknown> = sshAuth === 'key'
           ? { PrivateKey: { key: privateKey, passphrase: passphrase !== '' ? passphrase : null } }
@@ -446,31 +487,51 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
         if (sshAuth === 'mfa') {
           config.kb_interactive = { enabled: true, password: mfaPassword !== '' ? mfaPassword : null }
         }
-        applyTestResult(await tauriInvoke<TestResult>('test_ssh_connection', { config, testSessionId }))
+        const result = await tauriInvoke<TestResult>('test_ssh_connection', { config, testSessionId }, signal)
+        if (!signal.aborted) applyTestResult(result)
       } else {
         const request = buildTestRequest()
-        applyTestResult(await tauriInvoke<TestResult>(request.cmd, request.args))
+        const result = await tauriInvoke<TestResult>(request.cmd, request.args, signal)
+        if (!signal.aborted) applyTestResult(result)
       }
     } catch (e: unknown) {
-      setTestStatus('fail')
-      setTestMessage(e instanceof Error ? e.message : String(e))
+      if (!signal.aborted) {
+        setTestStatus('fail')
+        setTestMessage(e instanceof Error ? e.message : String(e))
+      }
     } finally {
-      if (unlistenKb !== null) void unlistenKb()
-      if (unlistenHostkey !== null) void unlistenHostkey()
-      setKbPrompt(null)
+      unsubscribe()
+      if (!signal.aborted) {
+        setKbPrompt(null)
+        setSubmittingCode(false)
+      }
+      testRequestRef.current = null
       testSessionIdRef.current = ''
     }
   }
 
   /** 提交 keyboard-interactive 应答(MFA 测试连接期间的 TOTP 输入)。 */
-  const onKbSubmit = () => {
-    // 面板只在测试进行中渲染,此时 testSessionIdRef 已赋值
-    void tauriInvoke('ssh_kb_response', { id: testSessionIdRef.current, responses: kbAnswers })
-    setKbPrompt(null)
+  const onKbSubmit = async () => {
+    const id = testSessionIdRef.current
+    const prompt = kbPrompt
+    const signal = testRequestRef.current?.signal
+    if (signal === undefined || signal.aborted || id === '' || prompt === null || submittingCode) return
+    setSubmittingCode(true)
+    setError('')
+    try {
+      await tauriInvoke('ssh_kb_response', { id, responses: kbAnswers }, signal)
+      if (!signal.aborted) setKbPrompt(current => current === prompt ? null : current)
+    } catch (error) {
+      if (!signal.aborted && testSessionIdRef.current === id) {
+        setError(messages.codeSubmissionFailed(error instanceof Error ? error.message : String(error)))
+      }
+    } finally {
+      if (!signal.aborted && testSessionIdRef.current === id) setSubmittingCode(false)
+    }
   }
 
   return (
-    <div className={s.dialogBackdrop} role="presentation" onMouseDown={onClose}>
+    <div className={s.dialogBackdrop} role="presentation" onMouseDown={closeDialog}>
       <div
         className={s.dialogPanel}
         role="dialog"
@@ -480,14 +541,17 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
       >
         <div className={s.dialogHead}>
           <span className={s.dialogTitle}>{editing ? `编辑连接 · ${asset.name}` : '新建连接'}</span>
-          <button type="button" className={s.iconButton} aria-label="关闭" onClick={onClose}>
+          <button type="button" className={s.iconButton} aria-label="关闭" disabled={mutation !== null} onClick={closeDialog}>
             <IconCloseOutlineMedium size={14} />
           </button>
         </div>
         {preview && (
           <div className={s.hint}>浏览器预览模式:没有 StarHub 桌面端后端(Tauri IPC),请在桌面应用中管理连接。</div>
         )}
-        <div className={s.formGrid}>
+        <fieldset className={s.formGrid} disabled={busy} onChange={() => {
+          if (testStatus !== 'idle') setTestStatus('idle')
+          if (confirmingDelete) setConfirmingDelete(false)
+        }}>
           <div className={s.formField}>
             <label className={s.fieldLabel} htmlFor="conn-kind">类型</label>
             <select
@@ -799,13 +863,20 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
               </label>
             </div>
           )}
-        </div>
-        {error !== '' && <div className={s.errorText}>{error}</div>}
+        </fieldset>
+        {error !== '' && <div className={s.errorText} role="alert">{error}</div>}
+        {mutation !== null && (
+          <div className={s.testPending} role="status">
+            <IconLoadingOutlineMedium className={s.spin} size={13} />
+            {mutation === 'delete' ? messages.deletingConnection : editing ? messages.savingConnection : messages.creatingConnection}
+          </div>
+        )}
         {testStatus !== 'idle' && (
           <div
             className={testStatus === 'success' ? s.testOk : testStatus === 'fail' ? s.testFail : s.testPending}
-            role="status"
+            role={testStatus === 'fail' ? 'alert' : 'status'}
           >
+            {testStatus === 'testing' && <IconLoadingOutlineMedium className={s.spin} size={13} />}
             {testStatus === 'testing' ? '测试中…' : testMessage}
           </div>
         )}
@@ -814,7 +885,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
             // Enter 在验证码输入框提交(等价点击「提交验证码」)。
             if (event.key === 'Enter') {
               event.preventDefault()
-              onKbSubmit()
+              void onKbSubmit()
             }
           }}>
             {kbPrompt.instructions !== '' && <div className={s.fieldHint}>{kbPrompt.instructions}</div>}
@@ -828,6 +899,7 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
                   className={s.input}
                   type={prompt.echo ? 'text' : 'password'}
                   value={kbAnswers[index] ?? ''}
+                  disabled={submittingCode}
                   onChange={(event) => {
                     const next = [...kbAnswers]
                     next[index] = event.target.value
@@ -836,7 +908,9 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
                 />
               </div>
             ))}
-            <button type="button" className={s.btnPrimary} onClick={onKbSubmit}>提交验证码</button>
+            <button type="button" className={s.btnPrimary} disabled={submittingCode} onClick={() => void onKbSubmit()}>
+              {submittingCode ? messages.submittingCode : '提交验证码'}
+            </button>
           </div>
         )}
         <div className={s.actionRow}>
@@ -847,21 +921,21 @@ export function NewConnectionDialog({ asset, onClose, onSaved }: NewConnectionDi
               disabled={preview || busy}
               onClick={() => void onDelete()}
             >
-              {confirmingDelete ? '确认删除?' : '删除连接'}
+              {mutation === 'delete' ? messages.deletingConnection : confirmingDelete ? '确认删除?' : '删除连接'}
             </button>
           )}
           <span className={s.spacer} />
           <button
             type="button"
             className={s.btnOutline}
-            disabled={!canTest || testStatus === 'testing'}
+            disabled={!canTest}
             onClick={() => void onTestConnection()}
           >
             {testStatus === 'testing' ? '测试中…' : '测试连接'}
           </button>
-          <button type="button" className={s.btnSecondary} disabled={busy} onClick={onClose}>取消</button>
+          <button type="button" className={s.btnSecondary} disabled={mutation !== null} onClick={closeDialog}>取消</button>
           <button type="button" className={s.btnPrimary} disabled={!canSubmit} onClick={() => void onSubmit()}>
-            {busy ? '保存中…' : editing ? '保存' : '创建'}
+            {mutation === 'save' ? (editing ? messages.savingConnection : messages.creatingConnection) : editing ? '保存' : '创建'}
           </button>
         </div>
       </div>

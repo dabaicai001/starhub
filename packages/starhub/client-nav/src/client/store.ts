@@ -45,6 +45,14 @@ export interface StarHubAssetListState {
 /** 顶层帧宿主桥直调(共享桥,见 tauri.ts);无宿主桥(裸浏览器预览)时 reject。 */
 import { isTauriRuntime, tauriInvoke } from './tauri.ts'
 
+const ASSET_LOAD_TIMEOUT_MS = 15_000
+
+/** Read the local asset list with a short budget suitable for opening a view. */
+export function loadStarHubAssets(signal?: AbortSignal): Promise<RustAsset[]> {
+  const timeout = AbortSignal.timeout(ASSET_LOAD_TIMEOUT_MS)
+  return tauriInvoke('get_assets', undefined, signal === undefined ? timeout : AbortSignal.any([signal, timeout]))
+}
+
 /**
  * 资产列表 holder:apply 持有的裸 source + refresh 回调。session-maybe 席位
  * 在无会话时框架不挂注册侧 store,资产状态因此不走 defineStore;组件在
@@ -72,7 +80,7 @@ export function createStarHubAssets(): StarHubAssets {
       return
     }
     source.update((d) => { d.loading = true; d.error = null; d.preview = false })
-    tauriInvoke<RustAsset[]>('get_assets')
+    loadStarHubAssets()
       .then((list) => { source.update((d) => { d.assets = list; d.loading = false }) })
       .catch((e: unknown) => {
         source.update((d) => {

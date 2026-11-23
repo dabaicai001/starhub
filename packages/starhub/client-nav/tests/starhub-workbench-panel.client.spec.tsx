@@ -60,6 +60,15 @@ describe('StarHubWorkbenchPanel', () => {
     expect(frame.getAttribute('src')).toBe('/starhub-react/index.html?asset=a2')
   })
 
+  it('shows loading until the active iframe finishes loading', () => {
+    const { store, rerender } = renderPanel()
+    store.open({ key: 'a1', title: '验收机', url: '/starhub-react/index.html?asset=a1' })
+    rerender()
+    expect(screen.getByRole('status').textContent).toContain('正在加载工作台…')
+    fireEvent.load(screen.getByTitle('验收机'))
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
   it('clicking a tab activates that page; the close button closes it', () => {
     const { store, activated, closed, rerender } = renderPanel()
     store.open({ key: 'a1', title: '验收机', url: '/starhub-react/index.html?asset=a1' })

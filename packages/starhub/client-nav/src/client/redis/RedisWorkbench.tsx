@@ -468,7 +468,7 @@ function DbTreeRow({ db, open, size, actions }: {
  * @param props - the target asset + close callback.
  * @returns the Redis workbench overlay.
  */
-export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () => void }) {
+export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: () => void }) {
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   /** 连接尝试序号:失败后点「重试」自增,触发建连 effect 重跑。 */
@@ -1056,14 +1056,14 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose: 
             <span className={css.badge} data-testid="redis-head-badge">db{shownDb}</span>
             <span className={css.keyCount} data-testid="redis-head-count">{(shownEntry?.size ?? 0).toLocaleString()} keys</span>
           </div>
-          <button type="button" className={css.closeButton} onClick={onClose}>关闭</button>
+          {onClose !== undefined && <button type="button" className={css.closeButton} onClick={onClose}>关闭</button>}
         </header>
 
         {connectError !== null && (
           <div className={css.errorBar}>
             <span>{connectError}</span>
             <button type="button" className={css.retryButton} onClick={retryConnect}>重试</button>
-            <button type="button" className={css.secondaryButton} onClick={onClose}>返回</button>
+            {onClose !== undefined && <button type="button" className={css.secondaryButton} onClick={onClose}>返回</button>}
           </div>
         )}
 
