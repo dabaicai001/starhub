@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.3",
     "@deepseek-ai/dsh-client-ui-theme": "0.2.2-rc.3",
     "@deepseek-ai/dsh-starhub-client-nav": "workspace:*",
     "react": "^18.2.0",

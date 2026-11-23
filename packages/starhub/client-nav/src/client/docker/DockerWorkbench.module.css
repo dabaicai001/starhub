@@ -121,3 +121,21 @@
 
 /* toast */
 .toast { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); padding: 8px 16px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-shadow-lv3); }
+
+@media (max-width: 680px) {
+  .header, .contentToolbar, .dash, .list { padding-inline: 10px; }
+  .contentToolbar { flex-wrap: wrap; }
+  .contentTab, .contentTabActive { padding-inline: 8px; min-height: 38px; }
+  .contentTab, .contentTabActive, .check { white-space: nowrap; }
+  .dashCard { min-width: 0; flex: 1 1 86px; padding-block: 6px; }
+  .errorBar { flex-wrap: wrap; overflow-wrap: anywhere; }
+  .listHead, .imgRow { min-width: 380px; }
+  .modal { width: min(360px, calc(100vw - 24px)); }
+  .toast { width: max-content; max-width: calc(100% - 24px); overflow-wrap: anywhere; }
+}
+
+@media (max-width: 480px) {
+  .row { flex-wrap: wrap; gap: 4px; }
+  .rowInfo { flex-basis: 100%; }
+  .rowActions { margin-inline-start: auto; }
+}

@@ -31,7 +31,7 @@
  */
 
 import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import type { RustAsset } from './store.ts'
 import { tauriInvoke } from './tauri.ts'
 import { DbDataGrid, cellText, isNumericCell } from './DbDataGrid.tsx'
@@ -50,6 +50,7 @@ import { DbDashboard } from './dashboard/DbDashboard.tsx'
 import type { CreateTableDbType } from './ddlGenerator.ts'
 import { formatSql, splitStatements } from './sqlFormat.ts'
 import { addHistory, clearHistory, loadHistory, type SqlHistoryEntry } from './sqlHistory.ts'
+import { interactionMessages } from './interaction-messages.ts'
 import css from './DbWorkbench.module.css'
 
 /** db_mysql_execute 的返回(与 QueryResult 同构;SQL 执行结果复用)。 */
@@ -468,7 +469,7 @@ function disconnectCommand(dbType: string): string {
  * @param props - the target asset and a close callback.
  * @returns the workbench overlay.
  */
-export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () => void }) {
+export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: () => void }) {
   const [connectError, setConnectError] = useState<string | null>(null)
   const [dbs, setDbs] = useState<TreeNode[]>([])
   const [dbsLoading, setDbsLoading] = useState(false)
@@ -563,6 +564,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
   // 监控右栏开关(MySQL / PG / Redis 有 Dashboard;默认关闭,选择持久化进树记忆)。
   const monitorSupported = ['mysql', 'postgresql', 'redis'].includes(typeof asset.config.dbType === 'string' ? asset.config.dbType : 'mysql')
   const [showMonitor, setShowMonitor] = useState(false)
+  const [treeCollapsed, setTreeCollapsed] = useState(false)
   // 监控右栏宽度(px):拖拽左边框调整,夹在 min 与 max 之间;内存态即可。
   const [monitorWidth, setMonitorWidth] = useState(340)
   const monitorResizeRef = useRef(false)
@@ -1319,6 +1321,11 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
           </div>
           <span className={css.spacer} />
           <div className={css.headerActions}>
+            <button type="button" className={`${css.iconChip} ${css.treeToggle}`}
+              aria-expanded={!treeCollapsed} aria-controls="starhub-database-objects"
+              onClick={() => { setTreeCollapsed(collapsed => !collapsed) }}>
+              <IconDatabaseOutlineMedium size={13} /> {interactionMessages().databaseObjects}
+            </button>
             {monitorSupported && (
               <button
                 type="button"
@@ -1329,7 +1336,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
                 aria-pressed={showMonitor}
               ><IconDataOutlineMedium size={13} /> 监控</button>
             )}
-            <button type="button" className={css.iconButton} onClick={onClose} title="关闭工作区" aria-label="关闭工作区"><IconCloseOutlineMedium size={15} /></button>
+            {onClose !== undefined && <button type="button" className={css.iconButton} onClick={onClose} title="关闭工作区" aria-label="关闭工作区"><IconCloseOutlineMedium size={15} /></button>}
           </div>
         </header>
         {connectError !== null && (
@@ -1340,7 +1347,8 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
           </div>
         )}
         <div className={css.body}>
-          <aside className={css.tree} style={{ width: treeWidth }}>
+          <aside id="starhub-database-objects" className={`${css.tree} ${treeCollapsed ? css.treeCollapsed : ''}`}
+            style={{ '--starhub-db-tree-width': `${treeWidth}px` } as CSSProperties}>
             <div className={css.treeToolbar}>
               <span className={css.treeTitle}>数据库对象</span>
               {dbs.length > 0 && <span className={css.treeMeta}>{dbs.length} 个库</span>}
@@ -1520,7 +1528,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose: () 
             />
           )}
           {monitorSupported && showMonitor && (
-            <aside className={css.monitor} style={{ width: monitorWidth }}>
+            <aside className={css.monitor} style={{ '--starhub-db-monitor-width': `${monitorWidth}px` } as CSSProperties}>
               <DbDashboard
                 connId={connId}
                 dbType={dbType}

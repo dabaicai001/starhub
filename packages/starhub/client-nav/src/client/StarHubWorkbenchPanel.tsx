@@ -11,15 +11,13 @@
  * iframe 换 `src` 会触发整页导航,切回资产时工作台里的查询标签、滚动位置、
  * 连接与未保存草稿全部重来。
  *
- * 挂在 ui-layout 的 root-scope `main` keyed 槽(key=`starhub-workbench`);
- * 入口(资产行点击 / `starhub://open-asset`)经 `layout.selectPanel` 切到本面板,
- * 关掉最后一页时由 index.ts 的订阅把面板让回会话视图。无页时渲染兜底空态,
- * 不再返回 null 把主区留成白板(状态恢复/HMR 后可能命中)。
+ * 独立主面板用于没有会话或右侧栏服务的情况,挂在 `main` keyed 槽。
+ * 右侧栏由 DSH 管理标签与关闭交互,两种布局共用 iframe 渲染。
  *
  * 标签交互:v0.141.0 起方向键 / Home / End 在标签间移动并同步激活,
  * 关闭钮常显但降低不透明度;中键单击标签也可关页。
  */
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import clsx from 'clsx'
 import type { PropsRuntime, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
@@ -28,7 +26,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { IconCloseOutlineMedium, IconLoadingOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { interactionMessages } from './interaction-messages.ts'
-import type { WorkbenchPage, WorkbenchPanelState } from './workbench-panel.ts'
+import { embeddedWorkbenchUrl, type WorkbenchPanelState } from './workbench-panel.ts'
+import { listenForTerminalReference } from './terminal/reference.ts'
 import css from './StarHubWorkbenchPanel.module.css'
 
 /** Business face injected by the registration: page writes + the page store. */
@@ -39,6 +38,7 @@ export interface StarHubWorkbenchPanelInjected {
   closePage: (key: string) => void
   /** 无页时的兜底出口:把主面板让回会话视图。 */
   closeWorkbench: () => void
+  referenceTerminal?: TerminalReference | undefined
   hooks: {
     /** 页簿(裸 source,渲染器绑定为 useWorkbench)。 */
     workbench: SnapshotStore<WorkbenchPanelState>
@@ -51,17 +51,32 @@ export type StarHubWorkbenchPanelProps =
   & InjectFace<StarHubWorkbenchPanelInjected>
 
 /** Keep loaded pages mounted and show feedback while the active frame navigates. */
-function WorkbenchFrame({ page, index, active }: { page: WorkbenchPage; index: number; active: boolean }) {
+export type TerminalReference = (assetId: string, terminalSessionId: string) => Promise<void>
+
+function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTerminal }: {
+  assetId: string
+  title: string
+  url: string
+  index?: number
+  active?: boolean
+  referenceTerminal?: TerminalReference | undefined
+}) {
   const [loaded, setLoaded] = useState(false)
+  const frame = useRef<HTMLIFrameElement>(null)
+  useEffect(() => {
+    if (frame.current === null || referenceTerminal === undefined) return
+    return listenForTerminalReference(frame.current, assetId, referenceTerminal)
+  }, [assetId, referenceTerminal])
   return (
     <>
       <iframe
-        id={`starhub-panel-${index}`}
-        aria-labelledby={`starhub-tab-${index}`}
-        role="tabpanel"
+        ref={frame}
+        id={index === undefined ? undefined : `starhub-panel-${index}`}
+        aria-labelledby={index === undefined ? undefined : `starhub-tab-${index}`}
+        role={index === undefined ? undefined : 'tabpanel'}
         className={clsx(css.frame, !active && css.frameHidden)}
-        title={page.title}
-        src={page.url}
+        title={title}
+        src={url}
         allow="clipboard-read; clipboard-write; fullscreen"
         aria-hidden={active ? undefined : true}
         tabIndex={active ? 0 : -1}
@@ -77,6 +92,24 @@ function WorkbenchFrame({ page, index, active }: { page: WorkbenchPage; index: n
   )
 }
 
+/** Render one asset inside a native DSH right-sidebar tab. */
+export function StarHubSidebarWorkbench({ assetId, title, referenceTerminal }: {
+  assetId: string
+  title: string
+  referenceTerminal: TerminalReference
+}) {
+  // Keep the iframe URL stable when the host theme changes. Open pages update
+  // their theme through the existing BroadcastChannel.
+  const [url] = useState(() => embeddedWorkbenchUrl(`/starhub-react/index.html?${new URLSearchParams({ asset: assetId })}`))
+  return (
+    <div className={css.panel}>
+      <div className={css.frameStack}>
+        <WorkbenchFrame assetId={assetId} title={title} url={url} referenceTerminal={referenceTerminal} />
+      </div>
+    </div>
+  )
+}
+
 /**
  * Render the in-shell workbench: tab strip over a same-origin iframe.
  * @param props - main-panel runtime share + injected page writes/store.
@@ -87,6 +120,7 @@ export function StarHubWorkbenchPanel({
   activatePage,
   closePage,
   closeWorkbench,
+  referenceTerminal,
 }: StarHubWorkbenchPanelProps): JSX.Element {
   const state = useWorkbench((snapshot) => snapshot)
   const tabRefs = useRef(new Map<string, HTMLButtonElement>())
@@ -183,7 +217,8 @@ export function StarHubWorkbenchPanel({
         {/* 一页一个常驻 iframe:切标签只改可见性。此前是单个 iframe 改 src,
             Chromium 会重新导航 —— 页面内查询标签、滚动、连接与草稿整页重来。 */}
         {state.pages.map((page, index) => (
-          <WorkbenchFrame key={`${page.key}:${page.url}`} page={page} index={index} active={page.key === active.key} />
+          <WorkbenchFrame key={`${page.key}:${page.url}`} assetId={page.key} title={page.title} url={page.url}
+            index={index} active={page.key === active.key} referenceTerminal={referenceTerminal} />
         ))}
       </div>
     </div>

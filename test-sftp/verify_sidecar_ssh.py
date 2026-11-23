@@ -215,9 +215,8 @@ def main():
             text = reply.get("result", {}).get("text", "")
             check("ssh_exec", "hello-from-sidecar" in text, repr(text))
 
-            # 4b) 页面级复用(v0.140.1):助手绑定携带所在终端页的会话 id,
-            #     ssh_exec 经绑定解析(不带 assetId)也必须落到那一页的连接
-            reply = call("bind-page", "bind_asset_context", {
+            # 4b) 在主会话中引用一条已连接的终端。
+            reply = call("bind-page", "ui.bind_asset_context", {
                 "assetId": "stub-ssh",
                 "sessionId": "agent-verify-1",
                 "terminalSessionId": "verify-term",
@@ -229,19 +228,24 @@ def main():
             text = reply.get("result", {}).get("text", "")
             check("ssh_exec_page_scoped", "page-scoped-run" in text, repr(text))
 
-            # 4c) 绑定的页面连接已死 → 回落同资产存活会话(仍是 verify-term),
-            #     不会因为顺延而失败
+            # 4c) UI 拒绝引用死连接。已有绑定失效时，同一资产的另一条连接也不能接管。
+            reply = call("reject-dead-page", "ui.bind_asset_context", {
+                "assetId": "stub-ssh",
+                "sessionId": "agent-verify-2",
+                "terminalSessionId": "verify-term__dead",
+            })
+            check("reject_dead_terminal_reference", "error" in reply, reply)
             reply = call("bind-stale-page", "bind_asset_context", {
                 "assetId": "stub-ssh",
                 "sessionId": "agent-verify-2",
                 "terminalSessionId": "verify-term__dead",
             })
             check("bind_stale_page", reply.get("result", {}).get("action") == "bound", reply)
-            reply = call("exec-fallback", "ssh_exec", {
+            reply = call("exec-disconnected", "ssh_exec", {
                 "sessionId": "agent-verify-2", "command": "echo fallback-run",
             })
             text = reply.get("result", {}).get("text", "")
-            check("ssh_exec_fallback", "fallback-run" in text, repr(text))
+            check("ssh_exec_stays_on_bound_terminal", "尚未连接" in text and "fallback-run" not in text, repr(text))
 
             # 5) 会话状态(终端已连接;页面级绑定指明「本终端页的连接」)
             reply = call("status-1", "ssh_session_status", {"assetId": "stub-ssh"})

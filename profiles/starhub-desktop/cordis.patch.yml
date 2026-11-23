@@ -60,8 +60,8 @@
         sandbox: danger-full-access
         approval: ask
 
-# StarHub 壳导航由 client-nav 注册 DSH React 原生工作台入口(侧栏行 + 主面板:
-# 工具 / 工作台 / 直播三个 keyed main 槽)。starhub-host-static 将 React 资产
+# StarHub 的连接页默认使用 DSH 右侧栏标签，无会话时回落独立工作台主面板。
+# starhub-host-static 将 React 资产
 # 工作台托管在 /starhub-react/,dist 路径由 provisioning 注入(windowDist)。
 - insert:
     - id: client-nav
@@ -124,10 +124,3 @@
       name: '@deepseek-ai/dsh-starhub-domain-events'
     - id: starhub-live-context
       name: '@deepseek-ai/dsh-starhub-live-context'
-    # SSH 终端页 AI 助手:每终端页一个 agent 作用域会话(模型复用
-    # agentDefaultModel,面板可切换),工具面 restrict 到本资产 SSH/SFTP,
-    # 经 starhub/bind.asset 绑定资产;审批在助手面板内应答(answerer 走
-    # 本插件自己的 approval/request 监听,prepend,不影响壳内审批 UI)。
-    # 面板经同源 /starhub/api/assistant/* 路由驱动(无 dsh client runtime)。
-    - id: starhub-ssh-assistant
-      name: '@deepseek-ai/dsh-starhub-ssh-assistant'

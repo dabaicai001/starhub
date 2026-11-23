@@ -5,14 +5,12 @@
  * 必须在 main 有同名注册),显示当前子类(终端 / 数据库 / Docker)的资产
  * (连接)列表;无资产概念的子类(Android)渲染各自的工作面板。
  * 子类行为手风琴:点行展开,再点一次收起(v0.130.0;null = 全部收起)。
- * 资产行交互(v0.133.5 起):**左键点行 = 在系统默认浏览器里打开**该实例的独立
- * 操作页(与壳内面板同一个 URL,方便拖到第二块屏 / 与主壳并排);行尾与右键菜单都可
- * 打开壳内工作台主面板页。行尾 hover 出编辑钮,
+ * 点击连接默认打开壳内工作台。右键可选择在系统浏览器中打开,
+ * 行尾 hover 出编辑钮,
  * 经 openConnectionManager(asset) 打开连接对话框的编辑模式;列头带资产数、
  * 刷新与「新建连接」入口,右上角 × 回会话视图(selectPanel(null))。
  *
- * 资产行右键菜单(与任务 3 的 dsh 右键菜单同款 Menu 原语):在页面内打开(壳内工作台
- * 面板页)/ 引用到当前对话框(插入 `@` 引用 chip 并轻绑定资产上下文,与 `@` pick
+ * 资产行右键菜单:在浏览器中打开 / 引用到当前对话框(插入 `@` 引用 chip 并轻绑定资产上下文,与 `@` pick
  * 同语义)/ 编辑 / 复制连接信息(名称 + user@host 到剪贴板)/ 删除(删除复用连接
  * 对话框编辑模式内的两步确认删除入口,不在菜单里直接执行破坏性操作)。
  *
@@ -25,8 +23,7 @@
  * 而不是红错;其他拉取失败给错误 + 重试。
  *
  * 历史形态:rc.2 起先挂 shell.overlay 浮层(侧栏底部 footer.action 入口 +
- * toolsPanel 开关桥);v0.123.2 迁主面板,开关桥删除,入口与「执行」头部
- * 按钮统一走 layout.selectPanel。
+ * toolsPanel 开关桥);v0.123.2 迁主面板,开关桥删除。
  */
 import { useEffect, useState } from 'react'
 import type { PropsRuntime, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
@@ -120,6 +117,8 @@ export interface StarHubToolWorkspaceInjected {
   openConnectionManager: ConnectionManagerOverlay['open']
   /** Close the confirmation shown after a successful connection change. */
   dismissConnectionChange: () => void
+  /** 在工具面板中查看当前会话的 SSH 执行记录。 */
+  openExecRecords: () => void
   /** 清空当前会话的执行记录(执行记录视图头部「清空」,随会话隔离)。 */
   clearExecRecords: () => void
   /** 断开一条执行记录对应的 SSH 连接并移除其记录(v0.100.1 行尾关闭按钮)。 */
@@ -142,13 +141,13 @@ export type StarHubToolWorkspaceProps =
   & PropsRuntime<'main'>
   & InjectFace<StarHubToolWorkspaceInjected>
 
-/** 单个资产行:主按钮(系统浏览器打开)+ 行尾编辑钮 + 右键菜单(在页面内打开/引用/编辑/复制/删除)。 */
+/** 单个资产行:打开工作台、编辑连接及右键操作。 */
 function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit, onDelete, onNotice }: {
   asset: RustAsset
   badgeLabel: string
   /** 当前打开(选中)的资产行高亮。 */
   active: boolean
-  /** 在页面内打开:壳内工作台主面板页(右键菜单入口,非默认动作)。 */
+  /** 在宿主内打开工作台。 */
   onOpenInPage: () => void | Promise<void>
   /** 引用到当前对话框:插入 `@` 引用 chip 并轻绑定资产上下文。 */
   onReference: () => void
@@ -187,8 +186,8 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
     }
   }
   const items: MenuEntry[] = [
-    { id: 'open-in-page', label: '在页面内打开', icon: <IconRightUpOutlineMedium /> },
-    { id: 'reference', label: '引用到当前对话框', icon: <IconLinkOutlineMedium /> },
+    { id: 'open-in-browser', label: messages.openInBrowser, icon: <IconRightUpOutlineMedium />, disabled: openingBrowser },
+    { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium /> },
     { id: 'edit', label: '编辑', icon: <IconEditOutlineMedium /> },
     { id: 'copy', label: copied ? '已复制' : '复制连接信息', icon: <IconCopyOutlineMedium /> },
     { type: 'separator', id: 'asset-delete-separator' },
@@ -197,14 +196,12 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
     { id: 'delete', label: '删除', icon: <IconTrashOutlineMedium />, danger: true },
   ]
   return (
-    <div className={css.rowWrap} onContextMenu={menu.onContextMenu}>
+    <div className={css.rowWrap} onContextMenu={menu.onContextMenu} onKeyDown={menu.onKeyDown}>
       <button
         type="button"
         className={`${css.row} ${active ? css.active : ''}`}
-        title={`在浏览器中打开 ${asset.name}`}
-        disabled={openingBrowser}
-        aria-busy={openingBrowser}
-        onClick={() => void openInBrowser()}
+        title={messages.openInWorkbench(asset.name)}
+        onClick={() => void openInPage()}
       >
         <span className={css.badge}>
           {openingBrowser ? <IconLoadingOutlineMedium className={css.spin} size={13} /> : badgeLabel}
@@ -219,15 +216,6 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
       <span className={css.srOnly} role="status">{openingBrowser ? messages.openingBrowser : ''}</span>
       <button
         type="button"
-        className={`${css.rowEdit} ${css.rowWorkbench}`}
-        title={messages.openInWorkbench(asset.name)}
-        aria-label={messages.openInWorkbench(asset.name)}
-        onClick={() => void openInPage()}
-      >
-        <IconRightUpOutlineMedium size={13} />
-      </button>
-      <button
-        type="button"
         className={css.rowEdit}
         title={`编辑 ${asset.name}`}
         aria-label={`编辑 ${asset.name}`}
@@ -239,7 +227,7 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
         menu={menu}
         items={items}
         onSelect={(id) => {
-          if (id === 'open-in-page') void openInPage()
+          if (id === 'open-in-browser') void openInBrowser()
           else if (id === 'reference') onReference()
           else if (id === 'edit') onEdit()
           else if (id === 'copy') {
@@ -248,7 +236,7 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
               if (ok) setCopied(true)
               else onNotice(messages.copyFailed)
             })
-          /* v8 ignore start -- 菜单 id 枚举完备(open-in-page/reference/edit/copy/delete),delete 条件的假分支不可达 */
+          /* v8 ignore start -- 菜单 id 枚举完备(open-in-browser/reference/edit/copy/delete),delete 条件的假分支不可达 */
           } else if (id === 'delete') onDelete()
           /* v8 ignore stop */
         }}
@@ -267,18 +255,13 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
  * 文件树/文件查看能力已在 v0.121.8 移除(与 DSH 主壳自带的 fs 工具/`@`
  * 文件引用源重复),壳内文件浏览请用 DSH 侧能力。
  *
- * SSH 执行记录视图(v0.100.0,v0.100.1 会话隔离 + 行内断开):会话头部
- * 「执行」按钮把 execRecords 桥置 viewOpen 并切到本面板后,内容切换为
- * ExecRecordList(仅本会话的静默执行记录,行点击展开/收起,行尾按钮断开连接并
- * 移除,容器纵向滚动);ssh:exec-done 由 apply 层订阅入桥,本组件只是读端。
- * 该视图的 × 与面板 × 同义:关闭面板回会话视图(工作台/直播/执行记录三个
- * 页面一律以会话为出口,不再回退到工具列表)。
+ * 工具栏可打开当前会话的 SSH 执行记录,数据由 apply 层订阅并归档。
  * @param props - composed slot props (main-panel runtime share + injected face).
  * @returns the panel content (rendered only while the sidebar row selects it).
  */
 export function StarHubToolWorkspace({
   openAsset, refreshAssets, openConnectionManager, dismissConnectionChange,
-  clearExecRecords, disconnectExecSession,
+  openExecRecords, clearExecRecords, disconnectExecSession,
   closeTools, selectSubcategory, insertAssetReference,
   useSelection, useAssets, useExecRecords,
 }: StarHubToolWorkspaceProps) {
@@ -334,6 +317,9 @@ export function StarHubToolWorkspace({
           <header className={css.header}>
             <span className={css.title}>StarHub 工具</span>
             <span className={css.spacer} />
+            <button type="button" className={css.createButton} onClick={openExecRecords}>
+              {messages.sshExecRecords}
+            </button>
             <button
               type="button"
               className={css.createButton}

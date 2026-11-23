@@ -52,7 +52,7 @@ async fn ssh_exec(runtime: &SshRuntime, name: &str, params: &Value) -> Result<Va
     let asset_id =
         resolve_asset_id(runtime.bindings(), params).map_err(RpcError::invalid_params)?;
     // 页面级复用(v0.140.1):SSH 终端页里的 AI 助手绑定携带所在页面的会话 id
-    let terminal_session = resolve_terminal_session(runtime.bindings(), params);
+    let terminal_session = resolve_terminal_session(runtime.bindings(), params, &asset_id);
     if let Some(soft) = check_asset_family(runtime, name, &asset_id) {
         return Ok(soft);
     }
@@ -86,7 +86,7 @@ pub async fn ssh_session_status_method(
 ) -> Result<Value, RpcError> {
     let asset_id =
         resolve_asset_id(runtime.bindings(), params).map_err(RpcError::invalid_params)?;
-    let terminal_session = resolve_terminal_session(runtime.bindings(), params);
+    let terminal_session = resolve_terminal_session(runtime.bindings(), params, &asset_id);
     if let Some(soft) = check_asset_family(runtime, "ssh_session_status", &asset_id) {
         return Ok(soft);
     }
@@ -103,7 +103,7 @@ pub async fn ssh_session_status_method(
 async fn sftp(runtime: &SshRuntime, name: &str, params: &Value) -> Result<Value, RpcError> {
     let asset_id =
         resolve_asset_id(runtime.bindings(), params).map_err(RpcError::invalid_params)?;
-    let terminal_session = resolve_terminal_session(runtime.bindings(), params);
+    let terminal_session = resolve_terminal_session(runtime.bindings(), params, &asset_id);
     if let Some(soft) = check_asset_family(runtime, name, &asset_id) {
         return Ok(soft);
     }

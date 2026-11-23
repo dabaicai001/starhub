@@ -256,11 +256,7 @@
 }
 
 .rowWrap > .row {
-  padding-right: 62px;
-}
-
-.row:disabled {
-  cursor: progress;
+  padding-right: 34px;
 }
 
 .rowEdit {
@@ -294,12 +290,6 @@
 .rowEdit:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
-}
-
-.rowWorkbench {
-  right: 34px;
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .srOnly {

@@ -1470,6 +1470,10 @@
   flex: 1;
 }
 
+.menuRoot {
+  display: contents;
+}
+
 /* ── Responsive ────────────────────────────────────────────────── */
 
 @media (max-width: 1080px) {
@@ -1509,10 +1513,34 @@
     border-radius: 0;
   }
 
-  .quickTools,
-  .toolDivider,
-  .toolGroup {
+  .header {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  .workspace {
+    flex-direction: column;
+  }
+
+  .sidePanel {
+    width: auto;
+    min-height: 0;
+    flex: 0 0 52%;
+    border-left: 0;
+    border-top: 0.5px solid var(--dsw-alias-border-l2);
+  }
+
+  .sidePanelResize {
     display: none;
+  }
+
+  .toolbar {
+    scrollbar-width: thin;
+  }
+
+  .quickList {
+    max-width: 45%;
+    flex: 0 1 auto;
   }
 }
 

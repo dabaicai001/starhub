@@ -245,7 +245,7 @@ describe('DbWorkbench', () => {
     const { container } = render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
     await waitFor(() =>{  expect(screen.getByTitle('app')).toBeTruthy() })
     const tree = container.querySelector('aside')
-    expect((tree as HTMLElement).style.width).toBe('320px')
+    expect((tree as HTMLElement).style.getPropertyValue('--starhub-db-tree-width')).toBe('320px')
   })
 
   it('surfaces a tree operation failure as a dismissible banner, not a connect error', async () => {

@@ -6,16 +6,14 @@
  * - exec-records 桥:note 去重置顶 / 上限淘汰 / 按活跃会话过滤
  *   (setConversation)/ removeSession 跨视角移除 / 清空只作用当前会话;
  * - 订阅:tauriListen 注册 ssh:exec-done 并写入,disposer 反注册;
- * - ExecDrawerButton:开合回调与计数角标(计数已随隔离过滤);
  * - ExecRecordList:行点击展开/收起、行尾「断开连接」、清空与返回。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   createExecRecordsBridge, subscribeSshExecEvents,
-  type ExecRecord, type ExecRecordsState, type SshExecDoneEvent,
+  type ExecRecord, type SshExecDoneEvent,
 } from '../src/client/conn/exec-records.ts'
-import { ExecDrawerButton } from '../src/client/conn/ExecDrawerButton.tsx'
 import { ExecRecordList } from '../src/client/conn/ExecRecordList.tsx'
 import {
   emitHostEvent, hostEventListeners, restoreHostBridge, restoreHostEvents, stubHostBridge, stubHostEvents,
@@ -152,48 +150,6 @@ describe('subscribeSshExecEvents', () => {
     emitHostEvent('ssh:exec-done', makeEvent('a2__k3f9a2', 'df', 'out2'))
     await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
     expect(bridge.source.getSnapshot().records).toHaveLength(1)
-  })
-})
-
-describe('ExecDrawerButton', () => {
-  /** 最小 header-actions runtime 面 + 注入面。 */
-  function buttonProps(state: ExecRecordsState) {
-    const unused = (): never => { throw new Error('unused share') }
-    return {
-      sessionId: 'sess-1' as never,
-      useSessions: unused as never,
-      useSession: unused as never,
-      useProjection: unused as never,
-      useInput: unused as never,
-      inputActions: {} as never,
-      openExecView: vi.fn(),
-      closeExecView: vi.fn(),
-      useExecRecords: <S,>(sel: (s: ExecRecordsState) => S): S => sel(state),
-    } as unknown as Parameters<typeof ExecDrawerButton>[0]
-  }
-
-  it('opens the exec view and shows the record count when closed', () => {
-    const props = buttonProps({ viewOpen: false, records: [
-      rec('a1__k3f9a2'),
-      rec('a2__k3f9a2'),
-    ] })
-    render(<ExecDrawerButton {...props} />)
-    const pill = screen.getByRole('button', { name: /执行/ })
-    expect(pill.getAttribute('aria-expanded')).toBe('false')
-    expect(pill.textContent).toContain('2')
-    fireEvent.click(pill)
-    expect(props.openExecView).toHaveBeenCalledTimes(1)
-    expect(props.closeExecView).not.toHaveBeenCalled()
-  })
-
-  it('closes the panel back to the session when the EXEC pill is already open', () => {
-    const props = buttonProps({ viewOpen: true, records: [] })
-    render(<ExecDrawerButton {...props} />)
-    const pill = screen.getByRole('button', { name: /执行/ })
-    expect(pill.getAttribute('aria-expanded')).toBe('true')
-    fireEvent.click(pill)
-    expect(props.closeExecView).toHaveBeenCalledTimes(1)
-    expect(props.openExecView).not.toHaveBeenCalled()
   })
 })
 

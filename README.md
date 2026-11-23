@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.143.2-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.144.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -55,15 +55,15 @@
 - **上游 Electron 桌面壳** — DeepSeek Harness 自家的 Electron 壳,**零改动**原样使用;品牌、签名、自动更新都是它的。StarHub 不做自己的桌面项目。
 - **dsh Host + starhub-bridge 插件** — Host(Node)进程里的 bridge 插件 spawn 两个 sidecar,把 sidecar 的方法面暴露成模型工具与工作台命令面。
 - **两个 sidecar** — **Rust sidecar**(`sidecar-rust/`)承载 SSH/SFTP、Android 真机与直播帧枢纽;**Go Sidecar**(`sidecar/`)承载 MySQL / PostgreSQL / SQLite / Redis / ClickHouse / SQL Server / Elasticsearch / Docker / Kafka 等适配器和连接池。均经 stdio 换行分帧 JSON-RPC 通信。
-- **前端** — DeepSeek Harness(dsh)主壳 + StarHub 的 React 工作台;StarHub 自有源码在 `packages/starhub/*`(10 个内置插件:导航、工具桥、直播、审批、领域事件等)与 `apps/starhub-workbench`(独立资产入口),经 dsh 的槽位系统接入,不改上游内核。
+- **前端** — DeepSeek Harness(dsh) 主壳 + StarHub React 工作台。连接工作台通过 DSH 原生槽位与当前会话并排显示。源码在 `packages/starhub/*` 与 `apps/starhub-workbench`。
 
 ## 当前版本
 
-### v0.143.2 (2026-11-23)
-- 🐛 「新建连接」入口显示文字并按当前分类预选类型。创建成功后自动展开对应分类，显示连接名称，并可直接打开工作台。
-- 🐛 创建、保存和删除立即更新列表。旧的刷新响应不会覆盖已保存的结果，刷新失败时仍可使用已加载的连接。
-- 🐛 新建连接表单支持回车提交，测试或保存前提示无效端口。
-- 🐛 插件冒烟实际连接 SQLite，验证安装包内的 Go sidecar 可用。
+### v0.144.0 (2026-11-23)
+- ✨ 有会话时，点击连接默认在 DSH 右侧栏打开工作台，保留中间对话。右键可在外部浏览器打开。
+- ✨ 在已连接的 SSH 终端中右键「引用到当前对话框」，让当前对话的 AI 复用这一条连接。连接断开后提示重连。
+- 🔧 适配右侧栏的窄页布局，覆盖 SSH/SFTP、数据库、Redis、Elasticsearch、Docker 和消息队列。
+- 🔧 移除 SSH 页内的独立 AI 面板和会话头部的「执行」按钮。「SSH 执行记录」可从「StarHub 工具」打开。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

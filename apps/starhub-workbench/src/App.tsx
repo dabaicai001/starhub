@@ -118,7 +118,7 @@ export function WindowShell() {
       case 'db-clickhouse':
       case 'db-sqlite':
       case 'db-mssql':
-        return <DbWorkbench asset={asset} onClose={requestWindowClose} />
+        return <DbWorkbench asset={asset} {...(embedded ? {} : { onClose: requestWindowClose })} />
       case 'db-redis':
         return <RedisWorkbench asset={asset} />
       case 'db-elasticsearch':

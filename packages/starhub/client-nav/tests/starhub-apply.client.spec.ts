@@ -1,25 +1,5 @@
 // @vitest-environment jsdom
-/**
- * client-nav 插件装配(apply,rc.2 适配后):各槽位注册的槽名、组件与注入面
- * (工具面板桥 / 连接对话框桥 / 执行记录抽屉 / 壳内工作台面板)
- * 与工具树子类选中语义(selectSubcategory 写选择桥,不再联动布局开关)。
- * rc.2 注册面(v0.100.0 起右下角 BastionExecPanel 浮层席位移除;
- * v0.121.8 起文件树/文件查看/@ 文件源随「文件功能」移除;v0.123.1 起
- * 「插件市场」「AI 助手」tab 移除——前者由壳内首页「插件」面板接管,后者
- * (长期记忆)整条栈退场;v0.123.2 起「工具」入口从 sidebar.footer.action +
- * shell.overlay 浮层迁到 sidebar.panellist 行 + main 主面板;去 Tauri 化 M2
- * 第 6 步起资产实例操作页从独立 webview 窗口改为壳内工作台主面板——第二个
- * keyed main 槽;去 Tauri 化 M3 起直播/接管线从独立直播窗口改为壳内直播主
- * 面板——第三个 keyed main 槽;v0.130.0 起直播行/git 分支胶囊/审计日志/
- * 告警规则/沙箱平台/关于 tab 移除——直播面板保留 keyed main 槽(不占侧栏行,
- * AI 触发直播时自动接管);v0.132.0 起沙箱桌面域整体退役(工作面板 + 请求介入
- * 横幅),且工作台/直播/执行记录三个页面关掉时一律回会话视图(不回工具列表):
- * `shell.overlay`×2(overlay / AI 连接卡)+ `sidebar.panellist`
- * ×1(工具行)+ `main`×3(工具面板 / 工作台面板 / 直播面板)+
- * `conversation.session.header.actions`×1(执行)+ `settings.section`×2
- * (Android / SSH);v0.133.4 起 `conversation.input.left` 截图按钮移除
- * (区域截图随去 Tauri 化 M2 降级,能力归 Electron 壳,按钮点了只会报错)。
- */
+/** Client plugin wiring for navigation, dialogs, and workbench tabs. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { apply as applyHost } from '../src/index.ts'
@@ -29,7 +9,7 @@ import { StarHubOverlay } from '../src/client/StarHubOverlay.tsx'
 import { StarHubToolWorkspace } from '../src/client/StarHubToolWorkspace.tsx'
 import { StarHubWorkbenchPanel } from '../src/client/StarHubWorkbenchPanel.tsx'
 import { StarHubLivePanel } from '../src/client/live/StarHubLivePanel.tsx'
-import { ExecDrawerButton } from '../src/client/conn/ExecDrawerButton.tsx'
+import type { SidebarRightTabDefinition } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { AndroidSettingsTab } from '../src/client/settings/android.tsx'
 import { SshSettingsTab } from '../src/client/settings/ssh.tsx'
 import { STARHUB_ASSET_SOURCE } from '../src/client/asset-source.ts'
@@ -54,7 +34,13 @@ interface RegisterOptions {
 }
 
 /** 最小 ctx 替身:slots.inject 立即触发 register,layout/get/effect 打桩。 */
-function fakeContext(overrides: { sessions?: unknown; conversation?: unknown; remote?: unknown; layout?: unknown } = {}) {
+function fakeContext(overrides: {
+  sessions?: unknown
+  conversation?: unknown
+  remote?: unknown
+  layout?: unknown
+  sidebarRight?: unknown
+} = {}) {
   const register = vi.fn((_options: RegisterOptions, _component: unknown) => () => {})
   const inject = vi.fn((_name: string, fn: () => unknown) => fn())
   const registerSource = vi.fn((_src: unknown) => () => {})
@@ -97,8 +83,14 @@ function fakeContext(overrides: { sessions?: unknown; conversation?: unknown; re
   })
   const provided: Record<string, unknown> = {}
   const provide = vi.fn((name: string, value: unknown) => { provided[name] = value })
+  const registerTabType = vi.fn((_definition: SidebarRightTabDefinition) => () => {})
   const ctx = {
     slots: { inject, register },
+    inject: (_services: string[], apply: (ctx: Context) => void) => {
+      if (overrides.sidebarRight !== undefined) apply(ctx)
+    },
+    sidebarRight: overrides.sidebarRight,
+    sidebarRightTabs: { register: registerTabType },
     get,
     effect,
     provide,
@@ -110,7 +102,7 @@ function fakeContext(overrides: { sessions?: unknown; conversation?: unknown; re
       },
     },
   } as unknown as Context
-  return { ctx, register, inject, get, registerSource, effects, provide, provided }
+  return { ctx, register, inject, get, registerSource, effects, provide, provided, registerTabType }
 }
 
 /** 按 main keyed 槽的 key 找注册配置(索引会随新槽插入而漂移,不写死下标)。 */
@@ -135,14 +127,12 @@ describe('client-nav apply (rc.2)', () => {
     expect(inject.mock.calls.map(c => c[0])).toEqual([
       'shell.overlay',
       'sidebar.panellist', 'main', 'main', 'main',
-      'conversation.session.header.actions',
       'settings.section', 'settings.section',
     ])
     const components = register.mock.calls.map(c => c[1])
     expect(components).toEqual([
       StarHubOverlay,
       ToolsPanelIcon, StarHubToolWorkspace, StarHubWorkbenchPanel, StarHubLivePanel,
-      ExecDrawerButton,
       AndroidSettingsTab, SshSettingsTab,
     ])
   })
@@ -201,38 +191,22 @@ describe('client-nav apply (rc.2)', () => {
     expect(mainConfig.key).toBe('starhub-tools')
   })
 
-  it('exec drawer switches to the tools main panel; × returns to the session', () => {
+  it('opens SSH execution history from the tools panel and resets it on close', () => {
     const selectPanel = vi.fn()
     const { ctx, register } = fakeContext({ layout: { selectPanel } })
     applyPlugin(ctx)
-    const mainConfig = mainByKey(register, 'starhub-tools')
-    const mainInjected = mainConfig.inject() as { closeTools: () => void }
-    // 工具面板 × = 回会话视图(null = 默认 conversation 面板)。
-    mainInjected.closeTools()
-    expect(selectPanel).toHaveBeenCalledWith(null)
-    // 执行 按钮:打开执行记录视图并切到工具面板。
-    const execConfig = register.mock.calls.find(c => (c[0] as RegisterOptions).id === 'starhub-exec-drawer')![0]
-    const execInjected = execConfig.inject() as { openExecView: () => void }
-    execInjected.openExecView()
-    expect(selectPanel).toHaveBeenCalledTimes(2)
-    expect(selectPanel).toHaveBeenLastCalledWith('starhub-tools')
-  })
-
-  it('exec drawer pill opens and closes the records view', () => {
-    const { ctx, register } = fakeContext()
-    applyPlugin(ctx)
-    const execConfig = register.mock.calls.find(c => (c[0] as RegisterOptions).id === 'starhub-exec-drawer')![0] as RegisterOptions
-    const execInjected = execConfig.inject() as unknown as {
-      openExecView: () => void
-      closeExecView: () => void
+    const tools = mainByKey(register, 'starhub-tools').inject() as unknown as {
+      openExecRecords: () => void
+      closeTools: () => void
       hooks: { execRecords: { getSnapshot: () => { viewOpen: boolean; records: unknown[] } } }
     }
-    expect(execInjected.hooks.execRecords.getSnapshot().viewOpen).toBe(false)
-    execInjected.openExecView()
-    expect(execInjected.hooks.execRecords.getSnapshot().viewOpen).toBe(true)
-    // 关闭执行视图(面板内的视图开关复位)
-    execInjected.closeExecView()
-    expect(execInjected.hooks.execRecords.getSnapshot().viewOpen).toBe(false)
+    expect(tools.hooks.execRecords.getSnapshot().viewOpen).toBe(false)
+    tools.openExecRecords()
+    expect(tools.hooks.execRecords.getSnapshot().viewOpen).toBe(true)
+    expect(selectPanel).not.toHaveBeenCalled()
+    tools.closeTools()
+    expect(tools.hooks.execRecords.getSnapshot().viewOpen).toBe(false)
+    expect(selectPanel).toHaveBeenCalledWith(null)
   })
 
   it('tools panel inject selects a subcategory through the selection bridge', () => {
@@ -276,9 +250,44 @@ describe('client-nav apply (rc.2)', () => {
     expect(tools.hooks.selection.getSnapshot().subcategory).toBe('database')
   })
 
-  it('opens every asset page in the in-shell workbench panel (no new window)', () => {
+  it('opens an asset in the native sidebar when the tools panel covers a selected session', async () => {
+    let visibleSession: string | undefined
+    const openResource = vi.fn()
+    const selectPanel = vi.fn((panel: string | null) => { visibleSession = panel === null ? 's1' : undefined })
+    const { ctx, register, registerTabType } = fakeContext({
+      layout: { selectPanel },
+      sessions: { list: {
+        getSnapshot: () => ({ ids: ['s1'], byId: { s1: { retainedBy: { mainView: 1 } } } }),
+        subscribe: () => () => {},
+      } },
+      sidebarRight: { mounted: { getSnapshot: () => visibleSession }, openResource },
+    })
+    const openSpy = vi.spyOn(window, 'open')
+    applyPlugin(ctx)
+    const tools = mainByKey(register, 'starhub-tools').inject() as { openAsset: (asset: unknown) => Promise<void> }
+    const asset = { id: 'asset/one', type: 'ssh', name: 'Server', config: {} }
+    await tools.openAsset(asset)
+    await tools.openAsset(asset)
+    expect(selectPanel.mock.calls).toEqual([[null]])
+    const address = 'dsh-resource://starhub-workbench/asset/asset%2Fone'
+    expect(openResource.mock.calls).toEqual([
+      [address, { kind: 'starhub-workbench' }],
+      [address, { kind: 'starhub-workbench' }],
+    ])
+    expect(registerTabType.mock.calls[0]?.[0]).toMatchObject({ kind: 'starhub-workbench', keepMounted: true })
+    expect(register.mock.calls.some(([options]) =>
+      options.name === 'sidebar.right.pane.tab' && options.key === 'starhub-workbench',
+    )).toBe(true)
+    expect(openSpy).not.toHaveBeenCalled()
+  })
+
+  it('uses the in-shell workbench main panel when there is no selected session', () => {
     const selectPanel = vi.fn()
-    const { ctx, register } = fakeContext({ layout: { selectPanel } })
+    const openResource = vi.fn()
+    const { ctx, register } = fakeContext({
+      layout: { selectPanel },
+      sidebarRight: { mounted: { getSnapshot: () => undefined }, openResource },
+    })
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => ({}) as Window)
     try {
       applyPlugin(ctx)
@@ -289,6 +298,7 @@ describe('client-nav apply (rc.2)', () => {
         key_id: null, tags: [], favorite: false, last_used_at: null, created_at: 0, updated_at: 0,
       }
       panel.openAsset(esAsset)
+      expect(openResource).not.toHaveBeenCalled()
       // M2 第 6 步:不再新开窗口/标签页,而是壳内工作台面板的一页。
       expect(openSpy).not.toHaveBeenCalled()
       expect(selectPanel).toHaveBeenCalledWith('starhub-workbench')
@@ -391,6 +401,35 @@ describe('client-nav apply (rc.2)', () => {
     // Docker 资产:纯文本回退同样带 [Docker] 删除保护标注
     panel.insertAssetReference({ ...refAsset, id: 'd1', type: 'docker', name: 'local-docker', config: {} })
     expect(setDraft).toHaveBeenCalledWith('查一下 @local-docker [Docker] ')
+  })
+
+  it('binds the exact SSH terminal to the current conversation before updating its draft', async () => {
+    const insertReference = vi.fn(() => true)
+    const setDraft = vi.fn()
+    const bind = Promise.withResolvers<{ ok: boolean }>()
+    const invoke = vi.fn((command: string) => command === 'get_assets' ? [refAsset] : bind.promise)
+    stubHostBridge(invoke)
+    const { ctx, register, settingsMutate } = referenceContext({ insertReference, setDraft })
+    applyPlugin(ctx)
+    const workbench = mainByKey(register, 'starhub-workbench').inject() as {
+      referenceTerminal: (assetId: string, terminalSessionId: string) => Promise<void>
+    }
+    const pending = workbench.referenceTerminal('a1', 'a1__actual')
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('bind_asset_context', {
+        assetId: 'a1', sessionId: 's1', terminalSessionId: 'a1__actual',
+      })
+    })
+    expect(setDraft).not.toHaveBeenCalled()
+    expect(insertReference).not.toHaveBeenCalled()
+    bind.resolve({ ok: true })
+    await pending
+    expect(lastBinding(settingsMutate)).toMatchObject({ sessionId: 's1', binding: { assetId: 'a1' } })
+    expect(insertReference).toHaveBeenCalledWith(
+      { source: STARHUB_ASSET_SOURCE, ref: 'a1', label: 'prod-server (deploy@10.0.0.5)', clipboardText: '@prod-server' },
+      { start: 4, end: 4, draftRev: 3 },
+    )
+    expect(setDraft).not.toHaveBeenCalled()
   })
 
   it('no-ops the asset reference when no session is current', () => {

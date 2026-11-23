@@ -555,17 +555,19 @@ export function ElasticsearchWorkbench({ asset, onClose }: ElasticsearchWorkbenc
           </div>
           {indicesLoading && indices.length === 0 && <div className={css.empty}>正在加载索引…</div>}
           {!indicesLoading && (
-            <table className={css.table}>
-              <thead><tr><th>索引</th><th>文档数</th><th>存储</th><th>健康</th><th></th></tr></thead>
-              <tbody>
-                {visibleIndices.map(idx => (
-                  <IndexRow key={idx.name} idx={idx}
-                    onOpen={(name) =>{  void selectIndex(name) }}
-                    onDelete={(name) =>{  setConfirmDelete(name) }} />
-                ))}
-                {visibleIndices.length === 0 && <tr><td colSpan={5} className={css.empty}>{indices.length === 0 ? '无索引' : '无匹配索引'}</td></tr>}
-              </tbody>
-            </table>
+            <div className={css.indexTableWrap}>
+              <table className={css.table}>
+                <thead><tr><th>索引</th><th>文档数</th><th>存储</th><th>健康</th><th></th></tr></thead>
+                <tbody>
+                  {visibleIndices.map(idx => (
+                    <IndexRow key={idx.name} idx={idx}
+                      onOpen={(name) =>{  void selectIndex(name) }}
+                      onDelete={(name) =>{  setConfirmDelete(name) }} />
+                  ))}
+                  {visibleIndices.length === 0 && <tr><td colSpan={5} className={css.empty}>{indices.length === 0 ? '无索引' : '无匹配索引'}</td></tr>}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </TabPane>

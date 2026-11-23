@@ -8,15 +8,22 @@
  * `/starhub-react/` 独立程序(它经同一套宿主桥 fetch/SSE 与 sidecar 通话,
  * 见 `tauri.ts`)。
  *
+ * 此页簿用于没有会话或宿主没有右侧栏服务时的独立主面板。
  * 页簿语义(与旧「按 key 开窗/聚焦」一致):
  * - `open`:同 key 已开 → 只激活(focus),不开第二份——与 sidecar 侧
  *   `starhub/open.asset` 的 open→focus 预判同语义;
  * - `close`:关一页;关掉的是当前页时激活余下页里最后开的一页;
- * - 页簿空 → 主面板该让位(由 index.ts 的订阅把面板切回工具列表)。
+ * - 页簿空 → 主面板该让位(由 index.ts 的订阅把面板切回会话视图)。
  */
 // createSnapshotStore 属于基线外部 `@deepseek-ai/dsh-client-store`(共享存储引擎的
 // 唯一静态属主);从 runtime/client 取值导入会撞 client bundle purity 门禁。
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
+
+/** Embed the workbench and pass the shell's initial theme to its document. */
+export function embeddedWorkbenchUrl(path: string): string {
+  const dark = document.body.hasAttribute('data-ds-dark-theme')
+  return `${path}${path.includes('?') ? '&' : '?'}dark=${dark ? '1' : '0'}&embed=1`
+}
 
 /** 一个壳内工作台页(iframe 的来源与身份)。 */
 export interface WorkbenchPage {

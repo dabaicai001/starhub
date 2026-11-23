@@ -90,4 +90,10 @@
 .pager button { border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); padding: 4px 12px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; font-size: 12px; }
 .pager button:hover:not(:disabled) { border-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-state-business-primary); }
 .pager button:disabled { opacity: 0.4; cursor: default; }
+
+@media (max-width: 620px) {
+  .meta, .pager { flex-wrap: wrap; gap: 4px 8px; padding-inline: 8px; }
+  .metaTable { overflow-wrap: anywhere; }
+  .sugList { min-width: min(240px, 100%); max-width: 100%; }
+}
 .sizeSelect { border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-size: 12px; padding: 2px 4px; }

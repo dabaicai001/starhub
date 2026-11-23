@@ -13,7 +13,7 @@ StarHub 是 DevOps 桌面应用,单一窗口整合:数据库客户端(MySQL / Po
 | 仓库 | https://github.com/dabaicai001/starhub |
 | 主分支 | `main` |
 | 协议 | MIT |
-| 当前版本 | v0.143.2(「新建连接」入口显示文字并按当前分类预选类型。创建成功后自动展开对应分类，显示连接名称，并可直接打开工作台。) |
+| 当前版本 | v0.144.0(有会话时，点击连接默认在 DSH 右侧栏打开工作台，保留中间对话。右键可在外部浏览器打开。) |
 
 ## 架构一句话
 
@@ -38,9 +38,9 @@ starhub/
 │   └── bin/                  # 构建输出 starhub-sidecar[.exe]
 │
 ├── packages/                # StarHub 自有 workspace(P1 起;P1 详情见 docs/P1-独立构建迁移记录.md)
-│   ├── starhub/             # 10 个内置插件:approval-bridge / bridge / client-nav /
+│   ├── starhub/             # 发布组合的 9 个插件:approval-bridge / bridge / client-nav /
 │   │                        # domain-events / host-static / live-context /
-│   │                        # session-registry / ssh-assistant / tool-context / tools
+│   │                        # session-registry / tool-context / tools
 │   └── shims/client-runtime # @deepseek-ai/dsh-client-runtime 兼容垫片(上游已删该包,整体是 StarHub 的)
 │
 ├── apps/starhub-workbench/  # React 工作台独立资产入口(Vite,产物 dist-starhub-react/,base=/starhub-react/)
@@ -86,7 +86,7 @@ starhub/
 ```bash
 pnpm install                 # 唯一的安装器:根 workspace(StarHub 自有包 + 官方 @deepseek-ai/dsh-*)
 
-npm run build:lib            # Host 面:官方包类型下编 9 个 host 插件 → lib/types/
+npm run build:lib            # Host 面:编译 StarHub 宿主模块 → lib/types/
 npm run build:lib:client     # Client 面:client-nav 的 tsc + 自建客户端半边(lib/client.js / lib/index.js)
 npm run build:window         # 构建 React 工作台(→ dist-starhub-react/)
 npm run clean:lib            # 清掉上面几步的产物
@@ -94,7 +94,7 @@ npm run sidecar:build        # Go Sidecar(加 :release 为 release 构建)
 npm run sidecar-rust:build   # Rust sidecar(scripts/cargo-sidecar.mjs:Windows 转 .bat 加载 MSVC,其它平台直调 cargo)
 
 npm run test:utils           # node --test 纯逻辑套件;其余套件见 package.json scripts
-npm run test:starhub         # StarHub 自有 vitest 套件(10 个插件 + 工作台 app 的 tests/)
+npm run test:starhub         # StarHub 自有 vitest 套件(插件与工作台 app 的 tests/)
 npm run test:plugin-bundle   # bundle 组装/行清单/图标单测
 npm run plugin:bundle        # 纯插件形态:组装 dist-plugin/(加 --pack 出 .tgz,粘进 dsh 插件页)
 npm run plugin:pack          # 同上并打 tarball(Windows PowerShell 下 `npm run x -- --pack` 会被吞参,故单列一个脚本)
@@ -149,4 +149,4 @@ npm run version              # 版本号同步(见下)
 
 ---
 
-*最后更新: 2026-11-23 (v0.143.2)*
+*最后更新: 2026-11-23 (v0.144.0)*

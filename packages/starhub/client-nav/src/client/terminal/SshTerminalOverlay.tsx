@@ -3,8 +3,8 @@
  *
  * Opened in-page (no new window) when an SSH asset is clicked. Owns one xterm
  * instance connected via the StarHub interactive SSH session, and exposes
- * side panels that reuse the same live session: SFTP file transfer, the SSH AI
- * assistant, and host monitoring. SSH terminal and SFTP inherently share one
+ * side panels that reuse the same live session: SFTP file transfer and host
+ * monitoring. SSH terminal and SFTP inherently share one
  * connection, so they ride the same workspace.
  *
  * cwd tracking (SFTP「跟随终端」): the terminal tracks the remote cwd from the
@@ -24,9 +24,9 @@ import { type CSSProperties, type PointerEvent as ReactPointerEvent, useCallback
 import {
   IconCheckOutlineMedium, IconChevronsUpDownOutlineMedium, IconCloseCircleFillMedium, IconCloseFillMedium,
   IconCloseOutlineMedium, IconClockOutlineMedium, IconCodeOutlineMedium, IconCopyOutlineMedium,
-  IconFolderOpenOutlineMedium, IconFullscreenOutlineMedium, IconGaugeOutlineMedium, IconPaperclipOutlineMedium,
+  IconFolderOpenOutlineMedium, IconFullscreenOutlineMedium, IconGaugeOutlineMedium, IconLinkOutlineMedium, IconPaperclipOutlineMedium,
   IconPlusOutlineMedium, IconRefreshOutlineMedium, IconSearchOutlineMedium, IconSlidersTwoOutlineMedium,
-  IconSparkleMedium, IconUsersOutlineMedium, IconWarningTriangleOutlineMedium,
+  IconUsersOutlineMedium, IconWarningTriangleOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -35,8 +35,9 @@ import ZmodemModule from 'zmodem.js/src/zmodem_browser.js'
 import { tauriInvoke, tauriListen, type TauriUnlisten } from '../tauri.ts'
 import type { RustAsset } from '../store.ts'
 import { SftpPanel } from './SftpPanel.tsx'
-import { SshAssistantPanel } from './SshAssistantPanel.tsx'
-import { closeAssistant } from './assistant-service.ts'
+import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
+import { interactionMessages } from '../interaction-messages.ts'
+import { requestTerminalReference } from './reference.ts'
 import { TransferDialog } from './TransferDialog.tsx'
 import { useTransferTasks } from './use-transfer-tasks.ts'
 import { formatSize } from './sftp-service.ts'
@@ -128,7 +129,7 @@ export interface HostKeyConfirmEvent {
   sha256: string
 }
 
-type SidePanel = 'sftp' | 'ai' | 'monitor' | null
+type SidePanel = 'sftp' | 'monitor' | null
 
 /** 工具条字号按钮的调节范围(与设置浮层滑块一致)。 */
 const FONT_SIZE_MIN = 10
@@ -884,7 +885,6 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
   const clearTerminal = useCallback(() => { termRef.current?.clear() }, [termRef])
 
   /** 读终端选区(AI 面板据此提示「已附带」并把内容随下一条提问发送)。 */
-  const readTerminalSelection = useCallback(() => termRef.current?.getSelection() ?? '', [termRef])
 
   /** 复制终端选中内容到剪贴板。 */
   const copySelection = useCallback(async (): Promise<void> => {
@@ -999,10 +999,8 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
   const transferTasks = useTransferTasks(sessionId)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
 
-  const sidePanelLabel = sidePanel === 'ai' ? 'AI 助手' : sidePanel === 'monitor' ? '主机监控' : '文件传输'
-  const sidePanelDetail = sidePanel === 'ai'
-    ? '复用 dsh 模型连接'
-    : sidePanel === 'monitor' ? '只读采集,不干扰终端会话' : '与当前 SSH 会话共享连接'
+  const sidePanelLabel = sidePanel === 'monitor' ? '主机监控' : '文件传输'
+  const sidePanelDetail = sidePanel === 'monitor' ? '只读采集,不干扰终端会话' : '与当前 SSH 会话共享连接'
   /** 打开侧栏页(首次打开才挂载),并记入常驻集合。 */
   const openSidePanel = useCallback((panel: Exclude<SidePanel, null>): void => {
     setMountedPanels(prev => (prev.has(panel) ? prev : new Set(prev).add(panel)))
@@ -1017,16 +1015,17 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
     if (sidePanel === panel) { closeSidePanel(); return }
     openSidePanel(panel)
   }
-  // 助手会话 id:面板打开时回传,overlay 卸载(关页面)时销毁——助手随终端
-  // 页开合自动建/销毁,不在后台常驻。
-  const assistantIdRef = useRef<string | null>(null)
-  useEffect(() => () => {
-    const opened = assistantIdRef.current
-    if (opened !== null) {
-      assistantIdRef.current = null
-      void closeAssistant(opened).catch(() => undefined)
+  const terminalMenu = useContextMenu()
+  const messages = interactionMessages()
+  const referenceTerminal = async (): Promise<void> => {
+    try {
+      await requestTerminalReference(sessionId)
+      notify(messages.referencedConversation)
+    } catch (error) {
+      const detail = error as { message?: unknown } | null
+      notify(typeof detail?.message === 'string' ? detail.message : messages.terminalReferenceUnavailable, 'error')
     }
-  }, [])
+  }
   // 头部头像徽标:取资产名首字符,颜色随连接状态变化。
   const avatarInitial = (asset.name.trim().charAt(0) || '?').toUpperCase()
   const endpoint = `${typeof asset.config.username === 'string' ? `${asset.config.username}@` : ''}${typeof asset.config.host === 'string' ? asset.config.host : '未配置主机'}${typeof asset.config.port === 'number' ? `:${asset.config.port}` : ''}`
@@ -1062,7 +1061,6 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
       { id: 'act-font-dec', label: '减小字号', group: '终端操作', run: () => { bumpFontSize(-1) } },
       { id: 'act-fullscreen', label: fullscreen ? '退出全屏' : '全屏显示', group: '终端操作', run: () => { setFullscreen(value => !value) } },
       { id: 'act-sftp', label: '打开文件面板', group: '工作区', run: () => { openSidePanel('sftp') } },
-      { id: 'act-ai', label: '打开 AI 助手', group: '工作区', run: () => { openSidePanel('ai') } },
       { id: 'act-monitor', label: '打开主机监控', group: '工作区', run: () => { openSidePanel('monitor') } },
       { id: 'act-broadcast', label: '广播命令到多个会话', group: '工作区', run: () => void openBroadcast() },
       { id: 'act-quick', label: '管理快捷命令', group: '工作区', run: () => { setQuickEditorOpen(true) } },
@@ -1125,16 +1123,20 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
               ><IconSlidersTwoOutlineMedium size={15} /></button>
               {settingsOpen && <TerminalSettingsMenu settings={terminalSettings} onClose={() =>{  setSettingsOpen(false) }} />}
             </span>
-            <button
-              type="button"
-              className={fullscreen ? css.headerActionActive : css.headerAction}
-              onClick={() =>{  setFullscreen(value => !value) }}
-              title={fullscreen ? '退出全屏 (Esc)' : '全屏显示'}
-              aria-label="全屏显示"
-              aria-pressed={fullscreen}
-            ><IconFullscreenOutlineMedium size={15} /></button>
-            <span className={css.headerDivider} aria-hidden="true" />
-            <button type="button" className={css.iconButton} onClick={onClose} title="关闭" aria-label="关闭 SSH 工作区"><IconCloseOutlineMedium size={16} /></button>
+            {!embedded && (
+              <>
+                <button
+                  type="button"
+                  className={fullscreen ? css.headerActionActive : css.headerAction}
+                  onClick={() => { setFullscreen(value => !value) }}
+                  title={fullscreen ? '退出全屏 (Esc)' : '全屏显示'}
+                  aria-label="全屏显示"
+                  aria-pressed={fullscreen}
+                ><IconFullscreenOutlineMedium size={15} /></button>
+                <span className={css.headerDivider} aria-hidden="true" />
+                <button type="button" className={css.iconButton} onClick={onClose} title="关闭" aria-label="关闭 SSH 工作区"><IconCloseOutlineMedium size={16} /></button>
+              </>
+            )}
           </div>
         </header>
         {error !== null && <div className={css.error} role="alert">{error}</div>}
@@ -1175,13 +1177,6 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
                     >{transferTasks.activeCount}</span>
                   )}
                 </button>
-                <button
-                  type="button"
-                  className={sidePanel === 'ai' ? css.workspaceTabActive : css.workspaceTab}
-                  onClick={() =>{  toggleSidePanel('ai') }}
-                  title="AI 助手:操作这台已连接的服务器(复用 dsh 模型连接)"
-                  aria-pressed={sidePanel === 'ai'}
-                ><IconSparkleMedium size={13} />AI</button>
                 <button
                   type="button"
                   className={sidePanel === 'monitor' ? css.workspaceTabActive : css.workspaceTab}
@@ -1250,8 +1245,21 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
                 </div>
               </div>
             )}
-            <div className={css.terminalLayer}>
+            <div className={css.terminalLayer} onContextMenu={embedded ? terminalMenu.onContextMenu : undefined}
+              onKeyDown={embedded ? terminalMenu.onKeyDown : undefined}>
               <div ref={host} className={css.terminal} />
+              {embedded && (
+                <ContextMenu menu={terminalMenu} className={css.menuRoot} items={[
+                  { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium />, disabled: !connected },
+                  { type: 'separator', id: 'terminal-menu-separator' },
+                  { id: 'copy', label: messages.copyTerminalSelection, icon: <IconCopyOutlineMedium /> },
+                  { id: 'paste', label: messages.pasteToTerminal, disabled: !connected },
+                ]} onSelect={id => {
+                  if (id === 'reference') void referenceTerminal()
+                  else if (id === 'copy') void copySelection()
+                  else if (id === 'paste') void pasteClipboard()
+                }} />
+              )}
               {findOpen && (
                 <TerminalFindBar
                   query={findQuery}
@@ -1288,18 +1296,6 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
                 </button>
               </header>
               <div className={css.sidePanelBody}>
-                {mountedPanels.has('ai') && (
-                  <TabPane active={sidePanel === 'ai'} label="AI 助手" fill>
-                    <SshAssistantPanel
-                      sshSessionId={sessionId}
-                      assetId={asset.id}
-                      assetName={asset.name}
-                      cwd={sshCwd}
-                      getTerminalSelection={readTerminalSelection}
-                      onOpened={(id) =>{  assistantIdRef.current = id }}
-                    />
-                  </TabPane>
-                )}
                 {mountedPanels.has('monitor') && (
                   <TabPane active={sidePanel === 'monitor'} label="主机监控" fill>
                     <HostMonitorPanel

@@ -12,7 +12,7 @@ import type {
   ClientSessionContext, InputTriggerCandidate, InputTriggerSource,
 } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { STARHUB_SUBCATEGORIES, assetSubtitle, routeNameForAsset, routePrefixForAsset, type StarHubAsset } from './sections.ts'
-import type { RustAsset, StarHubAssets, ToolSelectionBridge } from './store.ts'
+import { loadStarHubAssets, type RustAsset, type StarHubAssets, type ToolSelectionBridge } from './store.ts'
 import { bindAssetContext, type SettingsUpdateWriter } from './tool-context.ts'
 
 /** source 名(菜单分组与 codec 路由键,契约 §6.1)。 */
@@ -148,7 +148,7 @@ export function createStarHubAssetSource(deps: StarHubAssetSourceDeps): InputTri
       // 模型去调 ssh_exec。附会话 id,host 侧 tool-context 只对触发绑定的会话注入。
       const subcategory = STARHUB_SUBCATEGORIES.find(s => s.matches(asset as StarHubAsset))?.key ?? ''
       const routePrefix = routePrefixForAsset(asset as StarHubAsset) ?? ''
-      bindAssetContext(deps.writer, { subcategory, routePrefix }, asset, session.sessionId)
+      void bindAssetContext(deps.writer, { subcategory, routePrefix }, asset, session.sessionId)
       const sub = assetSubtitle(asset)
       // Docker 资产管理标签也带 ⚠ 标注(候选行与输入框里的引用都醒目)。
       const dockerMark = asset.type === 'docker' ? ` ${DOCKER_REFERENCE_TAG}` : ''
@@ -167,14 +167,15 @@ export function createStarHubAssetSource(deps: StarHubAssetSourceDeps): InputTri
         const asset = deps.assets.source.getSnapshot().assets.find(a => a.id === ref)
         return `@${asset?.name ?? ref}`
       },
-      serialize: (ref) => {
+      serialize: async (ref) => {
         // 模型表示必须在提交时解析;资产已删除 = 序列化失败,阻止发送
         // (流水线契约:绝不静默降级为剪贴板文本)。
         const asset = deps.assets.source.getSnapshot().assets.find(a => a.id === ref)
+          ?? await loadStarHubAssets().then(list => list.find(a => a.id === ref), () => undefined)
         if (asset === undefined) {
-          return Promise.reject(new Error(`starhub-asset: 引用资产 "${ref}" 已不存在`))
+          throw new Error(`starhub-asset: 引用资产 "${ref}" 已不存在`)
         }
-        return Promise.resolve(renderAssetReference(asset))
+        return renderAssetReference(asset)
       },
     },
   }

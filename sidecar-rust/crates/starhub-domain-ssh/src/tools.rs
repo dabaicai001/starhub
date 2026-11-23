@@ -220,11 +220,8 @@ pub async fn drop_ssh_session(ctx: &ToolContext<'_>, conn_id: &str) {
 /// 解析 AI 命令复用的用户终端会话(新模型 v0.140.0:AI 不自建连接;
 /// v0.140.1 加页面级复用)。
 ///
-/// 优先级:
-/// 1. `terminal_session`——调用方(SSH 终端页里的 AI 助手)绑定携带的**所在
-///    页面**会话 id:存活且归属该资产时,复用那个页面的连接;
-/// 2. 回落 [`SshManager::find_asset_session`]:同资产第一个存活会话(主壳
-///    AI 等无页面上下文的场景)。
+/// 引用了具体终端页时，只复用该页属于目标资产的存活连接。
+/// 仅指定资产时，经 [`SshManager::find_asset_session`] 选择该资产的存活会话。
 ///
 /// - `Ok(Some(会话 id))`:找到复用目标;
 /// - `Ok(None)`:尚未连接——调用方把 {@link not_connected_hint} 作为工具
@@ -253,9 +250,7 @@ async fn resolve_user_session_inner(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if let Some(id) = ctx.manager.alive_session_for(terminal, asset_id).await {
-            return Ok(Some(id));
-        }
+        return Ok(ctx.manager.alive_session_for(terminal, asset_id).await);
     }
     Ok(ctx.manager.find_asset_session(asset_id).await)
 }

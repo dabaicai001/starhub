@@ -3,9 +3,7 @@
  * StarHubToolWorkspace (方案 P1):右侧工具工作区列按子类过滤资产列表。
  * Covers the guide/empty/loading/error/list render states, refreshAssets
  * firing on mount and subcategory switch, the asset-row click opening the
- * standalone page in the SYSTEM browser (host sidecar), and the row context
- * menu's 在页面内打开 entry driving the in-shell page through the selection
- * bridge. 资产/选择状态走
+ * workbench, and the context menu's explicit browser action. 资产/选择状态走
  * inject hooks 舱位(session-maybe 无会话分支不下发注册侧 store),测试
  * 直接驱动这两份裸 source。
  */
@@ -56,6 +54,7 @@ function workspaceProps() {
     refreshAssets: vi.fn(),
     openConnectionManager: vi.fn(),
     dismissConnectionChange: vi.fn(),
+    openExecRecords: vi.fn(),
     clearExecRecords: vi.fn(),
     disconnectExecSession: vi.fn(),
     closeTools: vi.fn(),
@@ -258,13 +257,13 @@ describe('StarHubToolWorkspace', () => {
     render(<StarHubToolWorkspace {...props} openAsset={openAsset} />)
     expect(screen.getByText('已新建连接 prod-server').getAttribute('role')).toBe('status')
     expect(screen.getByRole('alert').textContent).toContain('offline')
-    expect(screen.getByTitle('在浏览器中打开 prod-server')).toBeTruthy()
+    expect(screen.getByTitle('在工作台中打开 prod-server')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '打开工作台', exact: true }))
     expect(openAsset).toHaveBeenCalledWith(sshAsset)
     await waitFor(() => { expect(props.dismissConnectionChange).toHaveBeenCalledOnce() })
   })
 
-  it('opens the asset row click in the SYSTEM browser (host sidecar, host origin)', async () => {
+  it('disables the external browser action while its launch is pending', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
     const launch = Promise.withResolvers<{ ok: true }>()
     // 桌面壳里页面 origin 是 dsh-app://app,真实宿主源要靠桥内 host_origin 问出来
@@ -279,17 +278,16 @@ describe('StarHubToolWorkspace', () => {
       props.bridge.selectSubcategory('terminal')
       props.assets.update((d) => { d.assets = [sshAsset] })
       render(<StarHubToolWorkspace {...props} />)
-      const row = screen.getByTitle<HTMLButtonElement>('在浏览器中打开 prod-server')
-      fireEvent.click(row)
-      expect(row.disabled).toBe(true)
-      expect(row.getAttribute('aria-busy')).toBe('true')
-      fireEvent.click(row)
+      const row = screen.getByText('prod-server')
+      fireEvent.contextMenu(row)
+      fireEvent.click(screen.getByText('在浏览器中打开'))
+      fireEvent.contextMenu(row)
+      expect(screen.getByText('在浏览器中打开').closest('button')?.disabled).toBe(true)
       await vi.waitFor(() => { expect(invoke).toHaveBeenCalledWith('open_external_url', expect.anything()) })
       expect(hostBridgeCalls().map(call => call.cmd)).toEqual(['host_origin', 'open_external_url'])
       expect(open).not.toHaveBeenCalled()
       launch.resolve({ ok: true })
-      await waitFor(() => { expect(row.disabled).toBe(false) })
-      // 左键 = 系统浏览器:不占壳内工作台面板(选择桥不动)
+      await waitFor(() => { expect(screen.getByText('在浏览器中打开').closest('button')?.disabled).toBe(false) })
       expect(props.bridge.source.getSnapshot().assetId).toBeNull()
     } finally {
       restoreHostBridge()
@@ -297,17 +295,22 @@ describe('StarHubToolWorkspace', () => {
     }
   })
 
-  it('opens the instance operation page from the row context-menu 在页面内打开 entry', () => {
+  it('opens the workbench on a normal row click without launching the browser', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const invoke = vi.fn(() => ({}))
+    stubHostBridge(invoke)
     const props = workspaceProps()
     props.bridge.selectSubcategory('terminal')
     props.assets.update((d) => { d.assets = [sshAsset] })
     render(<StarHubToolWorkspace {...props} />)
-    fireEvent.contextMenu(screen.getByText('prod-server'))
-    fireEvent.click(screen.getByText('在页面内打开'))
+    fireEvent.click(screen.getByText('prod-server'))
     const sel = props.bridge.source.getSnapshot()
     expect(sel.assetId).toBe('a1')
     expect(sel.routePrefix).toBe('/ssh')
     expect(sel.instanceId).toMatch(/^a1__\d+$/)
+    expect(open).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+    open.mockRestore()
   })
 
   it('surfaces an error when the inline workbench action fails', async () => {
@@ -316,7 +319,7 @@ describe('StarHubToolWorkspace', () => {
     props.assets.update((d) => { d.assets = [sshAsset] })
     const openAsset = vi.fn().mockRejectedValue(new Error('panel unavailable'))
     render(<StarHubToolWorkspace {...props} openAsset={openAsset} />)
-    fireEvent.click(screen.getByRole('button', { name: '在工作台中打开 prod-server' }))
+    fireEvent.click(screen.getByTitle('在工作台中打开 prod-server'))
     expect(openAsset).toHaveBeenCalledWith(sshAsset)
     expect(await screen.findByText(/打开工作台失败.*panel unavailable/)).toBeTruthy()
   })
@@ -385,23 +388,19 @@ describe('StarHubToolWorkspace', () => {
     expect(props.openConnectionManager).not.toHaveBeenCalled()
   })
 
-  it('routes the row context-menu 在页面内打开 and 编辑 entries to their callbacks', () => {
+  it('routes the row context-menu 编辑 entry to the connection dialog', () => {
     const props = workspaceProps()
     props.bridge.selectSubcategory('terminal')
     props.assets.update((d) => { d.assets = [{ ...sshAsset, id: 'e1', config: {} }] })
     render(<StarHubToolWorkspace {...props} />)
     const openMenu = () => fireEvent.contextMenu(screen.getByText('prod-server'))
-    // 在页面内打开:走 openAsset 回调,打开该资产实例(无副标题资产)
-    openMenu()
-    fireEvent.click(screen.getByText('在页面内打开'))
-    expect(props.bridge.source.getSnapshot().assetId).toBe('e1')
     // 编辑:走连接对话框编辑模式
     openMenu()
     fireEvent.click(screen.getByText('编辑'))
     expect(props.openConnectionManager).toHaveBeenCalledWith(expect.objectContaining({ id: 'e1' }))
   })
 
-  it('opens the asset standalone page through the host sidecar with the HOST origin (not dsh-app://) on a plain row click', async () => {
+  it('opens the asset standalone page through the host sidecar with the host origin from the context menu', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
     // 桌面壳里页面 origin 是 dsh-app://app,真实宿主源要靠桥内 host_origin 问出来
     const invoke = vi.fn((cmd: string) => {
@@ -415,7 +414,8 @@ describe('StarHubToolWorkspace', () => {
       props.bridge.selectSubcategory('terminal')
       props.assets.update((d) => { d.assets = [sshAsset] })
       render(<StarHubToolWorkspace {...props} />)
-      screen.getByText('prod-server').closest('button')!.click()
+      fireEvent.contextMenu(screen.getByText('prod-server'))
+      fireEvent.click(screen.getByText('在浏览器中打开'))
       await vi.waitFor(() => { expect(invoke).toHaveBeenCalledWith('open_external_url', expect.anything()) })
       // 交给 sidecar 唤起系统浏览器(与壳的弹窗策略无关),URL 用宿主源还原
       expect(hostBridgeCalls().map(call => call.cmd)).toEqual(['host_origin', 'open_external_url'])
@@ -443,7 +443,8 @@ describe('StarHubToolWorkspace', () => {
       props.bridge.selectSubcategory('terminal')
       props.assets.update((d) => { d.assets = [{ ...sshAsset, config: {} }] })
       render(<StarHubToolWorkspace {...props} />)
-      screen.getByText('prod-server').closest('button')!.click()
+      fireEvent.contextMenu(screen.getByText('prod-server'))
+      fireEvent.click(screen.getByText('在浏览器中打开'))
       await waitFor(() => { expect(replace).toHaveBeenCalledWith(
         `${window.location.origin}/starhub-react/index.html?asset=a1&workbench=ssh`,
       ) })
@@ -470,7 +471,8 @@ describe('StarHubToolWorkspace', () => {
       props.bridge.selectSubcategory('terminal')
       props.assets.update((d) => { d.assets = [{ ...sshAsset, config: {} }] })
       render(<StarHubToolWorkspace {...props} />)
-      screen.getByText('prod-server').closest('button')!.click()
+      fireEvent.contextMenu(screen.getByText('prod-server'))
+      fireEvent.click(screen.getByText('在浏览器中打开'))
       // 两条路都不通时不再静默:面板给出可见提示,并把**宿主源**链接落到剪贴板
       await screen.findByText('未能唤起系统浏览器,链接已复制到剪贴板')
       expect(write).toHaveBeenCalledWith(
@@ -512,7 +514,8 @@ describe('StarHubToolWorkspace', () => {
     props.assets.update((d) => { d.assets = [sshAsset] })
     render(<StarHubToolWorkspace {...props} />)
     expect(screen.getByText('prod-server')).toBeTruthy()
-    expect(screen.queryByText('SSH 执行记录')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'SSH 执行记录' }))
+    expect(props.openExecRecords).toHaveBeenCalledOnce()
   })
 
   it('switches to the exec-records view when the bridge is open and hides the asset list', () => {

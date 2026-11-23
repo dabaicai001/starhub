@@ -126,7 +126,26 @@
 .modalSelect { flex: 1; min-width: 0; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); outline: none; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-size: 12px; padding: 6px 8px; }
 .modalSelect:focus { border-color: var(--dsw-alias-state-business-primary); }
 .toast { position: absolute; z-index: 3; bottom: 18px; left: 50%; transform: translateX(-50%); border: 0; border-radius: var(--dsw-radius-sm); padding: 8px 14px; background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-elevation-prominent); font-size: 12px; }
-@media (max-width: 720px) { .body { flex-direction: column; } .side { width: auto; min-width: 0; min-height: 38%; border-right: 0; border-bottom: 0.5px solid var(--dsw-alias-border-l2); } }
+.header .keysToggle { display: none; }
+
+@media (max-width: 720px) {
+  .header { gap: 6px; padding-inline: 10px; }
+  .headLeft { flex-wrap: wrap; gap: 4px 8px; }
+  .header .keysToggle { display: inline-flex; flex: none; }
+  .body { flex-direction: column; }
+  .side {
+    width: auto;
+    min-width: 0;
+    min-height: 0;
+    flex: 0 0 clamp(112px, 28%, 220px);
+    border-right: 0;
+    border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  }
+  .keysCollapsed { display: none; }
+  .toolbar, .analysisTitleRow, .analysisStatus { flex-wrap: wrap; }
+  .analysisTable { overflow-wrap: anywhere; }
+  .modal { max-height: calc(100% - 24px); overflow: auto; }
+}
 
 /* 壳内:资产名已由主壳标签条承担,页头只留状态与动作。 */
 :global(.embedded-workbench) .header {

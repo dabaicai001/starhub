@@ -299,21 +299,22 @@ pub fn resolve_asset_id(
     )
 }
 
-/// 解析发起调用的会话绑定的**终端页会话 id**(v0.140.1)。
-///
-/// SSH 终端页里的 AI 助手在 `bind_asset_context` 时带上所在页面的会话 id,
-/// 域工具据此优先复用那个页面的连接;主壳 AI 等无页面上下文的调用返回 None
-/// (回落按资产取第一个存活会话)。
+/// 解析目标资产绑定的终端页会话 id。显式切换资产时使用目标资产自身的连接。
 pub fn resolve_terminal_session(
     bindings: &crate::bindings::SessionBindings,
     params: &serde_json::Value,
+    asset_id: &str,
 ) -> Option<String> {
     let session_id = params
         .get("sessionId")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    bindings.resolve_terminal_session(session_id)
+    let binding = bindings.resolve(session_id)?;
+    if binding.asset_id != asset_id {
+        return None;
+    }
+    binding.terminal_session_id
 }
 
 #[cfg(test)]
@@ -433,17 +434,25 @@ mod tests {
         bindings.record_subagent_parent("child", "root");
         let with_page = serde_json::json!({ "sessionId": "child" });
         assert_eq!(
-            resolve_terminal_session(&bindings, &with_page).as_deref(),
+            resolve_terminal_session(&bindings, &with_page, "root-asset").as_deref(),
             Some("root-asset__k3f9a2")
         );
         // 没带页面 id 的绑定 / 无 sessionId 参数:None
         bindings.bind("plain", "ssh", "root-asset", None);
         assert_eq!(
-            resolve_terminal_session(&bindings, &serde_json::json!({ "sessionId": "plain" })),
+            resolve_terminal_session(&bindings, &with_page, "other-asset"),
             None
         );
         assert_eq!(
-            resolve_terminal_session(&bindings, &serde_json::json!({})),
+            resolve_terminal_session(
+                &bindings,
+                &serde_json::json!({ "sessionId": "plain" }),
+                "root-asset"
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_terminal_session(&bindings, &serde_json::json!({}), "root-asset"),
             None
         );
     }

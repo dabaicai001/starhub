@@ -89,7 +89,7 @@ export function createAskAiHandler(deps: AskAiDeps): (payload: AskAiPayload) => 
       // 取当前会话 id 作作用域:host 侧 tool-context 只对触发绑定(ask-ai)
       // 的会话注入,避免全局粘性扩散到普通对话。
       const current = currentSessionId(deps.sessions.list.getSnapshot())
-      bindAssetContext(deps.writer, deps.selection.source.getSnapshot(), {
+      void bindAssetContext(deps.writer, deps.selection.source.getSnapshot(), {
         id: payload.assetId,
         name: payload.assetName ?? '',
       }, current ?? '')

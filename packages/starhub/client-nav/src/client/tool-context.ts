@@ -8,6 +8,7 @@
  * `settings.mutate` 的路径写入(以服务端已存的 section 为基准合并,不是
  * 读-改-写整份 namespace),因此两个终端页/两个助手先后绑定时互不覆盖。
  */
+import { tauriInvoke } from './tauri.ts'
 
 /** Settings namespace holding the current StarHub tool selection. */
 export const TOOL_CONTEXT_NAMESPACE = 'starhub-tool-context'
@@ -20,6 +21,8 @@ export interface ToolContextBinding {
   routePrefix: string
   assetType: string
   dbType: string
+  /** The selected asset is bound to a specific open SSH terminal. */
+  terminalReferenced?: true
   /** 写入时间(毫秒);裁剪过期条目时按它排序。 */
   updatedAt: number
 }
@@ -87,6 +90,7 @@ export const MAX_TOOL_CONTEXT_BINDINGS = 48
 
 /** 正在裁剪时的标记:并发绑定只跑一次裁剪,不重复写。 */
 let pruning = false
+const pendingBindings = new Map<string, Promise<boolean>>()
 
 /**
  * 把超过上限的会话绑定裁到最近的 {@link MAX_TOOL_CONTEXT_BINDINGS} 条。
@@ -146,7 +150,8 @@ export function bindAssetContext(
   selection: ToolContextSelection,
   asset: { id: string; name: string; type?: string; config?: Record<string, unknown> },
   sessionId: string,
-): void {
+  terminalSessionId?: string,
+): Promise<boolean> {
   const config = asset.config ?? {}
   const meta: ToolContextAssetMeta = {
     assetType: asset.type ?? '',
@@ -161,11 +166,31 @@ export function bindAssetContext(
     routePrefix: selection.routePrefix ?? '',
     assetType: meta.assetType,
     dbType: meta.dbType ?? '',
+    ...(terminalSessionId === undefined ? {} : { terminalReferenced: true as const }),
     updatedAt: Date.now(),
   }
-  void writer.mutate(
-    TOOL_CONTEXT_NAMESPACE,
-    [{ op: 'set', path: ['bindings', sessionId], value: JSON.stringify(binding) }],
-    undefined,
-  ).then((view) => { pruneBindings(writer, view) }).catch(() => {})
+  const writeSettings = (): void => {
+    void writer.mutate(
+      TOOL_CONTEXT_NAMESPACE,
+      [{ op: 'set', path: ['bindings', sessionId], value: JSON.stringify(binding) }],
+      undefined,
+    ).then((view) => { pruneBindings(writer, view) }).catch(() => {})
+  }
+  if (terminalSessionId === undefined) writeSettings()
+  if (sessionId === '') return Promise.resolve(false)
+
+  // Serialize updates for each conversation. A later asset reference must
+  // replace any previously selected terminal even when its HTTP call is faster.
+  const bind = (): Promise<boolean> => tauriInvoke<{ ok: boolean }>('bind_asset_context', {
+    assetId: asset.id, sessionId, terminalSessionId,
+  }).then(result => result?.ok === true, () => false)
+  const previous = pendingBindings.get(sessionId)
+  const request = (previous === undefined ? bind() : previous.then(bind)).then(ok => {
+    if (pendingBindings.get(sessionId) !== request) return false
+    pendingBindings.delete(sessionId)
+    if (ok && terminalSessionId !== undefined) writeSettings()
+    return ok
+  })
+  pendingBindings.set(sessionId, request)
+  return request
 }

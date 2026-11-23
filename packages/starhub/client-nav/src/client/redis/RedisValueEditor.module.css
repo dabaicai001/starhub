@@ -50,6 +50,11 @@
 .row:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .rowDeleted { opacity: 0.35; }
 .rowDeleted .cellField, .rowDeleted .cellValue { text-decoration: line-through; }
+
+@media (max-width: 540px) {
+  .infoBar, .infoRight { flex-wrap: wrap; gap: 6px 10px; }
+  .infoRight { max-width: 100%; }
+}
 .cellField { flex: 1; min-width: 0; background: var(--dsw-specific-input-major); border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xs); color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code); font-size: 12px; padding: 5px 8px; outline: none; }
 .cellValue { flex: 2; min-width: 0; background: var(--dsw-specific-input-major); border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xs); color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code); font-size: 12px; padding: 5px 8px; outline: none; }
 /* set 成员 / list 新增行等单列场景:占满整行。 */

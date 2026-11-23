@@ -52,6 +52,8 @@ export interface StarHubToolContextValue {
   assetType?: string
   /** 数据库子类型(redis / mysql / clickhouse / …);非 DB 资产缺省。 */
   dbType?: string
+  /** Whether the user referenced a specific SSH terminal. */
+  terminalReferenced?: boolean
 }
 
 /** Schemastery validation for the namespace value. */
@@ -63,6 +65,7 @@ export const ToolContextSchema: z<StarHubToolContextValue> = z.object({
   routePrefix: z.string(),
   assetType: z.string(),
   dbType: z.string(),
+  terminalReferenced: z.boolean(),
 })
 
 /**
@@ -118,6 +121,7 @@ export interface ToolContextBinding {
   assetType?: string | undefined
   /** 数据库子类型(redis / mysql / clickhouse / …)。 */
   dbType?: string | undefined
+  terminalReferenced?: boolean
   /** 写入时间(毫秒);client-nav 据此裁剪过期条目。 */
   updatedAt?: number | undefined
 }
@@ -153,6 +157,7 @@ export function parseBindings(raw: Record<string, string> | undefined): Record<s
       routePrefix: field('routePrefix'),
       assetType: field('assetType'),
       dbType: field('dbType'),
+      ...(record.terminalReferenced === true ? { terminalReferenced: true } : {}),
       updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : undefined,
     }
   }
@@ -180,6 +185,7 @@ export function readToolContextFor(config: Config, sessionId: string): StarHubTo
       routePrefix: bound.routePrefix ?? '',
       assetType: bound.assetType ?? '',
       dbType: bound.dbType ?? '',
+      ...(bound.terminalReferenced === true ? { terminalReferenced: true } : {}),
     }
   }
   const legacy = readToolContext(config)
@@ -225,6 +231,9 @@ export function renderToolContext(value: StarHubToolContextValue): string | null
   const toolHint = toolHintFor(value)
   if (toolHint !== null) {
     lines.push(toolHint)
+  }
+  if (value.terminalReferenced === true) {
+    lines.push('- The user referenced a specific SSH terminal in this conversation. Use the bound SSH/SFTP tools directly and keep this binding for that terminal. If it is disconnected, ask the user to reconnect or reference a new terminal.')
   }
   // Docker 资产硬约束(死规定):任何删除类操作必须先征得用户明确确认。
   // 与 @ 引用标注、approval-bridge 风险门三层一致,不允许模型自行删除。

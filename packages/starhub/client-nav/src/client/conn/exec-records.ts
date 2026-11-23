@@ -88,7 +88,7 @@ export interface ExecRecordsBridge {
   readonly removeSession: (sessionId: string) => void
   /** 清空**当前会话**的记录(执行记录视图头部「清空」只作用于可见范围)。 */
   readonly clear: () => void
-  /** 切到执行记录视图(头部「执行」按钮;视图互斥复位在注入回调层组合)。 */
+  /** 从 StarHub 工具栏切到执行记录视图。 */
   readonly openView: () => void
   /** 收起执行记录视图(回到面板的资产列表;面板 × 则整个面板回会话)。 */
   readonly closeView: () => void

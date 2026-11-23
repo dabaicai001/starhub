@@ -74,6 +74,7 @@ import { RedisValueEditor } from './RedisValueEditor.tsx'
 import { RedisAnalysisPanel } from './RedisAnalysisPanel.tsx'
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
 import { TabPane } from '../TabPane.tsx'
+import { interactionMessages } from '../interaction-messages.ts'
 import css from './RedisWorkbench.module.css'
 
 /** Redis 固定 DB 编号(单机 0-15)。 */
@@ -469,6 +470,7 @@ function DbTreeRow({ db, open, size, actions }: {
  * @returns the Redis workbench overlay.
  */
 export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: () => void }) {
+  const [keysCollapsed, setKeysCollapsed] = useState(false)
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   /** 连接尝试序号:失败后点「重试」自增,触发建连 effect 重跑。 */
@@ -1056,6 +1058,13 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
             <span className={css.badge} data-testid="redis-head-badge">db{shownDb}</span>
             <span className={css.keyCount} data-testid="redis-head-count">{(shownEntry?.size ?? 0).toLocaleString()} keys</span>
           </div>
+          {connectError === null && (
+            <button type="button" className={`${css.secondaryButton} ${css.keysToggle}`}
+              aria-expanded={!keysCollapsed} aria-controls="starhub-redis-keys"
+              onClick={() => { setKeysCollapsed(collapsed => !collapsed) }}>
+              {interactionMessages().redisKeys}
+            </button>
+          )}
           {onClose !== undefined && <button type="button" className={css.closeButton} onClick={onClose}>关闭</button>}
         </header>
 
@@ -1069,7 +1078,7 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
 
         {connectError === null && (
           <div className={css.body}>
-            <div className={css.side}>
+            <div id="starhub-redis-keys" className={`${css.side} ${keysCollapsed ? css.keysCollapsed : ''}`}>
               <div className={css.toolbar}>
                 <button type="button" className={css.iconButton} title="刷新" aria-label="刷新"
                   disabled={!connected || expandedDb === null || expandedEntry?.loading === true}

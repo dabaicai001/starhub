@@ -154,9 +154,13 @@ pub fn registry_with_domains(
 
         // 全局:会话 → 资产绑定(bind_asset_context)。open_connection /
         // focus_terminal 的窗口动作在新架构里是 bridge 插件事件,不占方法面。
-        {
+        for (method, require_live) in [
+            ("bind_asset_context", false),
+            ("ui.bind_asset_context", true),
+        ] {
             let ssh = Arc::clone(&ssh);
-            registry.register("bind_asset_context", move |params| {
+            let runtime = Arc::clone(&runtime);
+            registry.register(method, move |params| {
                 let asset_id = params
                     .get("assetId")
                     .and_then(Value::as_str)
@@ -183,6 +187,15 @@ pub fn registry_with_domains(
                     .get(&asset_id)
                     .map_err(RpcError::internal)?
                     .asset_type;
+                if let Some(terminal) = terminal_session_id {
+                    if require_live
+                        && runtime
+                            .block_on(ssh.manager().alive_session_for(terminal, &asset_id))
+                            .is_none()
+                    {
+                        return Err(RpcError::invalid_params("该 SSH 终端连接已断开"));
+                    }
+                }
                 ssh.bind_session(&session_id, &asset_type, &asset_id, terminal_session_id);
                 Ok(json!({ "ok": true, "action": "bound" }))
             });

@@ -121,14 +121,6 @@ const PLUGINS = [
       en: 'Injects live and takeover snapshots into agent context.',
     },
   },
-  {
-    short: 'ssh-assistant', row: 'starhub-ssh-assistant',
-    entry: 'lib/types/index.js', title: { zh: 'StarHub SSH AI 助手', en: 'StarHub SSH AI assistant' },
-    description: {
-      zh: 'SSH 终端页 AI 助手:每终端页一个 agent 作用域会话,复用 dsh 模型连接;AI 不自建连接,命令跑在用户已连接的终端会话上,自主只读、写操作经审批卡交回人工,审批在面板内完成。',
-      en: 'SSH terminal AI assistant: one agent-scoped session per terminal page, reusing the dsh model route; the AI owns no connection and runs commands on the user\'s connected terminal session, staying read-only on its own with writes handed back through the approval card.',
-    },
-  },
 ]
 
 /** 客户端半边所在的行(唯一一个 `dsh.client` 声明者)。 */
@@ -390,8 +382,8 @@ DSH 0.2.2-rc.1 起,插件页只给「从注册表按本名安装」的第三方 
 
 ## 组件
 
-包内是一个裸包名行(承载客户端半边)+ 9 个子路径行:导航、静态资源、工具上下文、
-桥接、工具面、审批桥、会话注册表、域事件、直播上下文、SSH AI 助手。
+包内有一个导航入口和八个宿主模块，分别处理静态资源、工具上下文、桥接、工具面、
+审批桥、会话注册表、域事件和直播上下文。
 
 ## 数据与权限
 
