@@ -590,6 +590,7 @@ fn capabilities_lists_the_android_method_surface() {
         "ui.update_asset",
         "ui.delete_asset",
         // B 组交互会话(connId 面):SSH 终端 + SFTP 面板
+        "ui.bind_asset_context",
         "ui.ssh_connect",
         "ui.ssh_write",
         "ui.ssh_write_binary",
@@ -688,7 +689,8 @@ fn capabilities_lists_the_android_method_surface() {
     // 上游 dsh 原生提供 browser-use。
     // - 1 UI 面(`ui.ssh_bastion_response`,AI 连接模型改复用用户终端会话,
     // 选机器卡机制整体退役,v0.140.0)= 205
-    assert_eq!(methods.len(), 205, "方法面总数: {methods:?}");
+    // + 1 UI 面(`ui.bind_asset_context`,引用已连接的 SSH 终端,v0.144.0)= 206
+    assert_eq!(methods.len(), 206, "方法面总数: {methods:?}");
 }
 
 /// Android 方法面 roundtrip(不触设备的分支):未授权写操作硬错误;

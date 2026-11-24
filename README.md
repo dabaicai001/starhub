@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.144.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.144.1-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,11 +59,8 @@
 
 ## 当前版本
 
-### v0.144.0 (2026-11-23)
-- ✨ 有会话时，点击连接默认在 DSH 右侧栏打开工作台，保留中间对话。右键可在外部浏览器打开。
-- ✨ 在已连接的 SSH 终端中右键「引用到当前对话框」，让当前对话的 AI 复用这一条连接。连接断开后提示重连。
-- 🔧 适配右侧栏的窄页布局，覆盖 SSH/SFTP、数据库、Redis、Elasticsearch、Docker 和消息队列。
-- 🔧 移除 SSH 页内的独立 AI 面板和会话头部的「执行」按钮。「SSH 执行记录」可从「StarHub 工具」打开。
+### v0.144.1 (2026-11-24)
+- 🐛 同步 Rust sidecar 协议测试中的 SSH 终端引用方法和 RPC 总数，修复 Windows 插件发布与主分支 CI 失败。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 
