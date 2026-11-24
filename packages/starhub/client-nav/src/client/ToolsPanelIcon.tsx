@@ -8,7 +8,7 @@
  */
 
 import type { ReactNode } from 'react'
-import { ICON_MEDIUM_STROKE } from '@deepseek-ai/dsh-client-ui-primitives'
+import { ICON_MEDIUM_STROKE, type IconProps } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: the 'sidebar.panellist' SlotMap row (declared by ui-sidebar).
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -20,8 +20,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
  * @returns the icon element.
  */
 export function ToolsPanelIcon({ size }: PropsRuntime<'sidebar.panellist'>): ReactNode {
+  return <ToolsIcon size={size} />
+}
+
+/** Render the StarHub glyph in the right-sidebar guide. */
+export function ToolsIcon({ size = 16, className }: IconProps): ReactNode {
   return (
     <svg
+      className={className}
       width={size}
       height={size}
       viewBox="0 0 16 16"

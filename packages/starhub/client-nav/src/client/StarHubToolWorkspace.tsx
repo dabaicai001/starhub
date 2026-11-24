@@ -23,11 +23,9 @@
  * 历史形态:rc.2 起先挂 shell.overlay 浮层(侧栏底部 footer.action 入口 +
  * toolsPanel 开关桥);v0.123.2 迁主面板,开关桥删除。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import clsx from 'clsx'
-import type { PropsRuntime, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
-// Type-only: the 'main' SlotMap row (declared by ui-layout).
-import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   IconCloseOutlineMedium, IconCopyOutlineMedium, IconEditOutlineMedium, IconEllipsisOutlineMedium,
@@ -117,7 +115,7 @@ export interface StarHubToolWorkspaceInjected {
   clearExecRecords: () => void
   /** 断开一条执行记录对应的 SSH 连接并移除其记录(v0.100.1 行尾关闭按钮)。 */
   disconnectExecSession: (sessionId: string) => void
-  /** 关闭工具面板:主面板模式 = 回会话视图(layout.selectPanel(null))。 */
+  /** 关闭承载工具列表的面板或标签页。 */
   closeTools: () => void
   /** 选中/收起一个子类:null = 全部收起(手风琴,再点当前行收起)。 */
   selectSubcategory: (key: string | null) => void
@@ -130,10 +128,10 @@ export interface StarHubToolWorkspaceInjected {
   }
 }
 
-/** Full composed props: main-panel runtime share + the injected face (no slot store — see header). */
-export type StarHubToolWorkspaceProps =
-  & PropsRuntime<'main'>
-  & InjectFace<StarHubToolWorkspaceInjected>
+/** Props shared by the main tools panel and the sidebar toolbox. */
+export type StarHubToolWorkspaceProps = InjectFace<StarHubToolWorkspaceInjected> & {
+  closeToolsLabel?: string
+}
 
 /** 单个资产行:打开工作台、编辑连接及右键操作。 */
 function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit, onNotice }: {
@@ -270,13 +268,13 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
  * 文件引用源重复),壳内文件浏览请用 DSH 侧能力。
  *
  * 工具栏可打开当前会话的 SSH 执行记录,数据由 apply 层订阅并归档。
- * @param props - composed slot props (main-panel runtime share + injected face).
- * @returns the panel content (rendered only while the sidebar row selects it).
+ * @param props - callbacks and data for the tools list.
+ * @returns the tools panel content.
  */
 export function StarHubToolWorkspace({
   openAsset, refreshAssets, openConnectionManager, dismissConnectionChange,
   openExecRecords, clearExecRecords, disconnectExecSession,
-  closeTools, selectSubcategory, insertAssetReference,
+  closeTools, closeToolsLabel, selectSubcategory, insertAssetReference,
   useSelection, useAssets, useExecRecords,
 }: StarHubToolWorkspaceProps) {
   const assets = useAssets(s => s.assets)
@@ -299,6 +297,7 @@ export function StarHubToolWorkspace({
   const execRecords = useExecRecords?.(s => s.records) ?? []
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
+  const groupId = useId()
   // 面板级瞬时提示(「在浏览器中打开」失败时不再静默):6s 自动消失。
   const [notice, setNotice] = useState<string | null>(null)
   useEffect(() => {
@@ -364,8 +363,8 @@ export function StarHubToolWorkspace({
             <button
               type="button"
               className={clsx(css.iconButton, css.closeTools)}
-              title={messages.returnToConversation}
-              aria-label={messages.returnToConversation}
+              title={closeToolsLabel ?? messages.returnToConversation}
+              aria-label={closeToolsLabel ?? messages.returnToConversation}
               onClick={closeTools}
             >
               <IconCloseOutlineMedium size={16} />
@@ -435,9 +434,9 @@ export function StarHubToolWorkspace({
                       <button type="button" className={css.secondaryButton} onClick={refreshAssets}>{messages.retry}</button>
                     </div>}
                     {hasAssets && visibleGroups.map(({ category, matches }) => (
-                      <section className={css.group} key={category.key} aria-labelledby={`starhub-connections-${category.key}`}>
+                      <section className={css.group} key={category.key} aria-labelledby={`${groupId}-${category.key}`}>
                         <div className={css.groupHeading}>
-                          <h2 id={`starhub-connections-${category.key}`}>{category.label}</h2>
+                          <h2 id={`${groupId}-${category.key}`}>{category.label}</h2>
                           {terms.length > 0 && <span>{messages.connectionCount(matches.length)}</span>}
                         </div>
                         <ul className={css.list}>

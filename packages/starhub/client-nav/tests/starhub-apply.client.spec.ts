@@ -191,6 +191,29 @@ describe('client-nav apply (rc.2)', () => {
     expect(mainConfig.key).toBe('starhub-tools')
   })
 
+  it('adds the toolbox to the sidebar guide and opens connections alongside the conversation', async () => {
+    const selectPanel = vi.fn()
+    const openResource = vi.fn()
+    const { ctx, register, registerTabType } = fakeContext({
+      layout: { selectPanel },
+      sidebarRight: { mounted: { getSnapshot: () => 's1' }, openResource },
+    })
+    applyPlugin(ctx)
+
+    const definition = registerTabType.mock.calls.find(([tab]) => tab.kind === 'starhub-toolbox')?.[0]
+    expect(definition?.title('')).toBe('StarHub 工具箱')
+    expect(definition?.guide?.[0]?.title()).toBe('StarHub 工具箱')
+    const registration = register.mock.calls.find(([options]) =>
+      options.name === 'sidebar.right.pane.tab' && options.key === definition?.id)
+    expect(registration?.[1]).toBeTypeOf('function')
+    const tools = registration?.[0].inject() as unknown as { openAsset: (asset: unknown) => Promise<void> }
+    await tools.openAsset({ id: 'server', type: 'ssh', name: 'Server', config: {} })
+    expect(openResource).toHaveBeenCalledWith(
+      'dsh-resource://starhub-workbench/asset/server', { kind: 'starhub-workbench' },
+    )
+    expect(selectPanel).not.toHaveBeenCalled()
+  })
+
   it('opens SSH execution history from the tools panel and resets it on close', () => {
     const selectPanel = vi.fn()
     const { ctx, register } = fakeContext({ layout: { selectPanel } })

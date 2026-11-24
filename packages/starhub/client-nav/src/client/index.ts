@@ -54,6 +54,7 @@ import { StarHubOverlay, type StarHubOverlayInjected } from './StarHubOverlay.ts
 import { ToolsPanelIcon } from './ToolsPanelIcon.tsx'
 import { StarHubToolWorkspace, type StarHubToolWorkspaceInjected } from './StarHubToolWorkspace.tsx'
 import { StarHubWorkbenchPanel, type StarHubWorkbenchPanelInjected } from './StarHubWorkbenchPanel.tsx'
+import { installSidebarTools } from './sidebar-tools.tsx'
 import { installSidebarWorkbench } from './sidebar-workbench.tsx'
 import { createWorkbenchPanelStore, embeddedWorkbenchUrl, type WorkbenchPage } from './workbench-panel.ts'
 import {
@@ -252,7 +253,7 @@ export function apply(ctx: Context): void {
   // 主壳 AI 连接卡(StarHubConnCard)随 v0.140.0「AI 复用用户终端会话」模型
   // 一并退役:AI 不再持有连接,MFA / 堡垒机选机器 / 主机密钥提示只属于
   // 用户自己的终端页,壳内不再需要第二张验证卡。
-  const workspaceInject = (): StarHubToolWorkspaceInjected => ({
+  const workspaceInject = (): Omit<StarHubToolWorkspaceInjected, 'closeTools'> => ({
     openAsset: openAssetPage,
     refreshAssets: assets.refresh,
     openConnectionManager: connectionManager.open,
@@ -266,11 +267,6 @@ export function apply(ctx: Context): void {
       tauriInvoke('ssh_disconnect', { id: sessionId }).catch((e: unknown) => {
         console.error('关闭 SSH 连接失败:', sessionId, e)
       })
-    },
-    // 关闭工具或执行记录视图时复位开关,下次打开工具从资产列表开始。
-    closeTools: () => {
-      execRecords.closeView()
-      layout.selectPanel(null)
     },
     // 选中/收起一个子类:写入选择桥(手风琴,再点当前行收起);面板据此
     // 展开该子类的资产列表或收起。
@@ -296,8 +292,15 @@ export function apply(ctx: Context): void {
   ctx.slots.inject('main', () => ctx.slots.register({
     name: 'main',
     key: TOOLS_PANEL_ID,
-    inject: workspaceInject,
+    inject: () => ({
+      ...workspaceInject(),
+      closeTools: () => {
+        execRecords.closeView()
+        layout.selectPanel(null)
+      },
+    }),
   }, StarHubToolWorkspace))
+  installSidebarTools(ctx, () => ({ ...workspaceInject(), closeExecRecords: execRecords.closeView }))
   // 独立工作台主面板供无会话或无右侧栏服务的宿主使用。
   const workbenchInject = (): StarHubWorkbenchPanelInjected => ({
     activatePage: (key) => { workbench.activateIfOpen(key) },
