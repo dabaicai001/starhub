@@ -874,7 +874,6 @@ function IndexRow({ idx, onOpen, onDelete }: {
       <ContextMenu
         menu={menu}
         items={items}
-        className={css.menuRoot}
         onSelect={(id) => {
           if (id === 'open') onOpen(idx.name)
           else if (id === 'copy') void navigator.clipboard?.writeText(idx.name).catch(() => {})

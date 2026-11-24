@@ -245,8 +245,6 @@
 .ddlCopy:hover { border-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-state-business-primary); }
 .ddlBody { flex: 1; min-height: 0; overflow: auto; padding: 14px; margin: 0; font-family: var(--ds-font-family-code); font-size: 12px; line-height: 1.7; color: var(--dsw-alias-label-primary); white-space: pre-wrap; word-break: break-all; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-scrollbar-bg-l1) transparent; }
 
-.menuRoot { display: contents; }
-
 /* 壳内:资产名已由主壳标签条承担,页头只留状态与动作。 */
 :global(.embedded-workbench) .header {
   min-height: 44px;

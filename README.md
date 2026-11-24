@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.146.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.147.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,8 +59,10 @@
 
 ## 当前版本
 
-### v0.146.0 (2026-11-24)
-- ✨ 会话右侧栏的起始页新增「StarHub 工具箱」，可在右侧标签页搜索、管理和打开已保存的连接。
+### v0.147.0 (2026-11-24)
+- ✨ 连接右键菜单新增「在新标签页打开」，可为同一连接打开独立工作台。SSH 引用绑定所选终端标签的连接。
+- 🐛 连接右键菜单和行尾更多菜单跟随触发位置，并支持键盘选择。
+- 🔧 移除全局设置里的 SSH 分区，终端外观与编码可在 SSH 终端工具栏调整。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

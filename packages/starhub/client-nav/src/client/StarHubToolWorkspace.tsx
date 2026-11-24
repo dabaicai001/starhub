@@ -8,8 +8,8 @@
  * 经 openConnectionManager(asset) 打开连接对话框的编辑模式;列头带资产数、
  * 刷新与「新建连接」入口,右上角 × 回会话视图(selectPanel(null))。
  *
- * 资产行右键菜单:在浏览器中打开 / 引用到当前对话框(插入 `@` 引用 chip 并轻绑定资产上下文,与 `@` pick
- * 同语义)/ 编辑 / 复制连接信息(名称 + user@host 到剪贴板)/ 删除(删除复用连接
+ * 资产行右键菜单:在新标签页打开 / 在浏览器中打开 / 引用到当前对话框 /
+ * 编辑 / 复制连接信息(名称 + user@host 到剪贴板)/ 删除(删除复用连接
  * 对话框编辑模式内的两步确认删除入口,不在菜单里直接执行破坏性操作)。
  *
  * 浏览器唤起走**宿主 sidecar**(`ui.open_external_url` → 平台默认浏览器):壳的
@@ -103,7 +103,7 @@ async function openAssetInBrowser(asset: StarHubAsset): Promise<string | null> {
 
 /** Business face injected by the registration: the connection wire + bridge/asset writes. */
 export interface StarHubToolWorkspaceInjected {
-  openAsset: (asset: StarHubAsset) => void | Promise<void>
+  openAsset: (asset: StarHubAsset, newTab?: boolean) => void | Promise<void>
   refreshAssets: () => void
   /** 打开连接对话框:不传资产 = 新建;传资产 = 编辑(含删除入口)。 */
   openConnectionManager: ConnectionManagerOverlay['open']
@@ -120,7 +120,7 @@ export interface StarHubToolWorkspaceInjected {
   /** 选中/收起一个子类:null = 全部收起(手风琴,再点当前行收起)。 */
   selectSubcategory: (key: string | null) => void
   /** 把资产作为引用 chip 插入当前会话对话框并轻绑定资产上下文(资产行右键「引用到当前对话框」)。 */
-  insertAssetReference: (asset: RustAsset) => void
+  insertAssetReference: (asset: RustAsset) => void | Promise<void>
   hooks: {
     selection: SnapshotStore<ToolSelection>
     assets: SnapshotStore<StarHubAssetListState>
@@ -140,9 +140,9 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
   /** 当前打开(选中)的资产行高亮。 */
   active: boolean
   /** 在宿主内打开工作台。 */
-  onOpenInPage: () => void | Promise<void>
+  onOpenInPage: (newTab?: boolean) => void | Promise<void>
   /** 引用到当前对话框:插入 `@` 引用 chip 并轻绑定资产上下文。 */
-  onReference: () => void
+  onReference: () => void | Promise<void>
   onEdit: () => void
   /** 面板级瞬时提示(唤起系统浏览器两条路都不通时给出可见反馈)。 */
   onNotice: (text: string) => void
@@ -152,6 +152,7 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
   const [copied, setCopied] = useState(false)
   const [openingBrowser, setOpeningBrowser] = useState(false)
   const [openingWorkbench, setOpeningWorkbench] = useState(false)
+  const [referencing, setReferencing] = useState(false)
   useEffect(() => {
     if (!copied) return
     const timer = window.setTimeout(() => { setCopied(false) }, 1500)
@@ -169,20 +170,32 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
       setOpeningBrowser(false)
     }
   }
-  const openInPage = async (): Promise<void> => {
+  const openInPage = async (newTab = false): Promise<void> => {
     setOpeningWorkbench(true)
     try {
-      await onOpenInPage()
+      await onOpenInPage(newTab)
     } catch (error) {
       onNotice(messages.workbenchOpenFailed(error instanceof Error ? error.message : String(error)))
     } finally {
       setOpeningWorkbench(false)
     }
   }
+  const reference = async (): Promise<void> => {
+    setReferencing(true)
+    try {
+      await onReference()
+      onNotice(messages.referencedConversation)
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : messages.terminalReferenceUnavailable)
+    } finally {
+      setReferencing(false)
+    }
+  }
   const pending = openingBrowser ? messages.openingBrowser : openingWorkbench ? messages.loadingWorkbench : ''
   const items: MenuEntry[] = [
+    { id: 'open-new-tab', label: messages.openInNewTab, icon: <IconPlusOutlineMedium />, disabled: openingWorkbench },
     { id: 'open-in-browser', label: messages.openInBrowser, icon: <IconRightUpOutlineMedium />, disabled: openingBrowser },
-    { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium /> },
+    { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium />, disabled: referencing },
     { id: 'edit', label: messages.edit, icon: <IconEditOutlineMedium /> },
     { id: 'copy', label: copied ? messages.copied : messages.copyConnection, icon: <IconCopyOutlineMedium /> },
     { type: 'separator', id: 'asset-delete-separator' },
@@ -234,7 +247,7 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
             return
           }
           const rect = event.currentTarget.getBoundingClientRect()
-          menu.openAt(rect.right, rect.bottom)
+          menu.openAt(rect.right, rect.bottom, 'end')
         }}
       >
         <IconEllipsisOutlineMedium size={16} />
@@ -242,10 +255,10 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
       <ContextMenu
         menu={menu}
         items={items}
-        align="end"
         onSelect={(id) => {
-          if (id === 'open-in-browser') void openInBrowser()
-          else if (id === 'reference') onReference()
+          if (id === 'open-new-tab') void openInPage(true)
+          else if (id === 'open-in-browser') void openInBrowser()
+          else if (id === 'reference') void reference()
           else if (id === 'edit' || id === 'delete') onEdit()
           else if (id === 'copy') {
             const text = subtitle === '' ? asset.name : `${asset.name} ${subtitle}`
@@ -255,7 +268,6 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
             })
           }
         }}
-        className={css.menuRoot}
       />
     </li>
   )
@@ -443,8 +455,8 @@ export function StarHubToolWorkspace({
                           {matches.map(({ asset, badge }) => (
                             <AssetRow key={asset.id} asset={asset} badgeLabel={badge}
                               active={(createdAsset?.id ?? activeAssetId) === asset.id}
-                              onOpenInPage={() => openAsset(asset)}
-                              onReference={() => { insertAssetReference(asset) }}
+                              onOpenInPage={newTab => newTab ? openAsset(asset, true) : openAsset(asset)}
+                              onReference={() => insertAssetReference(asset)}
                               onEdit={() => { openConnectionManager(asset) }}
                               onNotice={setNotice} />
                           ))}

@@ -25,7 +25,6 @@ function Host({ items, footer, onSelect }: {
         items={items}
         onSelect={onSelect}
         {...(footer === undefined ? {} : { footer })}
-        className={undefined}
       />
     </div>
   )
@@ -45,6 +44,21 @@ describe('ContextMenu', () => {
     expect(screen.getByRole('menu')).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: '打开' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: '删除' })).toBeTruthy()
+    const anchor = document.body.querySelector<HTMLElement>('[style*="anchor-name"]')
+    expect(anchor?.parentElement).toBe(document.body)
+    expect(anchor?.style.position).toBe('fixed')
+    expect(anchor?.style.left).toBe('100px')
+    expect(anchor?.style.top).toBe('200px')
+  })
+
+  it('关闭上一个右键菜单，再打开当前行的菜单', () => {
+    render(<><Host items={ITEMS} onSelect={() => {}} /><Host items={[{ id: 'edit', label: '编辑' }]} onSelect={() => {}} /></>)
+    const rows = screen.getAllByTestId('row')
+    fireEvent.contextMenu(rows[0]!, { clientX: 100, clientY: 200 })
+    fireEvent.contextMenu(rows[1]!, { clientX: 250, clientY: 360 })
+    expect(screen.getAllByRole('menu')).toHaveLength(1)
+    expect(screen.getByRole('menuitem', { name: '编辑' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: '打开' })).toBeNull()
   })
 
   it('选项点击分发 id 并关闭菜单', () => {

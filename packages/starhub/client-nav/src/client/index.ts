@@ -16,7 +16,6 @@
  * 选择桥记录当前资产,供 AI 工具上下文同步使用。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { JSX } from 'react'
 // Type-only: the SlotMap rows of the target slots must be in the program for
 // the register calls to type (declared by the slots' owning packages).
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -53,7 +52,7 @@ import { focusWindowByKey, installWorkbenchPageHost, openNewPage, tauriInvoke } 
 import { StarHubOverlay, type StarHubOverlayInjected } from './StarHubOverlay.tsx'
 import { ToolsPanelIcon } from './ToolsPanelIcon.tsx'
 import { StarHubToolWorkspace, type StarHubToolWorkspaceInjected } from './StarHubToolWorkspace.tsx'
-import { StarHubWorkbenchPanel, type StarHubWorkbenchPanelInjected } from './StarHubWorkbenchPanel.tsx'
+import { StarHubWorkbenchPanel, type StarHubWorkbenchPanelInjected, type TerminalFrameTracker, type TerminalReference } from './StarHubWorkbenchPanel.tsx'
 import { installSidebarTools } from './sidebar-tools.tsx'
 import { installSidebarWorkbench } from './sidebar-workbench.tsx'
 import { createWorkbenchPanelStore, embeddedWorkbenchUrl, type WorkbenchPage } from './workbench-panel.ts'
@@ -64,7 +63,7 @@ import {
 } from './live/live-panel.ts'
 import { StarHubLivePanel, type StarHubLivePanelInjected } from './live/StarHubLivePanel.tsx'
 import { AndroidSettingsTab } from './settings/android.tsx'
-import { SshSettingsTab } from './settings/ssh.tsx'
+import { connectedTerminalInFrame } from './terminal/reference.ts'
 
 /**
  * Required services: the slot registry, the connection wire, the input-trigger
@@ -185,8 +184,7 @@ export function apply(ctx: Context): void {
       insert()
     })
   }
-  const referenceTerminal = async (assetId: string, terminalSessionId: string): Promise<void> => {
-    const sessionId = getCurrentSession()
+  const referenceTerminal: TerminalReference = async (assetId, terminalSessionId, sessionId = getCurrentSession()) => {
     const messages = interactionMessages()
     if (sessionId === undefined) throw new Error(messages.noReferenceConversation)
     const asset = assets.source.getSnapshot().assets.find(item => item.id === assetId)
@@ -194,16 +192,43 @@ export function apply(ctx: Context): void {
     if (asset?.type !== 'ssh') throw new Error(messages.terminalReferenceUnavailable)
     await insertAssetReference(asset, sessionId, terminalSessionId)
   }
-  const openSidebarWorkbench = installSidebarWorkbench(ctx, assets, layout, sessions, referenceTerminal)
+  // Active frames are ordered by their last activation. Keep a hidden frame
+  // eligible when the connection list covers the workbench.
+  const terminalFrames = new Map<HTMLIFrameElement, { assetId: string; sessionId?: string }>()
+  const trackTerminalFrame: TerminalFrameTracker = (frame, assetId, sessionId) => ({
+    activate: () => {
+      terminalFrames.delete(frame)
+      terminalFrames.set(frame, { assetId, ...(sessionId === undefined ? {} : { sessionId }) })
+    },
+    dispose: () => { terminalFrames.delete(frame) },
+  })
+  const referenceFromTools = (asset: RustAsset): void | Promise<void> => {
+    const sessionId = getCurrentSession()
+    const messages = interactionMessages()
+    if (sessionId === undefined || sessions.binding(sessionId) === undefined) throw new Error(messages.noReferenceConversation)
+    if (asset.type === 'ssh') {
+      const target = Array.from(terminalFrames.entries()).reverse().find(([, tab]) =>
+        tab.assetId === asset.id && (tab.sessionId === undefined || tab.sessionId === sessionId))
+      if (target !== undefined) {
+        const terminal = connectedTerminalInFrame(target[0], asset.id)
+        if (terminal === undefined) throw new Error(messages.referenceConnectedTerminal)
+        return insertAssetReference(asset, sessionId, terminal)
+      }
+    }
+    return insertAssetReference(asset, sessionId)
+  }
+  const openSidebarWorkbench = installSidebarWorkbench(ctx, assets, layout, sessions, referenceTerminal, trackTerminalFrame)
+  /** 壳内工作台页簿 + 面板切换:开/聚焦一页并把主面板切到工作台。 */
+  const workbench = createWorkbenchPanelStore()
+  let nextWorkbenchTab = 0
   /** Open or reveal the asset's workbench and update the AI tool selection. */
-  const openAssetPage = async (asset: StarHubAsset): Promise<void> => {
-    if (!openSidebarWorkbench(asset.id)) {
-      await openNewPage(embeddedWorkbenchUrl(assetWindowUrl(asset)), asset.name, asset.id)
+  const openAssetPage = async (asset: StarHubAsset, newTab = false): Promise<void> => {
+    if (!openSidebarWorkbench(asset.id, newTab ? 'new-tab' : 'reveal')) {
+      const key = newTab ? `starhub-tab:${++nextWorkbenchTab}` : workbench.findPageForAsset(asset.id)?.key ?? asset.id
+      await openNewPage(embeddedWorkbenchUrl(assetWindowUrl(asset)), asset.name, key)
     }
     selection.openAsset(asset)
   }
-  /** 壳内工作台页簿 + 面板切换:开/聚焦一页并把主面板切到工作台。 */
-  const workbench = createWorkbenchPanelStore()
   const openWorkbenchPage = (page: WorkbenchPage): void => {
     layout.selectPanel(WORKBENCH_PANEL_ID)
     workbench.open(page)
@@ -271,7 +296,7 @@ export function apply(ctx: Context): void {
     // 选中/收起一个子类:写入选择桥(手风琴,再点当前行收起);面板据此
     // 展开该子类的资产列表或收起。
     selectSubcategory: (key: string | null) => { selection.selectSubcategory(key) },
-    insertAssetReference: asset => { void insertAssetReference(asset) },
+    insertAssetReference: referenceFromTools,
     hooks: {
       selection: selection.source,
       assets: assets.source,
@@ -309,6 +334,7 @@ export function apply(ctx: Context): void {
     // 而不是把主区留成白板。
     closeWorkbench: () => { layout.selectPanel(null) },
     referenceTerminal,
+    trackTerminalFrame,
     hooks: { workbench: workbench.source },
   })
   ctx.slots.inject('main', () => ctx.slots.register({
@@ -367,8 +393,9 @@ export function apply(ctx: Context): void {
         void openAssetPage(asset).catch((error: unknown) => { console.error('打开资产页面失败:', error) })
       },
       focusWindow: async (key) => {
-        if (openSidebarWorkbench(key, true)) return true
-        if (workbench.activateIfOpen(key)) {
+        if (openSidebarWorkbench(key, 'if-open')) return true
+        const page = workbench.findPageForAsset(key)
+        if (page !== undefined && workbench.activateIfOpen(page.key)) {
           layout.selectPanel(WORKBENCH_PANEL_ID)
           return true
         }
@@ -384,26 +411,10 @@ export function apply(ctx: Context): void {
       conversation,
     }),
   }), 'starhub: tauri host events')
-  // 设置融入底部设置齿轮:dsh 设置面板侧栏的 StarHub 分区(平铺,rc.2 上游
-  // SettingsSectionRow 只支持 id/order/label,无分组字段——各 tab 直接
-  // 以平铺 section 呈现;order 30 起排在通用(0)/模型(10)/内置插件(15)/
-  // Agent 预设(20)之后)。v0.130.0:只留 Android 设备与 SSH 两个连接配置
-  // tab(审计日志 / 告警规则 / 沙箱平台 / 关于 移除)。
-  const starhubTabs: ReadonlyArray<{
-    id: string
-    order: number
-    label: string
-    component: () => JSX.Element
-  }> = [
-    { id: 'starhub-android', order: 30, label: 'Android 设备', component: AndroidSettingsTab },
-    { id: 'starhub-ssh', order: 31, label: 'SSH', component: SshSettingsTab },
-  ]
-  for (const tab of starhubTabs) {
-    ctx.slots.inject('settings.section', () => ctx.slots.register({
-      name: 'settings.section',
-      id: tab.id,
-      order: tab.order,
-      label: tab.label,
-    }, tab.component))
-  }
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'starhub-android',
+    order: 30,
+    label: interactionMessages().androidDevices,
+  }, AndroidSettingsTab))
 }

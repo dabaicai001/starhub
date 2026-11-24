@@ -246,7 +246,6 @@ function TableRow({ table, selected, database, supportsAlter, expanded, columns,
             else if (id === 'truncate') actions.onTruncate()
             else if (id === 'drop') actions.onDrop()
           }}
-          className={css.menuRoot}
         />
       </div>
       {expanded && (
@@ -318,7 +317,6 @@ function DatabaseRow({ node, isCurrent, tableCount, supportsCreateTable, childre
           if (id === 'new-table') actions.onNewTable()
           else if (id === 'refresh') actions.onRefresh()
         }}
-        className={css.menuRoot}
       />
       {node.expanded && children}
     </div>

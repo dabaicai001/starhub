@@ -1,6 +1,7 @@
 const zh = {
   openingBrowser: '正在打开浏览器…',
   openInBrowser: '在浏览器中打开',
+  openInNewTab: '在新标签页打开',
   browserAddressUnavailable: '无法获取浏览器可用的工作台地址。',
   openInWorkbench: (name: string) => `在工作台中打开 ${name}`,
   browserOpenFailed: (error: string) => `打开浏览器失败：${error}`,
@@ -13,6 +14,8 @@ const zh = {
   toolboxTitle: 'StarHub 工具箱',
   toolboxDescription: '浏览和打开已保存的连接',
   closeToolbox: '关闭工具箱',
+  androidDevices: 'Android 设备',
+  terminalSettingsAutosave: '修改会自动保存。',
   allConnections: '全部连接',
   connectionCategories: '连接分类',
   searchConnections: '搜索名称、主机或类型',
@@ -72,6 +75,7 @@ const zh = {
 const en: typeof zh = {
   openingBrowser: 'Opening browser…',
   openInBrowser: 'Open in browser',
+  openInNewTab: 'Open in new tab',
   browserAddressUnavailable: 'Could not get a workbench address for the browser.',
   openInWorkbench: name => `Open ${name} in the workbench`,
   browserOpenFailed: error => `Could not open the browser: ${error}`,
@@ -84,6 +88,8 @@ const en: typeof zh = {
   toolboxTitle: 'StarHub Toolbox',
   toolboxDescription: 'Browse and open saved connections',
   closeToolbox: 'Close toolbox',
+  androidDevices: 'Android devices',
+  terminalSettingsAutosave: 'Changes are saved automatically.',
   allConnections: 'All connections',
   connectionCategories: 'Connection categories',
   searchConnections: 'Search by name, host, or type',

@@ -303,10 +303,6 @@
   white-space: nowrap;
 }
 
-.menuRoot {
-  display: contents;
-}
-
 .empty {
   display: grid;
   justify-items: center;

@@ -11,7 +11,7 @@ import { StarHubWorkbenchPanel } from '../src/client/StarHubWorkbenchPanel.tsx'
 import { StarHubLivePanel } from '../src/client/live/StarHubLivePanel.tsx'
 import type { SidebarRightTabDefinition } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { AndroidSettingsTab } from '../src/client/settings/android.tsx'
-import { SshSettingsTab } from '../src/client/settings/ssh.tsx'
+import type { TerminalFrameTracker } from '../src/client/StarHubWorkbenchPanel.tsx'
 import { STARHUB_ASSET_SOURCE } from '../src/client/asset-source.ts'
 import { restoreHostBridge, stubHostBridge } from './host-bridge.ts'
 import { createSettingsWriter, lastBinding } from './settings-writer.ts'
@@ -127,13 +127,13 @@ describe('client-nav apply (rc.2)', () => {
     expect(inject.mock.calls.map(c => c[0])).toEqual([
       'shell.overlay',
       'sidebar.panellist', 'main', 'main', 'main',
-      'settings.section', 'settings.section',
+      'settings.section',
     ])
     const components = register.mock.calls.map(c => c[1])
     expect(components).toEqual([
       StarHubOverlay,
       ToolsPanelIcon, StarHubToolWorkspace, StarHubWorkbenchPanel, StarHubLivePanel,
-      AndroidSettingsTab, SshSettingsTab,
+      AndroidSettingsTab,
     ])
   })
 
@@ -206,12 +206,17 @@ describe('client-nav apply (rc.2)', () => {
     const registration = register.mock.calls.find(([options]) =>
       options.name === 'sidebar.right.pane.tab' && options.key === definition?.id)
     expect(registration?.[1]).toBeTypeOf('function')
-    const tools = registration?.[0].inject() as unknown as { openAsset: (asset: unknown) => Promise<void> }
-    await tools.openAsset({ id: 'server', type: 'ssh', name: 'Server', config: {} })
+    const tools = registration?.[0].inject() as unknown as { openAsset: (asset: unknown, newTab?: boolean) => Promise<void> }
+    const asset = { id: 'server', type: 'ssh', name: 'Server', config: {} }
+    await tools.openAsset(asset)
     expect(openResource).toHaveBeenCalledWith(
       'dsh-resource://starhub-workbench/asset/server', { kind: 'starhub-workbench' },
     )
     expect(selectPanel).not.toHaveBeenCalled()
+    await tools.openAsset(asset, true)
+    expect(openResource).toHaveBeenLastCalledWith(
+      'dsh-resource://starhub-workbench/asset/server', { kind: 'starhub-workbench', revealIfOpened: false },
+    )
   })
 
   it('opens SSH execution history from the tools panel and resets it on close', () => {
@@ -314,7 +319,7 @@ describe('client-nav apply (rc.2)', () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => ({}) as Window)
     try {
       applyPlugin(ctx)
-      const panel = mainByKey(register, 'starhub-tools').inject() as { openAsset: (asset: unknown) => void }
+      const panel = mainByKey(register, 'starhub-tools').inject() as { openAsset: (asset: unknown, newTab?: boolean) => void }
       const esAsset = {
         id: 'es1', type: 'db', name: 'es-1', group_id: null,
         config: { dbType: 'elasticsearch', host: 'h' },
@@ -338,9 +343,19 @@ describe('client-nav apply (rc.2)', () => {
       expect(state.activeKey).toBe('es1')
       expect(state.pages[0]?.url).toContain('starhub-react/index.html?asset=es1')
 
+      panel.openAsset(esAsset, true)
+      const duplicate = injected.hooks.workbench.getSnapshot()
+      expect(duplicate.pages).toHaveLength(2)
+      expect(duplicate.activeKey).not.toBe('es1')
+      expect(duplicate.pages[1]?.url).toBe(state.pages[0]?.url)
+      panel.openAsset(esAsset)
+      expect(injected.hooks.workbench.getSnapshot().pages).toHaveLength(2)
+      expect(injected.hooks.workbench.getSnapshot().activeKey).toBe(duplicate.activeKey)
+
       // 关掉最后一页:面板让回**会话视图**(v0.132.0:不再回退工具列表)。
       const closePage = injected as unknown as { closePage: (key: string) => void }
       closePage.closePage('es1')
+      closePage.closePage(duplicate.activeKey!)
       expect(injected.hooks.workbench.getSnapshot().pages).toEqual([])
       expect(selectPanel).toHaveBeenLastCalledWith(null)
     } finally {
@@ -455,16 +470,52 @@ describe('client-nav apply (rc.2)', () => {
     expect(setDraft).not.toHaveBeenCalled()
   })
 
-  it('no-ops the asset reference when no session is current', () => {
+  it('reports when there is no current conversation to reference', () => {
     const { writer, update: settingsUpdate, mutate: settingsMutate } = createSettingsWriter()
     const { ctx, register } = fakeContext({ remote: { settings: writer } })
     applyPlugin(ctx)
     // apply 启动期的记忆开关初始同步也会写一次 settings,先清掉再断言本路径不写
     settingsUpdate.mockClear()
     const panel = mainByKey(register, 'starhub-tools').inject() as { insertAssetReference: (asset: unknown) => void }
-    panel.insertAssetReference(refAsset)
+    expect(() => panel.insertAssetReference(refAsset)).toThrow('请先打开一个对话。')
     expect(settingsUpdate).not.toHaveBeenCalled()
     expect(settingsMutate).not.toHaveBeenCalled()
+  })
+
+  it('references the second workbench tab and never falls back to the first while the second is disconnected', async () => {
+    const insertReference = vi.fn(() => true)
+    const { ctx, register } = referenceContext({ insertReference, setDraft: vi.fn() })
+    const invoke = vi.fn(() => ({ ok: true }))
+    stubHostBridge(invoke)
+    applyPlugin(ctx)
+    const tools = mainByKey(register, 'starhub-tools').inject() as {
+      insertAssetReference: (asset: unknown) => void | Promise<void>
+    }
+    const { trackTerminalFrame } = mainByKey(register, 'starhub-workbench').inject() as {
+      trackTerminalFrame: TerminalFrameTracker
+    }
+    const first = document.createElement('iframe')
+    const second = document.createElement('iframe')
+    document.body.append(first, second)
+    const frames = [first, second]
+    const tracks = frames.map(frame => trackTerminalFrame(frame, 'a1', 's1'))
+    const respond = (id: string) => (event: Event) => { (event as CustomEvent<(id: string) => void>).detail(id) }
+    const secondResponse = respond('a1__second')
+    try {
+      first.contentWindow?.addEventListener('starhub:connected-terminal', respond('a1__first'))
+      second.contentWindow?.addEventListener('starhub:connected-terminal', secondResponse)
+      for (const track of tracks) track.activate()
+      await tools.insertAssetReference(refAsset)
+      expect(invoke).toHaveBeenCalledWith('bind_asset_context', {
+        assetId: 'a1', sessionId: 's1', terminalSessionId: 'a1__second',
+      })
+      second.contentWindow?.removeEventListener('starhub:connected-terminal', secondResponse)
+      expect(() => tools.insertAssetReference(refAsset)).toThrow('连接 SSH 后即可引用此终端')
+      expect(insertReference).toHaveBeenCalledTimes(1)
+    } finally {
+      for (const track of tracks) track.dispose()
+      for (const frame of frames) frame.remove()
+    }
   })
 
 

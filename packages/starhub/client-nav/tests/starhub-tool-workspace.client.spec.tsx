@@ -96,6 +96,16 @@ const sshAsset = {
 }
 
 describe('StarHubToolWorkspace', () => {
+  it('opens a separate workbench tab from the connection context menu', () => {
+    const props = workspaceProps()
+    props.assets.update(draft => { draft.assets = [sshAsset] })
+    const openAsset = vi.fn()
+    render(<StarHubToolWorkspace {...props} openAsset={openAsset} />)
+    fireEvent.contextMenu(screen.getByText('prod-server'), { clientX: 320, clientY: 120 })
+    fireEvent.click(screen.getByRole('menuitem', { name: '在新标签页打开' }))
+    expect(openAsset).toHaveBeenCalledWith(sshAsset, true)
+  })
+
   it('shows all connections when no category is selected and searches by host and type', () => {
     const props = workspaceProps()
     props.assets.update(draft => {

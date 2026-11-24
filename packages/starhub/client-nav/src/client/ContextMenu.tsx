@@ -11,25 +11,29 @@
  * selectedIds 原样透传给 Menu 原语(组标题用 { type:'label' } 条目,
  * 子菜单用 MenuItem.submenu,均为原语既有能力)。
  */
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /** 一次右键的指针位置;null = 菜单关闭。 */
 export interface ContextMenuPosition {
   x: number
   y: number
+  align?: 'start' | 'end'
 }
+
+let closeOpenMenu: (() => void) | undefined
 
 /** 单个行/条的右键菜单状态与接线。 */
 export interface ContextMenuState {
   /** 菜单是否打开。 */
   open: boolean
   /** 行上右键:阻止浏览器原生菜单并记录指针位置。 */
-  onContextMenu: (e: { preventDefault: () => void; clientX: number; clientY: number }) => void
+  onContextMenu: (e: { preventDefault: () => void; defaultPrevented?: boolean; clientX: number; clientY: number }) => void
   /** 行上按键:Shift+F10 / ContextMenu 键以行包围盒左下角为锚点打开菜单。 */
   onKeyDown: (e: { key: string; shiftKey: boolean; preventDefault: () => void; currentTarget: { getBoundingClientRect: () => DOMRect } }) => void
   /** 以指定视口坐标打开菜单(「⋮」按钮等备用触发用)。 */
-  openAt: (x: number, y: number) => void
+  openAt: (x: number, y: number, align?: 'start' | 'end') => void
   /** 关闭菜单(选择后由 ContextMenu 调用)。 */
   close: () => void
   /** Menu portal 的指针锚点(视口坐标);null = 菜单关闭。 */
@@ -42,21 +46,34 @@ export interface ContextMenuState {
  */
 export function useContextMenu(): ContextMenuState {
   const [position, setPosition] = useState<ContextMenuPosition | null>(null)
+  const close = useCallback(() => {
+    if (closeOpenMenu === close) closeOpenMenu = undefined
+    setPosition(null)
+  }, [])
+  useEffect(() => () => {
+    if (closeOpenMenu === close) closeOpenMenu = undefined
+  }, [close])
+  const openAt = (x: number, y: number, align?: 'start' | 'end'): void => {
+    if (closeOpenMenu !== close) closeOpenMenu?.()
+    closeOpenMenu = close
+    setPosition({ x, y, ...(align === undefined ? {} : { align }) })
+  }
   return {
     open: position !== null,
     onContextMenu: (e) => {
+      if (e.defaultPrevented) return
       e.preventDefault()
-      setPosition({ x: e.clientX, y: e.clientY })
+      openAt(e.clientX, e.clientY)
     },
     onKeyDown: (e) => {
       // Shift+F10 与专用 ContextMenu 键 = 键盘等价右键。
       if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return
       e.preventDefault()
       const rect = e.currentTarget.getBoundingClientRect()
-      setPosition({ x: rect.left, y: rect.bottom })
+      openAt(rect.left, rect.bottom)
     },
-    openAt: (x, y) => { setPosition({ x, y }) },
-    close: () => { setPosition(null) },
+    openAt,
+    close,
     anchorPoint: position,
   }
 }
@@ -70,11 +87,9 @@ export function useContextMenu(): ContextMenuState {
  * @param props.align / props.side - 菜单相对锚点的对齐与开合方向。
  * @param props.dense / props.compact - 紧凑行距 / 紧凑排版。
  * @param props.selectedId / props.selectedIds - 选中标记(勾选项)。
- * @param props.className - wrapper class (callers pass `display: contents` so
- * the empty anchor span never affects the row layout)。
  * @returns the Menu primitive wired for right-click anchoring.
  */
-export function ContextMenu({ menu, items, onSelect, footer, align, side, dense, compact, selectedId, selectedIds, className }: {
+export function ContextMenu({ menu, items, onSelect, footer, align, side, dense, compact, selectedId, selectedIds }: {
   menu: ContextMenuState
   items: readonly MenuEntry[]
   onSelect: (id: string) => void
@@ -85,26 +100,37 @@ export function ContextMenu({ menu, items, onSelect, footer, align, side, dense,
   compact?: boolean | undefined
   selectedId?: string | undefined
   selectedIds?: readonly string[] | undefined
-  className: string | undefined
 }) {
-  return (
-    <Menu
-      open={menu.open}
-      onClose={menu.close}
-      items={items}
-      onSelect={(id) => { menu.close(); onSelect(id) }}
-      portal
-      contextual
-      {...(menu.anchorPoint === null ? {} : { anchorPoint: menu.anchorPoint })}
-      {...(footer === undefined ? {} : { footer })}
-      {...(align === undefined ? {} : { align })}
-      {...(side === undefined ? {} : { side })}
-      {...(dense === undefined ? {} : { dense })}
-      {...(compact === undefined ? {} : { compact })}
-      {...(selectedId === undefined ? {} : { selectedId })}
-      {...(selectedIds === undefined ? {} : { selectedIds })}
-      {...(className === undefined ? {} : { className })}
-      anchor={<span aria-hidden="true" />}
-    />
+  const anchor = useRef<HTMLSpanElement>(null)
+  if (menu.anchorPoint === null) return null
+  const { x, y, align: pointAlign } = menu.anchorPoint
+  const viewport = window.CSS?.supports('-webkit-backdrop-filter', 'none') ? window.visualViewport : undefined
+  // Mount a fixed box before the positioned menu so CSS can resolve the anchor.
+  return createPortal(
+    <>
+      <span ref={anchor} aria-hidden="true" style={{
+        position: 'fixed', left: x + (viewport?.offsetLeft ?? 0), top: y + (viewport?.offsetTop ?? 0),
+        width: 0, height: 0, pointerEvents: 'none',
+      }} />
+      <Menu
+        open
+        onClose={menu.close}
+        items={items}
+        onSelect={(id) => { menu.close(); onSelect(id) }}
+        portal
+        contextual
+        autoFocus
+        anchorRef={anchor}
+        {...(footer === undefined ? {} : { footer })}
+        align={pointAlign ?? align ?? 'start'}
+        {...(side === undefined ? {} : { side })}
+        {...(dense === undefined ? {} : { dense })}
+        {...(compact === undefined ? {} : { compact })}
+        {...(selectedId === undefined ? {} : { selectedId })}
+        {...(selectedIds === undefined ? {} : { selectedIds })}
+        anchor={null}
+      />
+    </>,
+    document.body,
   )
 }

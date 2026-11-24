@@ -37,7 +37,7 @@ import type { RustAsset } from '../store.ts'
 import { SftpPanel } from './SftpPanel.tsx'
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
 import { interactionMessages } from '../interaction-messages.ts'
-import { requestTerminalReference } from './reference.ts'
+import { exposeConnectedTerminal, requestTerminalReference } from './reference.ts'
 import { TransferDialog } from './TransferDialog.tsx'
 import { useTransferTasks } from './use-transfer-tasks.ts'
 import { formatSize } from './sftp-service.ts'
@@ -399,6 +399,9 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
 
   // 每个终端实例一条独立会话(见 terminalSessionId):同资产开两个窗口时互不串台。
   const [sessionId] = useState(() => terminalSessionId(asset.id))
+  useEffect(() => {
+    if (embedded && connected) return exposeConnectedTerminal(sessionId)
+  }, [connected, embedded, sessionId])
   // cwd / injection state shared between the effect and the follow callback.
   const isConnectedRef = useRef(false)
   const osc7InjectPendingRef = useRef(false)
@@ -1264,7 +1267,7 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
               onKeyDown={embedded ? terminalMenu.onKeyDown : undefined}>
               <div ref={host} className={css.terminal} />
               {embedded && (
-                <ContextMenu menu={terminalMenu} className={css.menuRoot} items={[
+                <ContextMenu menu={terminalMenu} items={[
                   { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium />, disabled: !connected || referencingTerminal },
                   { type: 'separator', id: 'terminal-menu-separator' },
                   { id: 'copy', label: messages.copyTerminalSelection, icon: <IconCopyOutlineMedium /> },

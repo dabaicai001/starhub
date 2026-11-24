@@ -347,7 +347,6 @@ function KeyTreeRow({
         <ContextMenu
           menu={menu}
           items={items}
-          className={css.menuRoot}
           onSelect={(id) => {
             if (id === 'open') onOpen(k.key, k.type)
             else if (id === 'copy') onCopy(k.key)
@@ -384,7 +383,6 @@ function KeyTreeRow({
         <ContextMenu
           menu={menu}
           items={folderItems}
-          className={css.menuRoot}
           onSelect={(id) => {
             if (id === 'toggle') onToggle(node.path)
             else if (id === 'copy-prefix') onCopy(node.path)
@@ -453,7 +451,6 @@ function DbTreeRow({ db, open, size, actions }: {
       <ContextMenu
         menu={menu}
         items={items}
-        className={css.menuRoot}
         onSelect={(id) => {
           if (id === 'new-key') actions.onNewKey()
           else if (id === 'refresh') actions.onRefresh()

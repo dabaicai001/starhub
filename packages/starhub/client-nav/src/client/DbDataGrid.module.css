@@ -83,8 +83,6 @@
 .filterActions { display: flex; justify-content: flex-end; gap: 6px; }
 .filterBtnSmall { border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); padding: 3px 10px; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 11px; cursor: pointer; }
 .filterBtnSmall:hover { border-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-state-business-primary); }
-.menuRoot { display: contents; }
-
 /* ─── 分页条 ─── */
 .pager { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-top: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .pager button { border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); padding: 4px 12px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; font-size: 12px; }

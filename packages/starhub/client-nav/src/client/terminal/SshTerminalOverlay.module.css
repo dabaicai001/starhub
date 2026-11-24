@@ -1503,10 +1503,6 @@
   flex: 1;
 }
 
-.menuRoot {
-  display: contents;
-}
-
 /* ── Responsive ────────────────────────────────────────────────── */
 
 @container starhub-ssh (max-width: 1080px) {

@@ -5,7 +5,7 @@ import {
   DEFAULT_TERMINAL_FONT, TERMINAL_ENCODINGS, TERMINAL_FONTS, normalizeTerminalSettings,
   loadTerminalSettings, saveTerminalSettings, terminalOptions, isTerminalFontPreset,
 } from '../src/client/terminal/terminal-settings.ts'
-import { SshSettingsTab } from '../src/client/settings/ssh.tsx'
+import { TerminalSettingsMenu } from '../src/client/terminal/TerminalSettingsMenu.tsx'
 
 afterEach(() => {
   cleanup()
@@ -63,61 +63,15 @@ describe('terminal settings module', () => {
   })
 })
 
-describe('SshSettingsTab', () => {
-  it('renders the current settings into the form', () => {
-    const jetbrains = TERMINAL_FONTS.find(option => option.label.includes('JetBrains Mono'))?.value ?? ''
-    saveTerminalSettings({ fontFamily: jetbrains, fontSize: 16, encoding: 'big5', cursorBlink: false, scrollback: 5000 })
-    render(<SshSettingsTab />)
-    const combo = screen.getAllByRole('combobox')
-    const font = combo[0] as HTMLSelectElement
-    const encoding = combo[1] as HTMLSelectElement
-    expect(font.value).toBe(jetbrains)
-    expect((screen.getByDisplayValue('16') as HTMLInputElement).value).toBe('16')
-    expect(encoding.value).toBe('big5')
-  })
-
-  it('shows a live font preview that follows the selected font and size', () => {
-    const consolas = TERMINAL_FONTS.find(option => option.label === 'Consolas')?.value ?? 'Consolas'
-    render(<SshSettingsTab />)
-    const preview = screen.getByText(/字体预览/)
-    expect(preview).toBeTruthy()
-    // 预览随下拉选择实时更新(保存前即可预览选中字体的效果)。
-    const combo = screen.getAllByRole('combobox')
-    const font = combo[0] as HTMLSelectElement
-    fireEvent.change(font, { target: { value: consolas } })
-    const size = screen.getByDisplayValue('13') as HTMLInputElement
-    fireEvent.change(size, { target: { value: '20' } })
-    // 示例行的父级 span 携带当前字体/字号。
-    const sample = screen.getByText(/projects\/starhub/)
-    expect(sample).toBeTruthy()
-    // jsdom 会把含空格的字体名转成带引号的 CSSOM 序列化("SF Mono" → "SF Mono"),
-    // 所以按「包含首个字体名」断言,而不是严格等值。
-    expect((sample as HTMLElement).style.fontFamily).toContain('Consolas')
-    expect((sample as HTMLElement).style.fontSize).toBe('20px')
-  })
-
-  it('persists edits on 保存 and reflects the saved value', () => {
-    const consolas = TERMINAL_FONTS.find(option => option.label === 'Consolas')?.value ?? 'Consolas'
-    render(<SshSettingsTab />)
-    const combo = screen.getAllByRole('combobox')
-    const font = combo[0] as HTMLSelectElement
-    expect(font.value).toBe(DEFAULT_TERMINAL_FONT)
-    fireEvent.change(font, { target: { value: consolas } })
-    const size = screen.getByDisplayValue('13') as HTMLInputElement
-    fireEvent.change(size, { target: { value: '14' } })
-    fireEvent.click(screen.getByText('保存'))
-    expect(screen.getByText('已保存。')).toBeTruthy()
-    const s = loadTerminalSettings()
-    expect(s.fontFamily).toBe(consolas)
-    expect(s.fontSize).toBe(14)
-  })
-
-  it('flips cursorBlink via the checkbox', () => {
-    render(<SshSettingsTab />)
-    const box = screen.getByRole('checkbox') as HTMLInputElement
-    expect(box.checked).toBe(true)
-    fireEvent.click(box)
-    fireEvent.click(screen.getByText('保存'))
-    expect(loadTerminalSettings().cursorBlink).toBe(false)
+describe('terminal settings menu', () => {
+  it('shows saved preferences and persists changes directly from the terminal', () => {
+    saveTerminalSettings({ fontFamily: DEFAULT_TERMINAL_FONT, fontSize: 16, encoding: 'big5', cursorBlink: false, scrollback: 5000 })
+    render(<TerminalSettingsMenu settings={loadTerminalSettings()} onClose={() => {}} />)
+    expect(screen.getByDisplayValue('16')).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: '编码' }) as HTMLSelectElement).value).toBe('big5')
+    const size = screen.getByRole('slider', { name: '终端字号' })
+    fireEvent.change(size, { target: { value: '18' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: '光标闪烁' }))
+    expect(loadTerminalSettings()).toMatchObject({ fontSize: 18, encoding: 'big5', cursorBlink: true })
   })
 })

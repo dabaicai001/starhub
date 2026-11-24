@@ -1005,7 +1005,6 @@ export function DbDataGrid({
         menu={menu}
         items={rowMenuItems}
         onSelect={onRowSelect}
-        className={css.menuRoot}
       />
       {filterCol !== null && (
         <>

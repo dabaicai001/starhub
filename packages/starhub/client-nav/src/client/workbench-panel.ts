@@ -27,7 +27,7 @@ export function embeddedWorkbenchUrl(path: string): string {
 
 /** 一个壳内工作台页(iframe 的来源与身份)。 */
 export interface WorkbenchPage {
-  /** 稳定身份(资产 id);同 key 重复 open = 聚焦。 */
+  /** 标签页身份;同 key 重复 open = 聚焦。 */
   readonly key: string
   /** 页标题(资产名;标签页与面板头展示)。 */
   readonly title: string
@@ -41,6 +41,11 @@ export interface WorkbenchPanelState {
   activeKey: string | null
 }
 
+/** Resolve the asset identity separately from an individual tab's key. */
+export function workbenchPageAssetId(page: WorkbenchPage): string {
+  return new URL(page.url, window.location.href).searchParams.get('asset') ?? page.key
+}
+
 /** 页簿:裸 observable(供 inject hooks 下发)+ 写入回调。 */
 export interface WorkbenchPanelStore {
   /** 注入 hooks 舱位的裸 observable(身份与快照引用在变化前保持稳定)。 */
@@ -49,6 +54,8 @@ export interface WorkbenchPanelStore {
   open: (page: WorkbenchPage) => void
   /** 激活一页;该 key 没开返回 false(调用方可回退到「打开」)。 */
   activateIfOpen: (key: string) => boolean
+  /** Find an existing page for a normal asset open, preferring the active copy. */
+  findPageForAsset: (assetId: string) => WorkbenchPage | undefined
   /** 关一页(未知 key 幂等)。 */
   close: (key: string) => void
 }
@@ -77,6 +84,11 @@ export function createWorkbenchPanelStore(): WorkbenchPanelStore {
       if (!source.getSnapshot().pages.some((opened) => opened.key === key)) return false
       source.update((draft) => { draft.activeKey = key })
       return true
+    },
+    findPageForAsset: (assetId) => {
+      const { pages, activeKey } = source.getSnapshot()
+      const matches = pages.filter(page => workbenchPageAssetId(page) === assetId)
+      return matches.find(page => page.key === activeKey) ?? matches[0]
     },
     close: (key) => {
       const state = source.getSnapshot()

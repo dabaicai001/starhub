@@ -5,7 +5,7 @@ import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { currentSessionId } from './current-session.ts'
 import { interactionMessages } from './interaction-messages.ts'
-import { StarHubSidebarWorkbench, type TerminalReference } from './StarHubWorkbenchPanel.tsx'
+import { StarHubSidebarWorkbench, type TerminalFrameTracker, type TerminalReference } from './StarHubWorkbenchPanel.tsx'
 import type { StarHubAssets } from './store.ts'
 
 const WORKBENCH_KIND = 'starhub-workbench'
@@ -22,23 +22,27 @@ function assetIdFromAddress(address: string): string | undefined {
   }
 }
 
-function WorkbenchTab({ useTabInfo, referenceTerminal }:
-  PropsRuntime<'sidebar.right.pane.tab'> & { referenceTerminal: TerminalReference }) {
+function WorkbenchTab({ useTabInfo, sessionId, referenceTerminal, trackTerminalFrame }:
+  PropsRuntime<'sidebar.right.pane.tab'> & { referenceTerminal: TerminalReference; trackTerminalFrame: TerminalFrameTracker }) {
   const { tab } = useTabInfo()
   const assetId = assetIdFromAddress(tab.contentId)
   return assetId === undefined
     ? null
-    : <StarHubSidebarWorkbench key={assetId} assetId={assetId} title={tab.title} referenceTerminal={referenceTerminal} />
+    : <StarHubSidebarWorkbench key={tab.id} assetId={assetId} title={tab.title} active={tab.visible}
+      sessionId={sessionId} referenceTerminal={referenceTerminal} trackTerminalFrame={trackTerminalFrame} />
 }
 
+type OpenMode = 'reveal' | 'new-tab' | 'if-open'
+
 /**
- * Register one native right-sidebar tab per asset and session when the host
- * provides the sidebar. Older hosts can still use the independent workbench.
+ * Register the asset workbench in the native right sidebar, including separate
+ * tab occurrences when requested. Older hosts can use the independent workbench.
  */
 export function installSidebarWorkbench(
   ctx: Context, assets: StarHubAssets, layout: ILayout, sessions: ISessions, referenceTerminal: TerminalReference,
+  trackTerminalFrame: TerminalFrameTracker,
 ) {
-  let openInSidebar: ((assetId: string, onlyIfOpen: boolean) => boolean) | undefined
+  let openInSidebar: ((assetId: string, mode: OpenMode) => boolean) | undefined
   ctx.inject(['sidebarRight', 'sidebarRightTabs'], (sidebarCtx) => {
     const sidebar = sidebarCtx.sidebarRight
     sidebarCtx.effect(() => sidebarCtx.sidebarRightTabs.register({
@@ -56,16 +60,16 @@ export function installSidebarWorkbench(
     sidebarCtx.effect(() => sidebarCtx.slots.inject('sidebar.right.pane.tab', () => sidebarCtx.slots.register({
       name: 'sidebar.right.pane.tab',
       key: WORKBENCH_KIND,
-      inject: () => ({ referenceTerminal }),
+      inject: () => ({ referenceTerminal, trackTerminalFrame }),
     }, WorkbenchTab)), 'starhub: workbench sidebar tab body')
     sidebarCtx.effect(() => {
-      openInSidebar = (assetId, onlyIfOpen) => {
+      openInSidebar = (assetId, mode) => {
         const visibleSession = sidebar.mounted.getSnapshot()
         const sessionId = visibleSession ?? currentSessionId(sessions.list.getSnapshot())
         if (sessionId === undefined) return false
 
         const address = `${WORKBENCH_ADDRESS}${encodeURIComponent(assetId)}`
-        if (onlyIfOpen && !sidebar.openTabs.getSnapshot().some(tab =>
+        if (mode === 'if-open' && !sidebar.openTabs.getSnapshot().some(tab =>
           tab.sessionId === sessionId && tab.kind === WORKBENCH_KIND && tab.contentId === address,
         )) return false
 
@@ -73,11 +77,14 @@ export function installSidebarWorkbench(
         // tools panel without changing the selected session.
         if (visibleSession === undefined) layout.selectPanel(null)
         if (sidebar.mounted.getSnapshot() !== sessionId) return false
-        sidebar.openResource(address, { kind: WORKBENCH_KIND })
+        sidebar.openResource(address, {
+          kind: WORKBENCH_KIND,
+          ...(mode === 'new-tab' ? { revealIfOpened: false } : {}),
+        })
         return true
       }
       return () => { openInSidebar = undefined }
     }, 'starhub: workbench sidebar opener')
   })
-  return (assetId: string, onlyIfOpen = false): boolean => openInSidebar?.(assetId, onlyIfOpen) ?? false
+  return (assetId: string, mode: OpenMode = 'reveal'): boolean => openInSidebar?.(assetId, mode) ?? false
 }

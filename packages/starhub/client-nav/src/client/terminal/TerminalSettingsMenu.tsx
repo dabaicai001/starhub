@@ -12,6 +12,7 @@ import {
   updateTerminalSettings, type TerminalSettings,
 } from './terminal-settings.ts'
 import css from './TerminalSettingsMenu.module.css'
+import { interactionMessages } from '../interaction-messages.ts'
 
 /** 设置浮层属性。 */
 export interface TerminalSettingsMenuProps {
@@ -110,7 +111,7 @@ export function TerminalSettingsMenu({ settings, onClose }: TerminalSettingsMenu
           </select>
         </label>
       </div>
-      <footer className={css.foot}>修改立即生效,并随设置页一起持久化。</footer>
+      <footer className={css.foot}>{interactionMessages().terminalSettingsAutosave}</footer>
     </div>
   )
 }

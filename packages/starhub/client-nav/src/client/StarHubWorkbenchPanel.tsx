@@ -23,10 +23,10 @@ import clsx from 'clsx'
 import type { PropsRuntime, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: the 'main' SlotMap row (declared by ui-layout).
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionId, SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { IconCloseOutlineMedium, IconLoadingOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { interactionMessages } from './interaction-messages.ts'
-import { embeddedWorkbenchUrl, type WorkbenchPanelState } from './workbench-panel.ts'
+import { embeddedWorkbenchUrl, workbenchPageAssetId, type WorkbenchPanelState } from './workbench-panel.ts'
 import { listenForTerminalReference } from './terminal/reference.ts'
 import css from './StarHubWorkbenchPanel.module.css'
 
@@ -39,6 +39,7 @@ export interface StarHubWorkbenchPanelInjected {
   /** 无页时的兜底出口:把主面板让回会话视图。 */
   closeWorkbench: () => void
   referenceTerminal?: TerminalReference | undefined
+  trackTerminalFrame?: TerminalFrameTracker | undefined
   hooks: {
     /** 页簿(裸 source,渲染器绑定为 useWorkbench)。 */
     workbench: SnapshotStore<WorkbenchPanelState>
@@ -50,23 +51,41 @@ export type StarHubWorkbenchPanelProps =
   & PropsRuntime<'main'>
   & InjectFace<StarHubWorkbenchPanelInjected>
 
-/** Keep loaded pages mounted and show feedback while the active frame navigates. */
-export type TerminalReference = (assetId: string, terminalSessionId: string) => Promise<void>
+/** Bind a specific terminal instance to the conversation that owns its page. */
+export type TerminalReference = (assetId: string, terminalSessionId: string, sessionId?: SessionId) => Promise<void>
 
-function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTerminal }: {
+/** Track the most recently shown terminal frame for each asset and conversation. */
+export type TerminalFrameTracker = (frame: HTMLIFrameElement, assetId: string, sessionId?: SessionId) => {
+  activate: () => void
+  dispose: () => void
+}
+
+function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTerminal, trackTerminalFrame, sessionId }: {
   assetId: string
   title: string
   url: string
   index?: number
   active?: boolean
   referenceTerminal?: TerminalReference | undefined
+  trackTerminalFrame?: TerminalFrameTracker | undefined
+  sessionId?: SessionId | undefined
 }) {
   const [loaded, setLoaded] = useState(false)
   const frame = useRef<HTMLIFrameElement>(null)
+  const tracking = useRef<ReturnType<TerminalFrameTracker>>()
   useEffect(() => {
     if (frame.current === null || referenceTerminal === undefined) return
-    return listenForTerminalReference(frame.current, assetId, referenceTerminal)
-  }, [assetId, referenceTerminal])
+    return listenForTerminalReference(frame.current, assetId, (id, terminal) => referenceTerminal(id, terminal, sessionId))
+  }, [assetId, referenceTerminal, sessionId])
+  useEffect(() => {
+    if (frame.current === null) return
+    const record = trackTerminalFrame?.(frame.current, assetId, sessionId)
+    tracking.current = record
+    return () => { record?.dispose() }
+  }, [assetId, sessionId, trackTerminalFrame])
+  useEffect(() => {
+    if (active) tracking.current?.activate()
+  }, [active, assetId, sessionId, trackTerminalFrame])
   return (
     <>
       <iframe
@@ -93,10 +112,13 @@ function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTe
 }
 
 /** Render one asset inside a native DSH right-sidebar tab. */
-export function StarHubSidebarWorkbench({ assetId, title, referenceTerminal }: {
+export function StarHubSidebarWorkbench({ assetId, title, active, sessionId, referenceTerminal, trackTerminalFrame }: {
   assetId: string
   title: string
+  active: boolean
+  sessionId: SessionId
   referenceTerminal: TerminalReference
+  trackTerminalFrame: TerminalFrameTracker
 }) {
   // Keep the iframe URL stable when the host theme changes. Open pages update
   // their theme through the existing BroadcastChannel.
@@ -104,7 +126,8 @@ export function StarHubSidebarWorkbench({ assetId, title, referenceTerminal }: {
   return (
     <div className={css.panel}>
       <div className={css.frameStack}>
-        <WorkbenchFrame assetId={assetId} title={title} url={url} referenceTerminal={referenceTerminal} />
+        <WorkbenchFrame assetId={assetId} title={title} url={url} active={active} sessionId={sessionId}
+          referenceTerminal={referenceTerminal} trackTerminalFrame={trackTerminalFrame} />
       </div>
     </div>
   )
@@ -121,6 +144,7 @@ export function StarHubWorkbenchPanel({
   closePage,
   closeWorkbench,
   referenceTerminal,
+  trackTerminalFrame,
 }: StarHubWorkbenchPanelProps): JSX.Element {
   const state = useWorkbench((snapshot) => snapshot)
   const tabRefs = useRef(new Map<string, HTMLButtonElement>())
@@ -217,8 +241,10 @@ export function StarHubWorkbenchPanel({
         {/* 一页一个常驻 iframe:切标签只改可见性。此前是单个 iframe 改 src,
             Chromium 会重新导航 —— 页面内查询标签、滚动、连接与草稿整页重来。 */}
         {state.pages.map((page, index) => (
-          <WorkbenchFrame key={`${page.key}:${page.url}`} assetId={page.key} title={page.title} url={page.url}
-            index={index} active={page.key === active.key} referenceTerminal={referenceTerminal} />
+          <WorkbenchFrame key={`${page.key}:${page.url}`}
+            assetId={workbenchPageAssetId(page)}
+            title={page.title} url={page.url} index={index} active={page.key === active.key}
+            referenceTerminal={referenceTerminal} trackTerminalFrame={trackTerminalFrame} />
         ))}
       </div>
     </div>

@@ -54,9 +54,6 @@
 
 /* ─── 键树 ─── */
 .keyList { flex: 1; overflow-y: auto; padding: 2px 0; }
-/* 右键菜单锚点包装:ContextMenu 的 Menu 原语把 className 落在 wrapper span 上,
-   display:contents 让这个空 span 不参与行布局(菜单本体走 portal 到 body)。 */
-.menuRoot { display: contents; }
 .keyRow { display: flex; align-items: center; gap: 4px; border: 1px solid transparent; border-radius: var(--dsw-radius-sm); padding: 2px 4px; }
 .keyRow:hover { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); }
 .keyMain { display: flex; min-width: 0; flex: 1; align-items: center; gap: 7px; border: 0; padding: 4px 2px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; text-align: left; }
