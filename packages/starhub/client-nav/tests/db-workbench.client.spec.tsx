@@ -287,12 +287,19 @@ describe('DbWorkbench', () => {
     expect(calls.some(([cmd]) => cmd === 'db_mysql_connect')).toBe(false)
   })
 
-  it('surfaces a connect error and still unmounts cleanly', async () => {
-    const { calls } = stubInvoke({ fail: true })
+  it('retries a failed database connection without remounting the workbench', async () => {
+    const scenario = { fail: true }
+    const { calls } = stubInvoke(scenario)
     const { unmount } = render(<DbWorkbench asset={dbAsset} onClose={vi.fn()} />)
-    await waitFor(() =>{  expect(screen.getByText('boom')).toBeTruthy() })
+    expect((await screen.findByRole('alert')).textContent).toContain('boom')
+    expect(screen.getByText('连接失败')).toBeTruthy()
+    scenario.fail = false
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByTitle('app')).toBeTruthy()
+    expect(screen.queryByText('boom')).toBeNull()
+    expect(calls.filter(([cmd]) => cmd === 'db_mysql_connect')).toHaveLength(2)
     unmount()
-    expect(calls.some(([cmd]) => cmd === 'db_mysql_connect')).toBe(true)
+    expect(calls.some(([cmd]) => cmd === 'db_mysql_disconnect')).toBe(true)
   })
 
   it('right-clicks a table to view its DDL', async () => {

@@ -1017,13 +1017,18 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
   }
   const terminalMenu = useContextMenu()
   const messages = interactionMessages()
+  const [referencingTerminal, setReferencingTerminal] = useState(false)
   const referenceTerminal = async (): Promise<void> => {
+    if (!connected || referencingTerminal) return
+    setReferencingTerminal(true)
     try {
       await requestTerminalReference(sessionId)
       notify(messages.referencedConversation)
     } catch (error) {
       const detail = error as { message?: unknown } | null
       notify(typeof detail?.message === 'string' ? detail.message : messages.terminalReferenceUnavailable, 'error')
+    } finally {
+      setReferencingTerminal(false)
     }
   }
   // 头部头像徽标:取资产名首字符,颜色随连接状态变化。
@@ -1091,6 +1096,7 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
             <span
               className={`${css.statusPill} ${connected ? css.statusPillOnline : (closed ? css.statusPillOffline : css.statusPillPending)}`}
               aria-label={connected ? 'SSH 已连接' : (closed ? 'SSH 已断开' : 'SSH 连接中')}
+              title={endpoint}
             >
               <span className={connected ? css.connectionOnline : (closed ? css.connectionOffline : css.connectionPending)} aria-hidden="true" />
               <span className={css.statusPillText}>{connected ? '已连接' : (closed ? '已断开' : '连接中')}</span>
@@ -1102,6 +1108,15 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
             )}
           </div>
           <div className={css.headRight}>
+            {embedded && !closed && (
+              <button type="button" className={css.referenceAction}
+                title={connected ? messages.referenceConversation : messages.referenceConnectedTerminal}
+                aria-label={messages.referenceTerminalAction} aria-busy={referencingTerminal}
+                disabled={!connected || referencingTerminal} onClick={() => void referenceTerminal()}>
+                <IconLinkOutlineMedium size={14} />
+                <span role="status">{referencingTerminal ? messages.referencingTerminal : messages.referenceTerminalAction}</span>
+              </button>
+            )}
             {!connected && closed && (
               <button type="button" className={css.reconnectAction} onClick={reconnect} title="重新建立 SSH 连接"><IconRefreshOutlineMedium size={13} />重新连接</button>
             )}
@@ -1155,8 +1170,8 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
           )}
           <main className={css.terminalWorkspace} aria-label="SSH 终端">
             <div className={css.toolbar}>
-              <div className={css.tabGroup} role="tablist" aria-label="SSH 工作区">
-                <span className={css.terminalTab} role="tab" aria-selected="true"><IconCodeOutlineMedium size={13} />终端</span>
+              <div className={css.tabGroup} role="group" aria-label="SSH 工作区">
+                <span className={css.terminalTab}><IconCodeOutlineMedium size={13} />终端</span>
                 <button
                   type="button"
                   className={sidePanel === 'sftp' ? css.workspaceTabActive : css.workspaceTab}
@@ -1185,6 +1200,16 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
                   aria-pressed={sidePanel === 'monitor'}
                 ><IconGaugeOutlineMedium size={13} />监控</button>
               </div>
+              <div className={css.toolGroup}>
+                <button type="button" className={css.fontButton} onClick={() =>{  bumpFontSize(-1) }} title="减小字号" aria-label="减小字号">A−</button>
+                <button type="button" className={css.fontButton} onClick={() =>{  bumpFontSize(1) }} title="增大字号" aria-label="增大字号">A+</button>
+                <button type="button" className={`${css.toolButton} ${css.extendedTool}`} onClick={clearTerminal} title="清空终端" aria-label="清空终端"><IconCloseCircleFillMedium size={14} /></button>
+                <button type="button" className={css.toolButton} onClick={() => void copySelection()} title="复制选中内容" aria-label="复制选中内容"><IconCopyOutlineMedium size={14} /></button>
+                <button type="button" className={css.toolButton} onClick={() => void pasteClipboard()} title="粘贴剪贴板内容到终端" aria-label="粘贴到终端">粘贴</button>
+                <button type="button" className={css.toolButton} onClick={openFind} title="在终端输出中查找 (Ctrl+F)" aria-label="查找终端输出"><IconSearchOutlineMedium size={14} /></button>
+                <button type="button" className={css.toolButton} onClick={() =>{  setPaletteOpen(true) }} title="命令面板 (Ctrl+K)" aria-label="打开命令面板"><IconChevronsUpDownOutlineMedium size={14} /></button>
+              </div>
+              <span className={css.toolDivider} aria-hidden="true" />
               <div className={css.quickList} aria-label="快捷命令">
                 {quickCommands.map(command => (
                   <button key={command.id} type="button" className={css.quickCommand} onClick={() => void runQuickCommand(command)} disabled={!connected} title={command.cmd}>{command.label}</button>
@@ -1198,16 +1223,6 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
               <div className={css.quickTools}>
                 <button type="button" className={css.quickIconButton} onClick={() => quickImportRef.current?.click()} title="导入 Xshell .qbl / .qblx" aria-label="导入 Xshell 快捷命令"><IconPaperclipOutlineMedium size={14} /></button>
                 <button type="button" className={css.quickIconButton} onClick={() =>{  setQuickEditorOpen(true) }} title={`管理快捷命令(已保存 ${quickCommands.length} 条)`} aria-label="管理快捷命令"><IconPlusOutlineMedium size={14} /></button>
-              </div>
-              <span className={css.toolDivider} aria-hidden="true" />
-              <div className={css.toolGroup}>
-                <button type="button" className={css.fontButton} onClick={() =>{  bumpFontSize(-1) }} title="减小字号" aria-label="减小字号">A−</button>
-                <button type="button" className={css.fontButton} onClick={() =>{  bumpFontSize(1) }} title="增大字号" aria-label="增大字号">A+</button>
-                <button type="button" className={css.toolButton} onClick={clearTerminal} title="清空终端" aria-label="清空终端"><IconCloseCircleFillMedium size={14} /></button>
-                <button type="button" className={css.toolButton} onClick={() => void copySelection()} title="复制选中内容" aria-label="复制选中内容"><IconCopyOutlineMedium size={14} /></button>
-                <button type="button" className={css.toolButton} onClick={() => void pasteClipboard()} title="粘贴剪贴板内容到终端" aria-label="粘贴到终端">粘贴</button>
-                <button type="button" className={css.toolButton} onClick={openFind} title="在终端输出中查找 (Ctrl+F)" aria-label="查找终端输出"><IconSearchOutlineMedium size={14} /></button>
-                <button type="button" className={css.toolButton} onClick={() =>{  setPaletteOpen(true) }} title="命令面板 (Ctrl+K)" aria-label="打开命令面板"><IconChevronsUpDownOutlineMedium size={14} /></button>
               </div>
             </div>
             <input
@@ -1250,7 +1265,7 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
               <div ref={host} className={css.terminal} />
               {embedded && (
                 <ContextMenu menu={terminalMenu} className={css.menuRoot} items={[
-                  { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium />, disabled: !connected },
+                  { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium />, disabled: !connected || referencingTerminal },
                   { type: 'separator', id: 'terminal-menu-separator' },
                   { id: 'copy', label: messages.copyTerminalSelection, icon: <IconCopyOutlineMedium /> },
                   { id: 'paste', label: messages.pasteToTerminal, disabled: !connected },

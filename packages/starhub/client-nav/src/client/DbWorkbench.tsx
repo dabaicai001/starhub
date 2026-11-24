@@ -471,6 +471,7 @@ function disconnectCommand(dbType: string): string {
  */
 export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: () => void }) {
   const [connectError, setConnectError] = useState<string | null>(null)
+  const [connectAttempt, setConnectAttempt] = useState(0)
   const [dbs, setDbs] = useState<TreeNode[]>([])
   const [dbsLoading, setDbsLoading] = useState(false)
   const [treeSearch, setTreeSearch] = useState('')
@@ -564,7 +565,19 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
   // 监控右栏开关(MySQL / PG / Redis 有 Dashboard;默认关闭,选择持久化进树记忆)。
   const monitorSupported = ['mysql', 'postgresql', 'redis'].includes(typeof asset.config.dbType === 'string' ? asset.config.dbType : 'mysql')
   const [showMonitor, setShowMonitor] = useState(false)
-  const [treeCollapsed, setTreeCollapsed] = useState(false)
+  const [treeDrawerOpen, setTreeDrawerOpen] = useState(false)
+  const treeToggleRef = useRef<HTMLButtonElement>(null)
+  const treeSearchRef = useRef<HTMLInputElement>(null)
+  const messages = interactionMessages()
+
+  useEffect(() => {
+    if (treeDrawerOpen) treeSearchRef.current?.focus()
+  }, [treeDrawerOpen])
+
+  const closeTreeDrawer = (): void => {
+    setTreeDrawerOpen(false)
+    treeToggleRef.current?.focus()
+  }
   // 监控右栏宽度(px):拖拽左边框调整,夹在 min 与 max 之间;内存态即可。
   const [monitorWidth, setMonitorWidth] = useState(340)
   const monitorResizeRef = useRef(false)
@@ -668,6 +681,7 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
 
   // 挂载时建连一次,卸载时断连(连接按资产只建一次)。
   useEffect(() => {
+    setConnectError(null)
     const params = toConnectParams(asset.config, dbType)
     // SQLite 是文件型库:必需参数是 filePath,host/username 不适用。
     if (dbType === 'sqlite') {
@@ -700,8 +714,8 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
       cancelled = true
       if (connRef.current !== null) disconnect(connRef.current)
     }
-    // 只随资产 id 变化;connectCommand 对同类型恒定,不列入依赖避免重连。
-  }, [asset.id])
+    // Changes to width and the editor never reconnect the database.
+  }, [asset.id, connectAttempt])
 
   const refreshDatabases = useCallback(() => {
     const id = connRef.current
@@ -812,7 +826,11 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
     setActiveTableKey(tab.key)
     setSelected({ table, ...(database !== undefined && database !== '' ? { database } : {}) })
     if (database !== undefined && database !== '') setCurrentDb(database)
-  }, [])
+    if (treeDrawerOpen) {
+      setTreeDrawerOpen(false)
+      treeToggleRef.current?.focus()
+    }
+  }, [treeDrawerOpen])
 
   /** 关闭表数据标签:关闭活动标签时激活相邻标签(无表标签剩则回最近查询标签)。 */
   const closeTableTab = useCallback((key: string) => {
@@ -1311,9 +1329,9 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
     <div className={css.backdrop}>
       <div className={css.panel}>
         <header className={css.header}>
-          <span className={`${css.headerStatus} ${connected ? css.statusOnline : css.statusPending}`} aria-label={connected ? '数据库已连接' : '数据库连接中'}>
+          <span className={`${css.headerStatus} ${connected ? css.statusOnline : connectError !== null ? css.statusFailed : css.statusPending}`}>
             <span className={css.statusDot} aria-hidden="true" />
-            {connected ? '已连接' : '连接中…'}
+            {connected ? '已连接' : connectError !== null ? messages.connectionFailed : messages.connecting}
           </span>
           <div className={css.identity}>
             <span className={css.title}>{asset.name}</span>
@@ -1321,16 +1339,22 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
           </div>
           <span className={css.spacer} />
           <div className={css.headerActions}>
-            <button type="button" className={`${css.iconChip} ${css.treeToggle}`}
-              aria-expanded={!treeCollapsed} aria-controls="starhub-database-objects"
-              onClick={() => { setTreeCollapsed(collapsed => !collapsed) }}>
-              <IconDatabaseOutlineMedium size={13} /> {interactionMessages().databaseObjects}
+            <button ref={treeToggleRef} type="button" className={`${css.iconChip} ${css.treeToggle}`}
+              aria-expanded={treeDrawerOpen} aria-controls="starhub-database-objects"
+              onClick={() => {
+                if (treeDrawerOpen) closeTreeDrawer()
+                else {
+                  setShowMonitor(false)
+                  setTreeDrawerOpen(true)
+                }
+              }}>
+              <IconDatabaseOutlineMedium size={13} /> {messages.databaseObjects}
             </button>
             {monitorSupported && (
               <button
                 type="button"
                 className={`${css.iconChip} ${showMonitor ? css.monitorActive : ''}`}
-                onClick={() =>{  setShowMonitor(v => !v) }}
+                onClick={() => { setTreeDrawerOpen(false); setShowMonitor(v => !v) }}
                 title={showMonitor ? '收起监控面板' : '展开监控面板'}
                 aria-label="监控面板"
                 aria-pressed={showMonitor}
@@ -1343,25 +1367,43 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
           <div className={css.errorBanner} role="alert">
             <IconWarningOutlineMedium size={14} />
             <span className={css.errorBannerText}>{connectError}</span>
-            <button type="button" className={css.errorBannerClose} onClick={() =>{  setConnectError(null) }} title="关闭错误提示" aria-label="关闭错误提示"><IconCloseOutlineMedium size={12} /></button>
+            <button type="button" className={css.errorRetry} onClick={() => {
+              const id = connRef.current
+              if (id === null) setConnectAttempt(attempt => attempt + 1)
+              else void loadDatabases(id)
+            }}>{messages.retry}</button>
+            {connected && <button type="button" className={css.errorBannerClose} onClick={() => { setConnectError(null) }} title="关闭错误提示" aria-label="关闭错误提示"><IconCloseOutlineMedium size={12} /></button>}
           </div>
         )}
         <div className={css.body}>
-          <aside id="starhub-database-objects" className={`${css.tree} ${treeCollapsed ? css.treeCollapsed : ''}`}
-            style={{ '--starhub-db-tree-width': `${treeWidth}px` } as CSSProperties}>
+          {treeDrawerOpen && <button type="button" className={css.treeBackdrop} tabIndex={-1}
+            aria-label={messages.closeDatabaseObjects} onClick={closeTreeDrawer} />}
+          <aside id="starhub-database-objects" className={`${css.tree} ${treeDrawerOpen ? css.treeDrawerOpen : ''}`}
+            style={{ '--starhub-db-tree-width': `${treeWidth}px` } as CSSProperties}
+            onKeyDown={event => {
+              if (treeDrawerOpen && event.key === 'Escape' && !event.defaultPrevented) closeTreeDrawer()
+            }}>
             <div className={css.treeToolbar}>
-              <span className={css.treeTitle}>数据库对象</span>
+              <span className={css.treeTitle}>{messages.databaseObjects}</span>
               {dbs.length > 0 && <span className={css.treeMeta}>{dbs.length} 个库</span>}
               <button type="button" className={css.treeRefresh} onClick={refreshDatabases} title="刷新数据库列表" aria-label="刷新数据库列表"><IconRefreshOutlineMedium size={13} /></button>
+              <button type="button" className={`${css.treeRefresh} ${css.treeClose}`} aria-label={messages.closeDatabaseObjects}
+                title={messages.closeDatabaseObjects} onClick={closeTreeDrawer}><IconCloseOutlineMedium size={13} /></button>
             </div>
             <div className={css.treeSearchBox}>
               <span className={css.treeSearchIcon} aria-hidden="true"><IconSearchOutlineMedium size={12} /></span>
               <input
+                ref={treeSearchRef}
                 type="search"
                 className={css.treeSearch}
                 value={treeSearch}
                 onChange={(event) =>{  setTreeSearch(event.target.value) }}
-                onKeyDown={(event) =>{  if (event.key === 'Escape') setTreeSearch('') }}
+                onKeyDown={event => {
+                  if (event.key === 'Escape' && treeSearch !== '') {
+                    event.preventDefault()
+                    setTreeSearch('')
+                  }
+                }}
                 placeholder="搜索数据库或表"
                 aria-label="搜索数据库或表"
               />

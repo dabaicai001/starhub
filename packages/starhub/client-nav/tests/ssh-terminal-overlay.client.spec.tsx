@@ -229,8 +229,9 @@ describe('SshTerminalOverlay', () => {
     await waitFor(() =>{  expect(getByText('docs')).toBeTruthy() })
     unmount()
   })
-  it('references the live terminal from its context menu instead of opening a local AI panel', async () => {
+  it('references the same live terminal from the toolbar and context menu', async () => {
     stubInternals(() => Promise.resolve(null))
+    ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverMock
     const frame = document.createElement('iframe')
     const frameElement = vi.spyOn(window, 'frameElement', 'get').mockReturnValue(frame)
     const reply = vi.fn<(sessionId: string) => Promise<void>>().mockResolvedValue(undefined)
@@ -245,11 +246,13 @@ describe('SshTerminalOverlay', () => {
       const { getByRole, queryByRole, findByText } = render(<SshTerminalOverlay asset={asset} onClose={vi.fn()} embedded />)
       expect(queryByRole('button', { name: 'AI', exact: true })).toBeNull()
       await waitFor(() => { expect(getByRole('main').closest('section')?.querySelector('[aria-label="SSH 已连接"]')).toBeTruthy() })
+      fireEvent.click(getByRole('button', { name: '引用到对话' }))
+      expect(reply).toHaveBeenCalledExactlyOnceWith(SESSION_ID)
+      expect(await findByText('已引用到当前对话框')).toBeTruthy()
       const terminal = getByRole('main', { name: 'SSH 终端' }).querySelector('[class*="terminalLayer"]')!
       fireEvent.contextMenu(terminal)
       fireEvent.click(await findByText('引用到当前对话框'))
-      expect(reply).toHaveBeenCalledWith(SESSION_ID)
-      expect(await findByText('已引用到当前对话框')).toBeTruthy()
+      expect(reply).toHaveBeenCalledTimes(2)
     } finally {
       frameElement.mockRestore()
     }

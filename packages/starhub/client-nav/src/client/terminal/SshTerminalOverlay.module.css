@@ -94,6 +94,10 @@
   animation: none;
 }
 
+.panel {
+  container: starhub-ssh / inline-size;
+}
+
 .panelPage,
 .panelEmbedded {
   width: 100%;
@@ -334,6 +338,32 @@
   transform: scale(0.96);
 }
 
+.referenceAction {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  padding: 4px 8px;
+  background: var(--dsw-alias-state-business-tertiary);
+  color: var(--dsw-alias-state-business-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.referenceAction:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, var(--dsw-alias-state-business-tertiary));
+}
+
+.referenceAction:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .broadcastAction {
   display: inline-flex;
   align-items: center;
@@ -369,11 +399,11 @@
   opacity: 0.7;
 }
 
-/* ── Notice toast(悬浮于工作区顶部)───────────────────────────── */
+/* ── Notice toast ───────────────────────────────────────────────── */
 
 .notice {
   position: absolute;
-  top: 12px;
+  bottom: 34px;
   left: 50%;
   z-index: 30;
   display: flex;
@@ -387,6 +417,7 @@
   box-shadow: var(--dsw-shadow-lv2);
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
+  pointer-events: none;
   transform: translateX(-50%);
   animation: starhub-toast-in var(--ds-transition-duration) var(--ds-ease-in-out);
 }
@@ -440,6 +471,7 @@
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
+  pointer-events: auto;
   line-height: 1;
   transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
@@ -461,6 +493,7 @@
 }
 
 .terminalWorkspace {
+  container: starhub-terminal / inline-size;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -820,7 +853,7 @@
 
 .sidePanel {
   display: flex;
-  width: var(--side-panel-width, 500px);
+  width: min(var(--side-panel-width, 500px), 48%);
   min-width: 0;
   flex: none;
   flex-direction: column;
@@ -1476,29 +1509,53 @@
 
 /* ── Responsive ────────────────────────────────────────────────── */
 
-@media (max-width: 1080px) {
-  .duration,
+@container starhub-ssh (max-width: 1080px) {
+  .duration { display: none; }
+}
+
+@container starhub-terminal (max-width: 700px) {
   .statusSessionText,
   .statusItem {
     display: none;
   }
-}
-
-@media (max-width: 840px) {
-  .statusPillText,
-  .broadcastDetail,
-  .endpoint {
-    display: none;
-  }
 
   .toolbar {
-    overflow-x: auto;
-    scrollbar-width: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'views tools' 'commands quick-tools';
+    gap: 4px 6px;
+    padding: 4px 8px;
   }
 
-  .quickList {
-    flex: none;
+  .tabGroup {
+    grid-area: views;
+    justify-self: start;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: auto;
+    scrollbar-width: thin;
   }
+
+  .toolGroup { grid-area: tools; }
+  .quickList { grid-area: commands; }
+  .quickTools { grid-area: quick-tools; justify-self: end; }
+  .toolDivider, .fontButton, .extendedTool { display: none; }
+}
+
+@container starhub-terminal (max-width: 380px) {
+  .terminalTab,
+  .workspaceTab,
+  .workspaceTabActive {
+    padding-inline: 5px;
+    gap: 3px;
+  }
+
+  .statusBar { gap: 4px; padding-inline: 6px; }
+  .statusCwd { max-width: none; }
+}
+
+@container starhub-ssh (max-width: 840px) {
+  .broadcastDetail, .endpoint { display: none; }
 }
 
 @media (max-width: 680px) {
@@ -1512,7 +1569,9 @@
     border: 0;
     border-radius: 0;
   }
+}
 
+@container starhub-ssh (max-width: 680px) {
   .header {
     gap: 6px;
     padding-inline: 8px;
@@ -1525,7 +1584,7 @@
   .sidePanel {
     width: auto;
     min-height: 0;
-    flex: 0 0 52%;
+    flex: 0 0 44%;
     border-left: 0;
     border-top: 0.5px solid var(--dsw-alias-border-l2);
   }
@@ -1533,15 +1592,15 @@
   .sidePanelResize {
     display: none;
   }
+}
 
-  .toolbar {
-    scrollbar-width: thin;
-  }
-
-  .quickList {
-    max-width: 45%;
-    flex: 0 1 auto;
-  }
+@container starhub-ssh (max-width: 380px) {
+  .statusPill { margin-left: 0; padding-inline: 6px; }
+  .headRight { gap: 3px; }
+  .broadcastAction { padding-inline: 6px; }
+  .broadcastAction > span { display: none; }
+  .referenceAction { max-width: 46cqi; }
+  .referenceAction > span { overflow: hidden; text-overflow: ellipsis; }
 }
 
 /* ── Reduced motion ────────────────────────────────────────────── */

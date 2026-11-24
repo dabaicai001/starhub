@@ -1,12 +1,10 @@
 /**
  * StarHub 工具面板(v0.123.2 起为**主面板**):侧栏「工具」行
  * (sidebar.panellist,order 1 紧随「插件」之下)经 layout.selectPanel 切换,
- * 本组件挂 ui-layout 的 root-scope `main` keyed 槽(契约:panellist 的 id
- * 必须在 main 有同名注册),显示当前子类(终端 / 数据库 / Docker)的资产
- * (连接)列表;无资产概念的子类(Android)渲染各自的工作面板。
- * 子类行为手风琴:点行展开,再点一次收起(v0.130.0;null = 全部收起)。
+ * 本组件挂 ui-layout 的 root-scope `main` keyed 槽，显示可按分类筛选和搜索的连接列表。
+ * Android 设备使用独立的设备面板。
  * 点击连接默认打开壳内工作台。右键可选择在系统浏览器中打开,
- * 行尾 hover 出编辑钮,
+ * 行尾提供编辑和更多操作，
  * 经 openConnectionManager(asset) 打开连接对话框的编辑模式;列头带资产数、
  * 刷新与「新建连接」入口,右上角 × 回会话视图(selectPanel(null))。
  *
@@ -25,17 +23,19 @@
  * 历史形态:rc.2 起先挂 shell.overlay 浮层(侧栏底部 footer.action 入口 +
  * toolsPanel 开关桥);v0.123.2 迁主面板,开关桥删除。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import clsx from 'clsx'
 import type { PropsRuntime, InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: the 'main' SlotMap row (declared by ui-layout).
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import {
-  IconCloseOutlineMedium, IconCopyOutlineMedium, IconEditOutlineMedium, IconLinkOutlineMedium, IconLoadingOutlineMedium,
-  IconPlusOutlineMedium, IconRefreshOutlineMedium, IconRightUpOutlineMedium, IconTrashOutlineMedium,
+  IconCloseOutlineMedium, IconCopyOutlineMedium, IconEditOutlineMedium, IconEllipsisOutlineMedium,
+  IconLinkOutlineMedium, IconLoadingOutlineMedium, IconPlusOutlineMedium, IconRefreshOutlineMedium,
+  IconRightUpOutlineMedium, IconSearchOutlineMedium, IconTrashOutlineMedium,
   writeClipboard, type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { STARHUB_SUBCATEGORIES, assetRowBadge, assetSubtitle, assetWindowUrl, type StarHubAsset, type StarHubSubcategory } from './sections.ts'
+import { STARHUB_SUBCATEGORIES, assetRowBadge, assetSubtitle, assetWindowUrl, type StarHubAsset } from './sections.ts'
 import { tauriInvoke } from './tauri.ts'
 import type { ConnectionManagerOverlay, RustAsset, StarHubAssetListState, ToolSelection } from './store.ts'
 import { ContextMenu, useContextMenu } from './ContextMenu.tsx'
@@ -44,11 +44,6 @@ import type { ExecRecordsState } from './conn/exec-records.ts'
 import { AndroidPanel } from './android/AndroidPanel.tsx'
 import { interactionMessages } from './interaction-messages.ts'
 import css from './StarHubToolWorkspace.module.css'
-
-/** 无资产概念的子类:展开后渲染各自工作面板,不走资产列表逻辑。 */
-function isAssetlessSubcategory(key: string): boolean {
-  return key === 'android'
-}
 
 /**
  * 问宿主要真实源(桌面壳里页面 origin 是 `dsh-app://app`,不是宿主源)。
@@ -104,9 +99,8 @@ async function openAssetInBrowser(asset: StarHubAsset): Promise<string | null> {
   }
   // 两条路都没成:不再静默——复制链接并把提示交给面板展示。
   const copied = await writeClipboard(url.href)
-  return copied
-    ? '未能唤起系统浏览器,链接已复制到剪贴板'
-    : `未能唤起系统浏览器,请手动访问:${url.href}`
+  const messages = interactionMessages()
+  return copied ? messages.browserLinkCopied : messages.browserLinkFallback(url.href)
 }
 
 /** Business face injected by the registration: the connection wire + bridge/asset writes. */
@@ -142,7 +136,7 @@ export type StarHubToolWorkspaceProps =
   & InjectFace<StarHubToolWorkspaceInjected>
 
 /** 单个资产行:打开工作台、编辑连接及右键操作。 */
-function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit, onDelete, onNotice }: {
+function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit, onNotice }: {
   asset: RustAsset
   badgeLabel: string
   /** 当前打开(选中)的资产行高亮。 */
@@ -152,8 +146,6 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
   /** 引用到当前对话框:插入 `@` 引用 chip 并轻绑定资产上下文。 */
   onReference: () => void
   onEdit: () => void
-  /** 删除走连接对话框编辑模式(内含两步确认的 delete_asset 入口)。 */
-  onDelete: () => void
   /** 面板级瞬时提示(唤起系统浏览器两条路都不通时给出可见反馈)。 */
   onNotice: (text: string) => void
 }) {
@@ -161,6 +153,7 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
   const messages = interactionMessages()
   const [copied, setCopied] = useState(false)
   const [openingBrowser, setOpeningBrowser] = useState(false)
+  const [openingWorkbench, setOpeningWorkbench] = useState(false)
   useEffect(() => {
     if (!copied) return
     const timer = window.setTimeout(() => { setCopied(false) }, 1500)
@@ -179,78 +172,99 @@ function AssetRow({ asset, badgeLabel, active, onOpenInPage, onReference, onEdit
     }
   }
   const openInPage = async (): Promise<void> => {
+    setOpeningWorkbench(true)
     try {
       await onOpenInPage()
     } catch (error) {
       onNotice(messages.workbenchOpenFailed(error instanceof Error ? error.message : String(error)))
+    } finally {
+      setOpeningWorkbench(false)
     }
   }
+  const pending = openingBrowser ? messages.openingBrowser : openingWorkbench ? messages.loadingWorkbench : ''
   const items: MenuEntry[] = [
     { id: 'open-in-browser', label: messages.openInBrowser, icon: <IconRightUpOutlineMedium />, disabled: openingBrowser },
     { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium /> },
-    { id: 'edit', label: '编辑', icon: <IconEditOutlineMedium /> },
-    { id: 'copy', label: copied ? '已复制' : '复制连接信息', icon: <IconCopyOutlineMedium /> },
+    { id: 'edit', label: messages.edit, icon: <IconEditOutlineMedium /> },
+    { id: 'copy', label: copied ? messages.copied : messages.copyConnection, icon: <IconCopyOutlineMedium /> },
     { type: 'separator', id: 'asset-delete-separator' },
     // 删除不直接执行:复用连接对话框编辑模式内的两步确认删除入口
     // (delete_asset 命令),避免右键菜单里的无确认破坏性操作。
-    { id: 'delete', label: '删除', icon: <IconTrashOutlineMedium />, danger: true },
+    { id: 'delete', label: messages.delete, icon: <IconTrashOutlineMedium />, danger: true },
   ]
   return (
-    <div className={css.rowWrap} onContextMenu={menu.onContextMenu} onKeyDown={menu.onKeyDown}>
+    <li className={clsx(css.rowWrap, active && css.active)} onContextMenu={menu.onContextMenu} onKeyDown={menu.onKeyDown}>
       <button
         type="button"
-        className={`${css.row} ${active ? css.active : ''}`}
+        className={css.row}
         title={messages.openInWorkbench(asset.name)}
+        aria-current={active ? 'true' : undefined}
+        aria-busy={openingWorkbench}
+        disabled={openingWorkbench}
         onClick={() => void openInPage()}
       >
-        <span className={css.badge}>
-          {openingBrowser ? <IconLoadingOutlineMedium className={css.spin} size={13} /> : badgeLabel}
-        </span>
         <span className={css.assetText}>
           <span className={css.rowName}>{asset.name}</span>
-          {(openingBrowser || subtitle !== '') && (
-            <span className={css.rowSub}>{openingBrowser ? messages.openingBrowser : subtitle}</span>
+          {(pending !== '' || subtitle !== '') && (
+            <span className={css.rowSub}>{pending || subtitle}</span>
           )}
         </span>
+        <span className={css.badge}>
+          {pending !== '' ? <IconLoadingOutlineMedium className={css.spin} size={13} /> : badgeLabel}
+        </span>
       </button>
-      <span className={css.srOnly} role="status">{openingBrowser ? messages.openingBrowser : ''}</span>
+      <span className={css.srOnly} role="status">{pending}</span>
       <button
         type="button"
-        className={css.rowEdit}
-        title={`编辑 ${asset.name}`}
-        aria-label={`编辑 ${asset.name}`}
+        className={css.iconButton}
+        title={messages.editConnection(asset.name)}
+        aria-label={messages.editConnection(asset.name)}
         onClick={onEdit}
       >
-        <IconEditOutlineMedium size={13} />
+        <IconEditOutlineMedium size={15} />
+      </button>
+      <button
+        type="button"
+        className={css.iconButton}
+        title={messages.connectionActions(asset.name)}
+        aria-label={messages.connectionActions(asset.name)}
+        aria-haspopup="menu"
+        aria-expanded={menu.open}
+        onClick={event => {
+          if (menu.open) {
+            menu.close()
+            return
+          }
+          const rect = event.currentTarget.getBoundingClientRect()
+          menu.openAt(rect.right, rect.bottom)
+        }}
+      >
+        <IconEllipsisOutlineMedium size={16} />
       </button>
       <ContextMenu
         menu={menu}
         items={items}
+        align="end"
         onSelect={(id) => {
           if (id === 'open-in-browser') void openInBrowser()
           else if (id === 'reference') onReference()
-          else if (id === 'edit') onEdit()
+          else if (id === 'edit' || id === 'delete') onEdit()
           else if (id === 'copy') {
             const text = subtitle === '' ? asset.name : `${asset.name} ${subtitle}`
             void writeClipboard(text).then((ok) => {
               if (ok) setCopied(true)
               else onNotice(messages.copyFailed)
             })
-          /* v8 ignore start -- 菜单 id 枚举完备(open-in-browser/reference/edit/copy/delete),delete 条件的假分支不可达 */
-          } else if (id === 'delete') onDelete()
-          /* v8 ignore stop */
+          }
         }}
         className={css.menuRoot}
       />
-    </div>
+    </li>
   )
 }
 
 /**
- * Render the StarHub tools main panel: the subcategory tree (终端 / 数据库 /
- * Docker / Android), each expandable to its asset list or dedicated
- * panel; clicking an asset opens its operation page. Also syncs
- * the current tool selection to host settings for AI context (Path B plan 4.3).
+ * Render the searchable connection list and the Android device panel.
  *
  * 文件树/文件查看能力已在 v0.121.8 移除(与 DSH 主壳自带的 fs 工具/`@`
  * 文件引用源重复),壳内文件浏览请用 DSH 侧能力。
@@ -272,7 +286,7 @@ export function StarHubToolWorkspace({
   const recentChange = useAssets(s => s.recentChange)
   const activeSubcategory = useSelection(s => s.subcategory)
   const activeAssetId = useSelection(s => s.assetId)
-  const initialKind = STARHUB_SUBCATEGORIES.find(item => item.key === activeSubcategory)?.initialConnectionKind
+  const activeCategory = STARHUB_SUBCATEGORIES.find(item => item.key === activeSubcategory)
   const createdAsset = recentChange?.kind === 'created' ? assets.find(asset => asset.id === recentChange.id) : undefined
   const messages = interactionMessages()
   const changeMessages = {
@@ -283,6 +297,8 @@ export function StarHubToolWorkspace({
   // 执行记录视图(v0.100.0):hook 未提供时视为关闭 + 空列表(独立渲染兼容)。
   const execViewOpen = useExecRecords?.(s => s.viewOpen) ?? false
   const execRecords = useExecRecords?.(s => s.records) ?? []
+  const [search, setSearch] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
   // 面板级瞬时提示(「在浏览器中打开」失败时不再静默):6s 自动消失。
   const [notice, setNotice] = useState<string | null>(null)
   useEffect(() => {
@@ -300,8 +316,31 @@ export function StarHubToolWorkspace({
     }
   }
 
-  // 挂载时(以及切换子类时)重新拉取(回调内部对并发拉取去重)。
-  useEffect(() => { refreshAssets() }, [activeSubcategory, refreshAssets])
+  useEffect(() => { refreshAssets() }, [refreshAssets])
+
+  const createConnection = (): void => {
+    setSearch('')
+    openConnectionManager(undefined, activeCategory?.initialConnectionKind)
+  }
+  const android = activeSubcategory === 'android'
+  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const groups = STARHUB_SUBCATEGORIES.filter(category => category.key !== 'android').map(category => {
+    const connections = assets.filter(category.matches).map(asset => ({
+      asset,
+      badge: assetRowBadge(asset, asset.type === 'ssh' ? 'SSH' : category.label),
+    }))
+    const matches = connections.filter(({ asset, badge }) => {
+      const fields = `${asset.name} ${assetSubtitle(asset)} ${badge} ${asset.type} ${category.label}`.toLowerCase()
+      return terms.every(term => fields.includes(term))
+    })
+    return { category, connections, matches }
+  })
+  const total = groups.reduce((count, group) => count + group.connections.length, 0)
+  const visibleGroups = groups.filter(({ category, matches }) =>
+    matches.length > 0 && (activeCategory === undefined || activeCategory === category),
+  )
+  const visibleCount = visibleGroups.reduce((count, group) => count + group.matches.length, 0)
+  const hasAssets = !preview && visibleCount > 0
 
   return (
     <div className={css.panel}>
@@ -315,163 +354,121 @@ export function StarHubToolWorkspace({
       ) : (
         <>
           <header className={css.header}>
-            <span className={css.title}>StarHub 工具</span>
-            <span className={css.spacer} />
-            <button type="button" className={css.createButton} onClick={openExecRecords}>
-              {messages.sshExecRecords}
-            </button>
+            <h1 className={css.title}>{messages.toolsTitle}</h1>
+            <div className={css.headerActions}>
+              <button type="button" className={css.secondaryButton} onClick={openExecRecords}>{messages.sshExecRecords}</button>
+              <button type="button" className={css.primaryButton} onClick={createConnection}>
+                <IconPlusOutlineMedium size={15} />{messages.createConnection}
+              </button>
+            </div>
             <button
               type="button"
-              className={css.createButton}
-              onClick={() => { openConnectionManager(undefined, initialKind) }}
-            >
-              <IconPlusOutlineMedium size={13} />
-              {messages.createConnection}
-            </button>
-            <button
-              type="button"
-              className={css.iconButton}
-              title="刷新"
-              aria-label="刷新"
-              disabled={loading}
-              onClick={() =>{  refreshAssets() }}
-            >
-              {loading ? <IconLoadingOutlineMedium className={css.spin} size={13} /> : <IconRefreshOutlineMedium size={13} />}
-            </button>
-            <button
-              type="button"
-              className={css.closeButton}
-              title="返回会话"
-              aria-label="返回会话"
+              className={clsx(css.iconButton, css.closeTools)}
+              title={messages.returnToConversation}
+              aria-label={messages.returnToConversation}
               onClick={closeTools}
             >
-              <IconCloseOutlineMedium size={14} />
+              <IconCloseOutlineMedium size={16} />
             </button>
           </header>
+          <nav className={css.categories} aria-label={messages.connectionCategories}>
+            <button type="button" className={css.category} aria-pressed={activeCategory === undefined} onClick={() => { selectSubcategory(null) }}>
+              {messages.allConnections}
+              {!preview && <span className={css.count}>{total}</span>}
+            </button>
+            {STARHUB_SUBCATEGORIES.map(category => {
+              const size = groups.find(group => group.category === category)?.connections.length
+              return (
+                <button type="button" key={category.key} className={css.category} aria-pressed={activeCategory === category}
+                  onClick={() => { selectSubcategory(category.key) }}>
+                  <category.Icon size={14} />{category.label}
+                  {!preview && size !== undefined && <span className={css.count}>{size}</span>}
+                </button>
+              )
+            })}
+          </nav>
+          {!android && (
+            <div className={css.searchBar}>
+              <div className={css.searchField}>
+                <IconSearchOutlineMedium size={16} />
+                <input ref={searchRef} type="search" value={search} placeholder={messages.searchConnections} aria-label={messages.searchConnections}
+                  onChange={event => { setSearch(event.target.value) }}
+                  onKeyDown={event => { if (event.key === 'Escape') setSearch('') }} />
+                {search !== '' && <button type="button" className={css.iconButton} aria-label={messages.clearConnectionSearch}
+                  onClick={() => { setSearch(''); searchRef.current?.focus() }}><IconCloseOutlineMedium size={14} /></button>}
+              </div>
+              <button type="button" className={css.refreshButton} title={messages.refresh} aria-label={messages.refresh}
+                disabled={loading} onClick={refreshAssets}>
+                {loading ? <IconLoadingOutlineMedium className={css.spin} size={16} /> : <IconRefreshOutlineMedium size={16} />}
+              </button>
+            </div>
+          )}
           {notice !== null && <div className={css.notice} role="status">{notice}</div>}
           {recentChange !== undefined && (
             <div className={css.connectionNotice}>
               <span className={css.connectionNoticeText} role="status">{changeMessages[recentChange.kind](recentChange.name)}</span>
               {createdAsset !== undefined && (
-                <button type="button" className={css.retryButton} onClick={() => void openSavedConnection(createdAsset)}>
+                <button type="button" className={css.secondaryButton} onClick={() => void openSavedConnection(createdAsset)}>
                   {messages.openSavedConnection}
                 </button>
               )}
-              <button type="button" className={css.closeButton} aria-label={messages.dismissConnectionNotice} onClick={dismissConnectionChange}>
+              <button type="button" className={css.iconButton} aria-label={messages.dismissConnectionNotice} onClick={dismissConnectionChange}>
                 <IconCloseOutlineMedium size={13} />
               </button>
             </div>
           )}
-          <div className={css.tree}>
-            {(activeSubcategory === null || activeSubcategory === 'android') && (
-              loading ? <div className={css.status} role="status">加载资产…</div>
-                : error !== null && <div className={css.status} role="alert">资产加载失败:{error}</div>
+          <div className={css.content}>
+            {android ? <AndroidPanel /> : (
+              <>
+                {preview ? (
+                  <div className={css.empty}>
+                    <strong>{messages.previewMode}</strong>
+                    <span>{messages.connectionPreviewHint}</span>
+                  </div>
+                ) : (
+                  <>
+                    {loading && !hasAssets && <div className={css.empty} role="status">
+                      <IconLoadingOutlineMedium className={css.spin} size={20} />{messages.loadingConnections}
+                    </div>}
+                    {!loading && error !== null && <div className={css.errorBanner}>
+                      <span role="alert">{messages.refreshConnectionsFailed(error)}</span>
+                      <button type="button" className={css.secondaryButton} onClick={refreshAssets}>{messages.retry}</button>
+                    </div>}
+                    {hasAssets && visibleGroups.map(({ category, matches }) => (
+                      <section className={css.group} key={category.key} aria-labelledby={`starhub-connections-${category.key}`}>
+                        <div className={css.groupHeading}>
+                          <h2 id={`starhub-connections-${category.key}`}>{category.label}</h2>
+                          {terms.length > 0 && <span>{messages.connectionCount(matches.length)}</span>}
+                        </div>
+                        <ul className={css.list}>
+                          {matches.map(({ asset, badge }) => (
+                            <AssetRow key={asset.id} asset={asset} badgeLabel={badge}
+                              active={(createdAsset?.id ?? activeAssetId) === asset.id}
+                              onOpenInPage={() => openAsset(asset)}
+                              onReference={() => { insertAssetReference(asset) }}
+                              onEdit={() => { openConnectionManager(asset) }}
+                              onNotice={setNotice} />
+                          ))}
+                        </ul>
+                      </section>
+                    ))}
+                    {!loading && (error === null || total > 0) && !hasAssets && (
+                      <div className={css.empty} role="status">
+                        <IconSearchOutlineMedium size={23} />
+                        <strong>{terms.length > 0 ? messages.noConnectionMatches
+                          : activeCategory === undefined ? messages.noConnections : messages.noCategoryConnections(activeCategory.label)}</strong>
+                        {terms.length === 0 && <button type="button" className={css.secondaryButton} onClick={createConnection}>
+                          {messages.createConnection}
+                        </button>}
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
             )}
-            {activeSubcategory === null && (
-              <div className={css.status}>点击展开一个子类(终端 / 数据库 / Docker / Android)查看内容。</div>
-            )}
-            {STARHUB_SUBCATEGORIES.map(subcategory => renderSubcategory(
-              subcategory,
-              assets,
-              activeSubcategory,
-              createdAsset?.id ?? activeAssetId,
-              loading,
-              error,
-              preview,
-              {
-                openAsset,
-                openConnectionManager,
-                refreshAssets,
-                selectSubcategory,
-                insertAssetReference,
-                onNotice: setNotice,
-              },
-            ))}
           </div>
         </>
       )}
     </div>
-  )
-}
-
-/** 渲染一个子类树节点:子类行(选中态)+ 展开后的资产列表。 */
-function renderSubcategory(
-  subcategory: StarHubSubcategory,
-  assets: readonly RustAsset[],
-  activeSubcategory: string | null,
-  activeAssetId: string | null,
-  loading: boolean,
-  error: string | null,
-  preview: boolean,
-  handlers: {
-    openAsset: (asset: StarHubAsset) => void | Promise<void>
-    openConnectionManager: ConnectionManagerOverlay['open']
-    refreshAssets: () => void
-    selectSubcategory: (key: string | null) => void
-    insertAssetReference: (asset: RustAsset) => void
-    /** 面板级瞬时提示(setter 由面板持有)。 */
-    onNotice: (text: string) => void
-  },
-) {
-  const expanded = subcategory.key === activeSubcategory
-  const matched = assets.filter(subcategory.matches)
-  const Icon = subcategory.Icon
-  return (
-    <section key={subcategory.key} className={css.node}>
-      <button
-        type="button"
-        className={`${css.category} ${expanded ? css.active : ''}`}
-        aria-expanded={expanded}
-        onClick={() =>{  handlers.selectSubcategory(expanded ? null : subcategory.key) }}
-      >
-        <Icon size={13} />
-        <span className={css.categoryLabel}>{subcategory.label}</span>
-        {!preview && !loading && error === null && <span className={css.count}>{matched.length}</span>}
-      </button>
-      {expanded && (
-        <div className={css.assetGroup}>
-          {/* 无资产概念的子类:Android 渲染 adb 设备面板 */}
-          {subcategory.key === 'android' && <AndroidPanel />}
-          {!isAssetlessSubcategory(subcategory.key) && loading && <div className={css.status} role="status">加载资产…</div>}
-          {!isAssetlessSubcategory(subcategory.key) && !loading && preview && (
-            <div className={css.status}>
-              <div className={css.previewTitle}>浏览器预览模式</div>
-              <div>当前页面跑在纯浏览器里,没有 StarHub 桌面端后端(Tauri IPC),资产列表不可用。</div>
-            </div>
-          )}
-          {!isAssetlessSubcategory(subcategory.key) && !loading && !preview && error !== null && (
-            <div className={css.status}>
-              <div role="alert">{matched.length > 0 ? interactionMessages().refreshConnectionsFailed(error) : `资产加载失败:${error}`}</div>
-              <button type="button" className={css.retryButton} onClick={() =>{  handlers.refreshAssets() }}>重试</button>
-            </div>
-          )}
-          {!isAssetlessSubcategory(subcategory.key) && !loading && !preview && error === null && matched.length === 0 && (
-            <div className={css.status}>
-              <div>暂无 {subcategory.label} 连接。</div>
-              <button type="button" className={css.retryButton} onClick={() => { handlers.openConnectionManager(undefined, subcategory.initialConnectionKind) }}>
-                {interactionMessages().createConnection}
-              </button>
-            </div>
-          )}
-          {!isAssetlessSubcategory(subcategory.key) && !preview && matched.length > 0 && (
-            <div className={css.list}>
-              {matched.map(asset => (
-                <AssetRow
-                  key={asset.id}
-                  asset={asset}
-                  badgeLabel={assetRowBadge(asset, subcategory.label)}
-                  active={activeAssetId === asset.id}
-                  onOpenInPage={() => handlers.openAsset(asset)}
-                  onReference={() =>{  handlers.insertAssetReference(asset) }}
-                  onEdit={() =>{  handlers.openConnectionManager(asset) }}
-                  onDelete={() =>{  handlers.openConnectionManager(asset) }}
-                  onNotice={handlers.onNotice}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </section>
   )
 }

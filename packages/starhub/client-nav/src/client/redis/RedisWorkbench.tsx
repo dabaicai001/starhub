@@ -470,7 +470,19 @@ function DbTreeRow({ db, open, size, actions }: {
  * @returns the Redis workbench overlay.
  */
 export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: () => void }) {
-  const [keysCollapsed, setKeysCollapsed] = useState(false)
+  const [keysDrawerOpen, setKeysDrawerOpen] = useState(false)
+  const keysToggleRef = useRef<HTMLButtonElement>(null)
+  const keysDrawerRef = useRef<HTMLElement>(null)
+  const messages = interactionMessages()
+
+  useEffect(() => {
+    if (keysDrawerOpen) keysDrawerRef.current?.focus()
+  }, [keysDrawerOpen])
+
+  const closeKeysDrawer = useCallback((): void => {
+    setKeysDrawerOpen(false)
+    keysToggleRef.current?.focus()
+  }, [])
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   /** 连接尝试序号:失败后点「重试」自增,触发建连 effect 重跑。 */
@@ -996,7 +1008,10 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
     return true
   }
 
-  const openKey = useCallback((key: string, type: string) =>{  setOpenValue({ key, type }) }, [])
+  const openKey = useCallback((key: string, type: string) => {
+    setOpenValue({ key, type })
+    if (keysDrawerOpen) closeKeysDrawer()
+  }, [closeKeysDrawer, keysDrawerOpen])
 
   /**
    * 右键「添加成员」:打开 key 并带上聚焦标志——值编辑器(按 key 重挂载)挂载
@@ -1004,6 +1019,7 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
    */
   const openKeyAndAdd = useCallback((key: string, type: string) => {
     setOpenValue({ key, type, addFocus: true })
+    setKeysDrawerOpen(false)
   }, [])
 
   /** 右键「复制 value」:按当前类型取一次值再进剪贴板(string 取原文,其余 JSON 化)。 */
@@ -1059,10 +1075,13 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
             <span className={css.keyCount} data-testid="redis-head-count">{(shownEntry?.size ?? 0).toLocaleString()} keys</span>
           </div>
           {connectError === null && (
-            <button type="button" className={`${css.secondaryButton} ${css.keysToggle}`}
-              aria-expanded={!keysCollapsed} aria-controls="starhub-redis-keys"
-              onClick={() => { setKeysCollapsed(collapsed => !collapsed) }}>
-              {interactionMessages().redisKeys}
+            <button ref={keysToggleRef} type="button" className={`${css.secondaryButton} ${css.keysToggle}`}
+              aria-expanded={keysDrawerOpen} aria-controls="starhub-redis-keys"
+              onClick={() => {
+                if (keysDrawerOpen) closeKeysDrawer()
+                else setKeysDrawerOpen(true)
+              }}>
+              {messages.redisKeys}
             </button>
           )}
           {onClose !== undefined && <button type="button" className={css.closeButton} onClick={onClose}>关闭</button>}
@@ -1078,7 +1097,13 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
 
         {connectError === null && (
           <div className={css.body}>
-            <div id="starhub-redis-keys" className={`${css.side} ${keysCollapsed ? css.keysCollapsed : ''}`}>
+            {keysDrawerOpen && <button type="button" className={css.keysBackdrop} tabIndex={-1}
+              aria-label={messages.closeRedisKeys} onClick={closeKeysDrawer} />}
+            <aside ref={keysDrawerRef} id="starhub-redis-keys" tabIndex={-1} aria-label={messages.redisKeys}
+              className={`${css.side} ${keysDrawerOpen ? css.keysDrawerOpen : ''}`}
+              onKeyDown={event => {
+                if (keysDrawerOpen && event.key === 'Escape' && !event.defaultPrevented) closeKeysDrawer()
+              }}>
               <div className={css.toolbar}>
                 <button type="button" className={css.iconButton} title="刷新" aria-label="刷新"
                   disabled={!connected || expandedDb === null || expandedEntry?.loading === true}
@@ -1087,7 +1112,10 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
                 <button type="button" className={css.iconButton} title="清空 DB" aria-label="清空 DB"
                   disabled={!connected} onClick={() =>{  askFlushDb() }}><IconTrashOutlineMedium size={15} /></button>
                 <button type="button" className={css.iconButton} title="CLI" aria-label="CLI"
-                  disabled={!connected} onClick={() =>{  setCliOpen(v => !v) }}><IconCodeOutlineMedium size={15} /></button>
+                  disabled={!connected} onClick={() => {
+                    if (keysDrawerOpen) closeKeysDrawer()
+                    setCliOpen(v => !v)
+                  }}><IconCodeOutlineMedium size={15} /></button>
                 <span className={css.toolbarSpacer} />
                 {expandedDb !== null && selectedFor(expandedDb).size > 0 && (
                   <button type="button" className={css.dangerButton} data-testid="redis-delete-selected"
@@ -1096,6 +1124,8 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
                 )}
                 <button type="button" className={css.primaryButton} title="新建 Key" aria-label="新建 Key"
                   disabled={!connected} onClick={() =>{  openNewKey() }}><IconPlusOutlineMedium size={14} /> 新建 Key</button>
+                <button type="button" className={`${css.iconButton} ${css.keysClose}`} aria-label={messages.closeRedisKeys}
+                  title={messages.closeRedisKeys} onClick={closeKeysDrawer}><IconCloseOutlineMedium size={15} /></button>
               </div>
 
               <div className={css.dbTree} role="tree" aria-label="DB 列表">
@@ -1166,7 +1196,11 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
                                     onOpenAndAdd={openKeyAndAdd}
                                     onCopy={key => void copyText(key, 'key 名')}
                                     onCopyValue={key => void copyKeyValue(key)}
-                                    onRename={(key) => { setRenaming(key); setRenameTo(key) }}
+                                    onRename={(key) => {
+                                      setRenaming(key)
+                                      setRenameTo(key)
+                                      if (keysDrawerOpen) closeKeysDrawer()
+                                    }}
                                     onDelete={deleteKey}
                                     onToggleSelect={(key, checked) =>{  toggleKeySelected(db, key, checked) }}
                                     onToggleFolderSelect={(node2, checked) =>{  toggleFolderSelected(db, node2, checked) }} />
@@ -1189,7 +1223,7 @@ export function RedisWorkbench({ asset, onClose }: { asset: RustAsset; onClose?:
                   )
                 })}
               </div>
-            </div>
+            </aside>
 
             <div className={css.main}>
               <div className={css.mainTabs} role="tablist">

@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.144.1-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.145.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,8 +59,10 @@
 
 ## 当前版本
 
-### v0.144.1 (2026-11-24)
-- 🐛 同步 Rust sidecar 协议测试中的 SSH 终端引用方法和 RPC 总数，修复 Windows 插件发布与主分支 CI 失败。
+### v0.145.0 (2026-11-24)
+- ✨ 重构「StarHub 工具」连接列表，默认展示全部连接，支持按名称、主机和类型搜索、按分类筛选，并在每行提供编辑和更多操作。
+- 🔧 工作台按面板宽度调整布局。SSH 终端提供可见的「引用到对话」入口，窄栏中的工具按钮保持可达。数据库对象和 Redis 键列表可按需展开，拖动面板时保留连接和编辑内容。
+- 🐛 数据库连接或对象加载失败时可在工作台内重试。SSH 操作提示不再遮挡工具按钮。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

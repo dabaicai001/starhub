@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 /**
- * StarHubToolWorkspace (方案 P1):右侧工具工作区列按子类过滤资产列表。
- * Covers the guide/empty/loading/error/list render states, refreshAssets
- * firing on mount and subcategory switch, the asset-row click opening the
- * workbench, and the context menu's explicit browser action. 资产/选择状态走
+ * Covers connection search and filters, loading and recovery, and opening a
+ * connection in the workbench or in the system browser. 资产/选择状态走
  * inject hooks 舱位(session-maybe 无会话分支不下发注册侧 store),测试
  * 直接驱动这两份裸 source。
  */
@@ -98,23 +96,30 @@ const sshAsset = {
 }
 
 describe('StarHubToolWorkspace', () => {
-  it('shows the guide and subcategory rows when no subcategory is selected', () => {
+  it('shows all connections when no category is selected and searches by host and type', () => {
     const props = workspaceProps()
+    props.assets.update(draft => {
+      draft.assets = [sshAsset, { ...sshAsset, id: 'r1', type: 'db', name: 'cache', config: { dbType: 'redis', host: '10.0.0.8' } }]
+    })
     render(<StarHubToolWorkspace {...props} />)
-    expect(screen.getByText(/点击展开一个子类/)).toBeTruthy()
-    // 子类行始终渲染(否则永远无法选中,死胡同);「终端」出现在子类行上。
-    expect(screen.getByText('终端')).toBeTruthy()
-    expect(screen.getByText('数据库')).toBeTruthy()
-    expect(screen.getByText('Docker')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /全部连接/ }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByText('prod-server')).toBeTruthy()
+    expect(screen.getByText('cache')).toBeTruthy()
+    const search = screen.getByRole('searchbox', { name: '搜索名称、主机或类型' })
+    fireEvent.change(search, { target: { value: '10.0.0.8 REDIS' } })
+    expect(screen.queryByText('prod-server')).toBeNull()
+    expect(screen.getByText('cache')).toBeTruthy()
+    fireEvent.keyDown(search, { key: 'Escape' })
+    expect(screen.getByText('prod-server')).toBeTruthy()
   })
 
-  it('calls refreshAssets on mount and on subcategory switch', () => {
+  it('loads connections on mount and filters the loaded list on category switch', () => {
     const props = workspaceProps()
     const view = render(<StarHubToolWorkspace {...props} />)
     expect(props.refreshAssets).toHaveBeenCalledTimes(1)
     props.bridge.selectSubcategory('terminal')
     view.rerender(<StarHubToolWorkspace {...props} />)
-    expect(props.refreshAssets).toHaveBeenCalledTimes(2)
+    expect(props.refreshAssets).toHaveBeenCalledTimes(1)
   })
 
   it('renders the loading state while fetching', () => {
@@ -130,7 +135,7 @@ describe('StarHubToolWorkspace', () => {
     props.bridge.selectSubcategory('terminal')
     props.assets.update((d) => { d.error = 'boom' })
     render(<StarHubToolWorkspace {...props} />)
-    expect(screen.getByText(/资产加载失败:boom/)).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain('连接列表刷新失败：boom')
     screen.getByText('重试').click()
     expect(props.refreshAssets).toHaveBeenCalledTimes(2) // mount + retry
   })
@@ -141,7 +146,7 @@ describe('StarHubToolWorkspace', () => {
     props.assets.update((d) => { d.preview = true })
     render(<StarHubToolWorkspace {...props} />)
     expect(screen.getByText('浏览器预览模式')).toBeTruthy()
-    expect(screen.queryByText(/资产加载失败/)).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('renders the android panel (no asset list) for the android subcategory', async () => {
@@ -169,7 +174,7 @@ describe('StarHubToolWorkspace', () => {
     props.bridge.selectSubcategory('terminal')
     props.assets.update((d) => { d.assets = [sshAsset] })
     render(<StarHubToolWorkspace {...props} />)
-    expect(screen.getByText('1')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /终端.*1/ })).toBeTruthy()
     screen.getByRole('button', { name: '新建连接' }).click()
     expect(props.openConnectionManager).toHaveBeenCalledTimes(1)
   })
@@ -279,7 +284,7 @@ describe('StarHubToolWorkspace', () => {
       props.assets.update((d) => { d.assets = [sshAsset] })
       render(<StarHubToolWorkspace {...props} />)
       const row = screen.getByText('prod-server')
-      fireEvent.contextMenu(row)
+      fireEvent.click(screen.getByRole('button', { name: 'prod-server 的更多操作' }))
       fireEvent.click(screen.getByText('在浏览器中打开'))
       fireEvent.contextMenu(row)
       expect(screen.getByText('在浏览器中打开').closest('button')?.disabled).toBe(true)
@@ -450,7 +455,7 @@ describe('StarHubToolWorkspace', () => {
       ) })
       expect(open).toHaveBeenCalledWith('about:blank', '_blank')
       expect(popup.opener).toBeNull()
-      expect(screen.queryByText(/未能唤起系统浏览器/)).toBeNull()
+      expect(screen.queryByText(/无法打开系统浏览器/)).toBeNull()
     } finally {
       restoreHostBridge()
       open.mockRestore()
@@ -474,7 +479,7 @@ describe('StarHubToolWorkspace', () => {
       fireEvent.contextMenu(screen.getByText('prod-server'))
       fireEvent.click(screen.getByText('在浏览器中打开'))
       // 两条路都不通时不再静默:面板给出可见提示,并把**宿主源**链接落到剪贴板
-      await screen.findByText('未能唤起系统浏览器,链接已复制到剪贴板')
+      await screen.findByText('无法打开系统浏览器，已复制工作台链接。')
       expect(write).toHaveBeenCalledWith(
         'http://127.0.0.1:19387/starhub-react/index.html?asset=a1&workbench=ssh',
       )
@@ -584,19 +589,16 @@ describe('StarHubToolWorkspace', () => {
     expect(clear.disabled).toBe(true)
   })
 
-  it('toggles a subcategory: clicking the expanded row collapses it (null), clicking another expands it', () => {
+  it('switches category filters and returns to all connections', () => {
     const props = workspaceProps()
     props.bridge.selectSubcategory('terminal')
-    const view = render(<StarHubToolWorkspace {...props} />)
-    // 已展开的子类行再点一次 → 收起(selectSubcategory(null))
+    render(<StarHubToolWorkspace {...props} />)
     const terminalRow = screen.getByRole('button', { name: /终端/ })
-    expect(terminalRow.getAttribute('aria-expanded')).toBe('true')
-    fireEvent.click(terminalRow)
+    expect(terminalRow.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: /全部连接/ }))
     expect(props.selectSubcategory).toHaveBeenCalledWith(null)
-    // 收起点另一行 → 展开该子类
     fireEvent.click(screen.getByRole('button', { name: /数据库/ }))
     expect(props.selectSubcategory).toHaveBeenCalledWith('database')
-    view.unmount()
   })
 
 })
