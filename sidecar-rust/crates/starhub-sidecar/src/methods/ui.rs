@@ -75,26 +75,21 @@ fn check_asset_type(asset_type: &str) -> Result<(), RpcError> {
     )))
 }
 
-/// `ui.get_assets`:全量资产(snake_case,与工作台 `RustAsset` 对齐)。
+/// `ui.get_assets`:全量资产或 `assetId` 指定的单条资产(保持数组返回形态)。
 ///
 /// `config` 是**合并密钥后**的配置,与 Tauri 版 `get_assets` 经 keyring hydrate
 /// 同语义:工作台的 SSH 终端与数据库面板直接从 `asset.config` 取密码建连
 /// (`buildSshAuth(asset.config)`),清单不合并就等于发空密码——服务端回
 /// `[AUTH_FAILED] Authentication rejected and no further methods available`
 /// (2026-10-10 实测)。模型面的 `starhub_list_assets` 文本摘要仍只取非敏感字段。
-pub fn get_assets(store: &AssetStore, _params: &Value) -> Result<Value, RpcError> {
-    let records = store.list().map_err(RpcError::internal)?;
-    let items = records
-        .iter()
-        .map(|record| {
-            let mut value = record.to_ui_json();
-            // 密钥缺失/存储损坏时退回未合并的配置:清单照常打得开,认证失败在执行点报。
-            if let Ok((_asset_type, merged)) = store.load_asset_config(&record.id) {
-                value["config"] = merged;
-            }
-            value
-        })
-        .collect::<Vec<_>>();
+pub fn get_assets(store: &AssetStore, params: &Value) -> Result<Value, RpcError> {
+    let asset_id = match params.get("assetId") {
+        Some(_) => Some(required_str(params, "assetId")?),
+        None => None,
+    };
+    let items = store
+        .list_for_workbench(asset_id.as_deref())
+        .map_err(RpcError::internal)?;
     Ok(json!(items))
 }
 
@@ -211,6 +206,12 @@ mod tests {
             .contains("group_id"));
         // 清单合并密钥(Tauri 版 get_assets 同语义):工作台正是从 asset.config 取密码建连
         assert_eq!(items[0]["config"]["password"], "s3cret");
+        let selected = get_assets(&store, &json!({ "assetId": "a1" })).expect("get one");
+        assert_eq!(selected, listed);
+        assert_eq!(
+            get_assets(&store, &json!({ "assetId": "missing" })).unwrap(),
+            json!([])
+        );
         let (_type, merged) = store.load_asset_config("a1").expect("load");
         assert_eq!(merged["password"], "s3cret");
         let _ = std::fs::remove_dir_all(&dir);

@@ -65,8 +65,25 @@ describe('StarHubWorkbenchPanel', () => {
     store.open({ key: 'a1', title: '验收机', url: '/starhub-react/index.html?asset=a1' })
     rerender()
     expect(screen.getByRole('status').textContent).toContain('正在加载工作台…')
-    fireEvent.load(screen.getByTitle('验收机'))
+    const frame = screen.getByTitle('验收机')
+    frame.setAttribute('data-starhub-ready', '')
+    fireEvent.load(frame)
     expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('retries a failed frame without closing its tab', () => {
+    const { store, rerender } = renderPanel()
+    store.open({ key: 'a1', title: '验收机', url: '/starhub-react/index.html?asset=a1' })
+    rerender()
+    const frame = screen.getByTitle('验收机')
+    fireEvent.load(frame)
+    expect(screen.getByRole('alert').textContent).toBe('工作台加载失败')
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(screen.getByTitle('验收机')).toBe(frame)
+    expect(screen.getByRole('status')).toBeTruthy()
+    frame.setAttribute('data-starhub-ready', '')
+    fireEvent.load(frame)
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('clicking a tab activates that page; the close button closes it', () => {
@@ -111,6 +128,8 @@ describe('StarHubWorkbenchPanel', () => {
     // 活动页可见,非活动页隐藏但仍是同一个 iframe 文档(不换 src → 不重载)。
     expect(second.getAttribute('aria-hidden')).toBeNull()
     expect(first.getAttribute('aria-hidden')).toBe('true')
+    expect(first.getAttribute('data-starhub-active')).toBe('false')
+    expect(second.getAttribute('data-starhub-active')).toBe('true')
 
     fireEvent.click(screen.getAllByRole('tab')[0]!)
     rerender()

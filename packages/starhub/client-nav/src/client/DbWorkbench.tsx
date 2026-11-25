@@ -35,13 +35,15 @@ import type { CSSProperties, ReactNode } from 'react'
 import type { RustAsset } from './store.ts'
 import { tauriInvoke } from './tauri.ts'
 import { DbDataGrid, cellText, isNumericCell } from './DbDataGrid.tsx'
+import { WorkbenchQuoteDialog } from './WorkbenchQuoteDialog.tsx'
+import type { WorkbenchQuote } from './workbench-reference.ts'
 import { SqlEditor, type SqlCompletionSchema } from './SqlEditor.tsx'
 import { ContextMenu, useContextMenu } from './ContextMenu.tsx'
 import { TabPane } from './TabPane.tsx'
 import {
   IconBrowseOutlineMedium, IconChevronDownOutlineMedium, IconChevronRightOutlineMedium, IconClockOutlineMedium,
   IconCloseFillMedium, IconCloseOutlineMedium, IconCodeOutlineMedium, IconCopyOutlineMedium, IconDatabaseOutlineMedium,
-  IconDataOutlineMedium, IconInspectOutlineMedium, IconPlayOutlineMedium, IconPlusOutlineMedium, IconRefreshOutlineMedium,
+  IconDataOutlineMedium, IconInspectOutlineMedium, IconLinkOutlineMedium, IconPlayOutlineMedium, IconPlusOutlineMedium, IconRefreshOutlineMedium,
   IconSearchOutlineMedium, IconWarningOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -467,7 +469,7 @@ function disconnectCommand(dbType: string): string {
  * @param props - the target asset and a close callback.
  * @returns the workbench overlay.
  */
-export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: () => void }) {
+export function DbWorkbench({ asset, onClose, embedded = false }: { asset: RustAsset; onClose?: () => void; embedded?: boolean }) {
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connectAttempt, setConnectAttempt] = useState(0)
   const [dbs, setDbs] = useState<TreeNode[]>([])
@@ -478,6 +480,8 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
   const [queryTabs, setQueryTabs] = useState<QueryTab[]>(() => [makeQueryTab(1)])
   const [activeQueryId, setActiveQueryId] = useState(1)
   const nextQueryIdRef = useRef(2)
+  const selectionReaders = useRef(new Map<number, () => string>())
+  const [workbenchQuote, setWorkbenchQuote] = useState<WorkbenchQuote | null>(null)
   const [sqlLoading, setSqlLoading] = useState(false)
   // SQL 执行行数上限(随 execute 的 maxRows 下发;sidecar 对无 LIMIT 的 SELECT
   // 夹到该值)。切换只影响后续执行,不重跑已出的结果。
@@ -1251,6 +1255,10 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
           )}
           <SqlEditor
             value={tab.sql}
+            selectionReader={read => {
+              if (read === null) selectionReaders.current.delete(tab.id)
+              else selectionReaders.current.set(tab.id, read)
+            }}
             onChange={(next) =>{  patchTab(tab.id, { sql: next }) }}
             dialect={dialect === 'postgresql' ? 'postgresql' : 'mysql'}
             onExecute={(statement, explain) => void executeSql(tab.id, statement, explain)}
@@ -1337,6 +1345,16 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
           </div>
           <span className={css.spacer} />
           <div className={css.headerActions}>
+            {embedded && connected && (
+              <button type="button" className={css.iconChip} aria-label={messages.quoteWorkbenchContext}
+                title={messages.quoteWorkbenchContext} onClick={() => {
+                  const table = tableTabs.find(tab => tab.key === activeTableKey)
+                  setWorkbenchQuote({ kind: 'database', database: table?.database ?? currentDb,
+                    table: table?.table ?? '', text: table === undefined ? selectionReaders.current.get(activeQueryId)?.() ?? '' : '' })
+                }}>
+                <IconLinkOutlineMedium size={13} /> {messages.referenceTerminalAction}
+              </button>
+            )}
             <button ref={treeToggleRef} type="button" className={`${css.iconChip} ${css.treeToggle}`}
               aria-expanded={treeDrawerOpen} aria-controls="starhub-database-objects"
               onClick={() => {
@@ -1361,6 +1379,9 @@ export function DbWorkbench({ asset, onClose }: { asset: RustAsset; onClose?: ()
             {onClose !== undefined && <button type="button" className={css.iconButton} onClick={onClose} title="关闭工作区" aria-label="关闭工作区"><IconCloseOutlineMedium size={15} /></button>}
           </div>
         </header>
+        {workbenchQuote !== null && (
+          <WorkbenchQuoteDialog assetName={asset.name} quote={workbenchQuote} onClose={() => { setWorkbenchQuote(null) }} />
+        )}
         {connectError !== null && (
           <div className={css.errorBanner} role="alert">
             <IconWarningOutlineMedium size={14} />

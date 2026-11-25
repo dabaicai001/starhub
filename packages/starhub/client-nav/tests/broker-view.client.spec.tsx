@@ -232,6 +232,27 @@ describe('BrokerView', () => {
     }
   })
 
+  it('suspends polling while hidden and refreshes on return without remounting', async () => {
+    vi.useFakeTimers()
+    const invoke = vi.fn((..._args: unknown[]) => Promise.resolve(kafkaOverview))
+    const restore = stubTauriInternals(invoke)
+    try {
+      const asset = brokerAsset()
+      const view = render(<BrokerView asset={asset} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(invoke).toHaveBeenCalledTimes(1)
+      view.rerender(<BrokerView asset={asset} active={false} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      expect(invoke).toHaveBeenCalledTimes(1)
+      expect(screen.getByText('在线')).toBeTruthy()
+      view.rerender(<BrokerView asset={asset} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(invoke).toHaveBeenCalledTimes(2)
+    } finally {
+      restore()
+    }
+  })
+
   it('pauses and resumes the 30s auto-refresh from the header toggle', async () => {
     vi.useFakeTimers()
     const invoke = vi.fn((..._args: unknown[]) => Promise.resolve(kafkaOverview))

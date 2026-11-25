@@ -185,6 +185,14 @@ let savedWindowEventSource: typeof globalThis.EventSource | undefined
 let windowHadEventSource = false
 let eventsStubbed = false
 
+/** Simulate a terminal SSE failure, which the browser will not retry on its own. */
+export function disconnectHostEvents(): void {
+  const source = fakeSources.at(-1)
+  if (source === undefined) throw new Error('No SSE connection to disconnect')
+  source.close()
+  source.emit('error', { data: '', lastEventId: '' })
+}
+
 /** 关闭并清空当前替身会话的全部假连接。 */
 function closeFakeSources(): void {
   for (const source of fakeSources) source.close()

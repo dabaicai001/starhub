@@ -61,10 +61,20 @@ import { isTauriRuntime, tauriInvoke } from './tauri.ts'
 
 const ASSET_LOAD_TIMEOUT_MS = 15_000
 
+function assetLoadSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(ASSET_LOAD_TIMEOUT_MS)
+  return signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+}
+
 /** Read the local asset list with a short budget suitable for opening a view. */
 export function loadStarHubAssets(signal?: AbortSignal): Promise<RustAsset[]> {
-  const timeout = AbortSignal.timeout(ASSET_LOAD_TIMEOUT_MS)
-  return tauriInvoke('get_assets', undefined, signal === undefined ? timeout : AbortSignal.any([signal, timeout]))
+  return tauriInvoke('get_assets', undefined, assetLoadSignal(signal))
+}
+
+/** Read just the asset being opened. Older hosts may still return the full list. */
+export async function loadStarHubAsset(assetId: string, signal?: AbortSignal): Promise<RustAsset | undefined> {
+  const assets = await tauriInvoke<RustAsset[]>('get_assets', { assetId }, assetLoadSignal(signal))
+  return assets.find(asset => asset.id === assetId)
 }
 
 /**

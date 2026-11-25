@@ -55,6 +55,7 @@ const TEXT_OUTPUT = { schema: TEXT_OUTPUT_SCHEMA, render: renderText } as const
  * @returns 宿主返回的文本结果;桥错误(宿主报错/进程断开)抛为工具失败。
  */
 async function callHost(
+  ctx: Context,
   transport: JsonRpcTransportPeer,
   exec: ToolRunContext,
   toolName: string,
@@ -68,8 +69,12 @@ async function callHost(
   const execId = randomUUID()
   // Queue the request before its cancellation on the same ordered transport.
   // Await the domain's response: stopping must not abandon a running command.
+  const getTurnTarget = ctx.get('starhub-turn-target') as
+    ((agent: NonNullable<ToolRunContext['agent']>) => { assetId: string; terminalSessionId?: string; database?: string } | undefined) | undefined
+  const target = exec.agent === undefined ? undefined : getTurnTarget?.(exec.agent)
   const pending = transport.request(BRIDGE_METHOD, {
     sessionId: String(sessionId), name: toolName, args, execId,
+    ...(target === undefined ? {} : { target }),
   })
   const cancel = (): void => { transport.notify('starhub/exec.abort', { execId }) }
   exec.signal.addEventListener('abort', cancel, { once: true })
@@ -166,7 +171,7 @@ function registerBridged(ctx: Context, getTransport: () => JsonRpcTransportPeer,
     parameters: spec.parameters as never,
     output: TEXT_OUTPUT,
     async execute(args, exec) {
-      return callHost(getTransport(), exec, spec.toolName, args)
+      return callHost(ctx, getTransport(), exec, spec.toolName, args)
     },
   }))
 }
@@ -553,7 +558,7 @@ export function apply(ctx: Context): void {
     parameters: {},
     output: TEXT_OUTPUT,
     async execute(args, exec) {
-      return callHost(getTransport(), exec, 'starhub_list_capabilities', args)
+      return callHost(ctx, getTransport(), exec, 'starhub_list_capabilities', args)
     },
   }))
 
@@ -569,7 +574,7 @@ export function apply(ctx: Context): void {
     },
     output: TEXT_OUTPUT,
     async execute(args, exec) {
-      return callHost(getTransport(), exec, 'starhub_list_assets', args)
+      return callHost(ctx, getTransport(), exec, 'starhub_list_assets', args)
     },
   }))
 

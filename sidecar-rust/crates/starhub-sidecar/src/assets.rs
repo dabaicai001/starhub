@@ -65,6 +65,15 @@ pub fn merge_config(mut config: Value, secrets: Value) -> Value {
 pub trait SecretStore: Send + Sync {
     /// 读取密钥;不存在时返回 Err(与 `keyring::load` 的 "no entry found" 一致)。
     fn load(&self, key_id: &str) -> Result<Value, String>;
+
+    /// Read the requested entries together. Missing credentials are omitted.
+    fn load_many(&self, key_ids: &[&str]) -> HashMap<String, Value> {
+        key_ids
+            .iter()
+            .filter_map(|&id| self.load(id).ok().map(|value| (id.to_string(), value)))
+            .collect()
+    }
+
     /// 写入密钥(insert-or-replace)。
     fn store(&self, key_id: &str, secrets: &Value) -> Result<(), String>;
     /// 删除密钥;不存在时视为成功(幂等)。
@@ -149,6 +158,19 @@ impl SecretStore for FileSecretStore {
         self.read_all()?
             .remove(key_id)
             .ok_or_else(|| "Failed to load asset credentials: no entry found".to_string())
+    }
+
+    fn load_many(&self, key_ids: &[&str]) -> HashMap<String, Value> {
+        if key_ids.is_empty() {
+            return HashMap::new();
+        }
+        let Ok(mut entries) = self.read_all() else {
+            return HashMap::new();
+        };
+        key_ids
+            .iter()
+            .filter_map(|&id| entries.remove(id).map(|value| (id.to_string(), value)))
+            .collect()
     }
 
     fn store(&self, key_id: &str, secrets: &Value) -> Result<(), String> {
@@ -459,6 +481,28 @@ impl AssetStore {
         self.read_records()
     }
 
+    /// Load the workbench list, optionally restricted to the asset being opened.
+    pub(crate) fn list_for_workbench(&self, asset_id: Option<&str>) -> Result<Vec<Value>, String> {
+        let records = self.read_records()?;
+        let records = records
+            .iter()
+            .filter(|record| asset_id.is_none_or(|id| record.id == id));
+        let secret_keys: Vec<&str> = records
+            .clone()
+            .filter_map(|record| record.key_id.as_deref())
+            .collect();
+        let secrets = self.secrets.load_many(&secret_keys);
+        Ok(records
+            .map(|record| {
+                let mut row = record.to_ui_json();
+                if let Some(value) = record.key_id.as_ref().and_then(|id| secrets.get(id)) {
+                    row["config"] = merge_config(row["config"].take(), value.clone());
+                }
+                row
+            })
+            .collect())
+    }
+
     /// 按 id 取资产;不存在时报错(与 `load_asset_config` 的旧错误文案一致)。
     pub fn get(&self, asset_id: &str) -> Result<AssetRecord, String> {
         self.read_records()?
@@ -473,6 +517,7 @@ impl AssetStore {
     /// config_json 解析失败按空对象处理(旧行为),key_id 存在则合并密钥。
     pub fn load_asset_config(&self, asset_id: &str) -> Result<(String, Value), String> {
         let record = self.get(asset_id)?;
+
         let mut config = match &record.config {
             Value::Null => Value::Object(Default::default()),
             other => other.clone(),

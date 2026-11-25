@@ -7,7 +7,7 @@
  * (kafka / nsq),连接参数取自资产配置,数据经共享 Tauri 桥调 Rust
  * `broker_overview`。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   IconDataOutlineMedium, IconLinkOutlineMedium, IconListPenOutlineMedium, IconQueueOutlineMedium,
   IconRefreshOutlineMedium, IconSendOutlineMedium, IconWarningOutlineMedium,
@@ -21,6 +21,7 @@ import css from './BrokerView.module.css'
 export interface BrokerViewProps {
   /** 打开的 broker 资产(config 携带 host/port/凭据;dbType 决定 kafka/nsq)。 */
   asset: RustAsset
+  active?: boolean
 }
 
 /** 默认端口(kafka=9092 / nsq=4150,与 Vue 版一致)。 */
@@ -34,7 +35,7 @@ function defaultPort(kind: BrokerKind): number {
  * @param props - 资产只读 props。
  * @returns 壳内直渲的 Broker 工作台。
  */
-export function BrokerView({ asset }: BrokerViewProps) {
+export function BrokerView({ asset, active = true }: BrokerViewProps) {
   const kind: BrokerKind = asset.config.dbType === 'nsq' ? 'nsq' : 'kafka'
   const [overview, setOverview] = useState<BrokerOverview>({
     kind, status: 'offline', endpoint: '--', nodeCount: 0, resources: [], observedAt: 0,
@@ -46,7 +47,9 @@ export function BrokerView({ asset }: BrokerViewProps) {
   // 30s 自动刷新开关(默认开,保持既有行为);大集群上全量拉取有成本,可手动停。
   const [autoRefresh, setAutoRefresh] = useState(true)
 
+  const inFlight = useRef<object | null>(null)
   const refresh = useCallback(async () => {
+    if (inFlight.current !== null) return
     const host = typeof asset.config.host === 'string' ? asset.config.host : ''
     if (host === '') {
       // 未配置地址时也要收敛 loading,否则五张卡片永久停在加载态且不可点。
@@ -55,6 +58,8 @@ export function BrokerView({ asset }: BrokerViewProps) {
       setRefreshing(false)
       return
     }
+    const request = {}
+    inFlight.current = request
     setRefreshing(true)
     try {
       // exactOptionalPropertyTypes:可选字段缺省时整体不传(与 Vue 版 undefined 语义一致)。
@@ -66,29 +71,32 @@ export function BrokerView({ asset }: BrokerViewProps) {
       if (typeof asset.config.password === 'string') params.password = asset.config.password
       if (typeof asset.config.ssl === 'boolean') params.ssl = asset.config.ssl
       const result = await loadBrokerOverview(kind, params)
+      if (inFlight.current !== request) return
       setOverview(result)
       setError(null)
       setSampleKey(key => key + 1)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
+      if (inFlight.current === request) setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (inFlight.current === request) {
+        inFlight.current = null
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [asset.config, kind])
 
-  // 挂载(或连接参数变化)即刷新一次;定时器独立成 effect——开关只决定定时器
-  // 是否存在,暂停时不应顺带触发一次刷新。
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
+  useEffect(() => () => { inFlight.current = null }, [refresh])
 
-  // 自动刷新开时每 30s 一次;卸载 / 暂停时清定时器。手动刷新按钮不受开关影响。
   useEffect(() => {
-    if (!autoRefresh) return
+    if (active) void refresh()
+  }, [active, refresh])
+
+  useEffect(() => {
+    if (!active || !autoRefresh) return
     const timer = window.setInterval(() => { void refresh() }, 30000)
-    return () =>{  window.clearInterval(timer) }
-  }, [refresh, autoRefresh])
+    return () => { window.clearInterval(timer) }
+  }, [active, refresh, autoRefresh])
 
   const totalPartitions = useMemo(
     () => overview.resources.reduce((total, resource) => total + (resource.partitions || 0), 0),

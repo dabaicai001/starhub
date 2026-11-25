@@ -500,6 +500,7 @@
     <h1>StarHub · 完整架构与实现方案</h1>
     <p><strong style="color:#ffc131">⚠ 历史架构图(Tauri 2 时代,v0.66.0)。</strong>Tauri 壳已在「去 Tauri 化 M1–M4」中整体退役,StarHub 现在是上游 DeepSeek Harness Electron 壳的外部插件集;自有源码(P1 起)在 <code>packages/starhub/</code>、<code>apps/starhub-workbench/</code>、<code>profiles/</code>,构建用官方已发布 <code>@deepseek-ai/dsh-*@0.2.2-rc.3</code> 包。P3(v0.143.0)起仓库内不再 vendored 上游源码,品牌 Electron 安装包也退役,发布物只有插件 tarball。当前事实以 <a href="P0-依赖盘点.md">P0 依赖盘点</a>、<a href="P1-独立构建迁移记录.md">P1</a>、<a href="P2-发布解耦记录.md">P2</a>、<a href="P3-删除vendor记录.md">P3</a> 四份记录为准;下面各图仅用于追溯早期设计。</p>
     <p>当前 DSH 主壳在中间显示会话，在右侧原生标签里嵌入 StarHub 工作台。SSH 终端可将已连接的会话引用到中间对话供 AI 复用。<a href="技术方案.md">技术方案</a></p>
+    <p><strong>当前工作台。</strong>DSH 原生右栏标签 → 同源 React 工作台（按资产加载组件和配置）→ HTTP/SSE 插件桥 → Rust / Go sidecar。隐藏标签暂停监控轮询。会话通过对话草稿接收显式引用，AI 回合固定所选连接、终端和数据库。</p>
     <p>基于方案 B(dsh 主壳融合)构建的"All-in-One 开发运维桌面中枢"——Tauri 2 桌面壳加载 dsh 官方 Web GUI(React)作为唯一主壳,StarHub 各功能页(SSH/SFTP/DB/Docker 等)以同源 iframe 嵌入并复用 Tauri IPC;Rust 处理系统集成与协议、Go Sidecar 负责数据库驱动;通过 AI 编排打通 SSH、数据库、Docker,实现自然语言驱动的开发运维工作流。</p>
     <div class="meta-row">
       <div class="meta-item">

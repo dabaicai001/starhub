@@ -101,20 +101,9 @@ impl BridgeState {
     }
 }
 
-/// 解析本次调用的资产 id:显式 `assetId` 优先,否则沿会话绑定(含 subagent 父链)。
+/// Resolve the actual tool target for the audit event and the recent-execution cache.
 fn bound_asset_id(ssh: &SshRuntime, args: &Value) -> Option<String> {
-    if let Some(asset_id) = args
-        .get("assetId")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(asset_id.to_string());
-    }
-    args.get("sessionId")
-        .and_then(Value::as_str)
-        .and_then(|session_id| ssh.resolve_bound_asset(session_id))
-        .map(|binding| binding.asset_id)
+    crate::runtime::resolve_asset_id(ssh.bindings(), args).ok()
 }
 
 /// 域工具成功后的 AI 动作回写(契约 §1/M4):

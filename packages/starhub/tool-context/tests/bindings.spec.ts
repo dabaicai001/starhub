@@ -2,9 +2,11 @@
  * 会话级工具上下文:按会话保存的绑定读取(aload 两个终端页/助手互不覆盖),
  * 以及升级前单槽存量的兜底。
  */
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { describe, expect, it } from 'vitest'
 import {
-  parseBindings, readToolContextFor, type Config, type ToolContextBinding,
+  apply, parseBindings, readToolContextFor, type Config, type ToolContextBinding,
 } from '../src/index.ts'
 
 /** 构造一份测试用 Config(Volatile 只需要 get)。 */
@@ -43,6 +45,30 @@ describe('parseBindings', () => {
 
   it('treats an absent value as no bindings', () => {
     expect(parseBindings(undefined)).toEqual({})
+  })
+})
+
+describe('turn target', () => {
+  it('uses the referenced terminal for the whole turn and accepts a new target next turn', async () => {
+    type Target = { assetId: string; terminalSessionId?: string }
+    type Step = (payload: { agent: Agent; turn: number; signal: AbortSignal }, next: () => Promise<PreStepDecision>) => Promise<PreStepDecision>
+    let step!: Step
+    let target!: (agent: Agent) => Target | undefined
+    const agent = { session: { id: 's1' } } as unknown as Agent
+    const bindings = { s1: entry({ assetId: 'a1', terminalSessionId: 'a1__first', pinTarget: true }) }
+    apply({
+      on: (_event: string, listener: Step) => { step = listener },
+      provide: (_name: string, read: (agent: Agent) => Target | undefined) => { target = read },
+    } as unknown as Context, makeConfig({ bindings }))
+    const signal = new AbortController().signal
+    const next = async (): Promise<PreStepDecision> => ({ kind: 'enter', messages: [] })
+    await step({ agent, turn: 1, signal }, next)
+    expect(target(agent)).toEqual({ assetId: 'a1', terminalSessionId: 'a1__first' })
+    bindings.s1 = entry({ assetId: 'a1', terminalSessionId: 'a1__second', pinTarget: true })
+    await step({ agent, turn: 1, signal }, next)
+    expect(target(agent)).toEqual({ assetId: 'a1', terminalSessionId: 'a1__first' })
+    await step({ agent, turn: 2, signal: new AbortController().signal }, next)
+    expect(target(agent)).toEqual({ assetId: 'a1', terminalSessionId: 'a1__second' })
   })
 })
 

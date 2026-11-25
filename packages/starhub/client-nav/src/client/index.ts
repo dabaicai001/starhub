@@ -41,7 +41,7 @@ import { currentSessionId } from './current-session.ts'
 import { createStarHubAssetSource, DOCKER_REFERENCE_TAG, STARHUB_ASSET_SOURCE } from './asset-source.ts'
 import { createAskAiHandler, createOpenAssetHandler, subscribeHostEvents } from './host-events.ts'
 import {
-  createConnectionManagerOverlay, createStarHubAssets, createToolSelectionBridge, loadStarHubAssets,
+  createConnectionManagerOverlay, createStarHubAssets, createToolSelectionBridge, loadStarHubAsset,
   type RustAsset,
 } from './store.ts'
 import { createExecRecordsBridge, subscribeSshExecEvents } from './conn/exec-records.ts'
@@ -52,7 +52,7 @@ import { focusWindowByKey, installWorkbenchPageHost, openNewPage, tauriInvoke } 
 import { StarHubOverlay, type StarHubOverlayInjected } from './StarHubOverlay.tsx'
 import { ToolsPanelIcon } from './ToolsPanelIcon.tsx'
 import { StarHubToolWorkspace, type StarHubToolWorkspaceInjected } from './StarHubToolWorkspace.tsx'
-import { StarHubWorkbenchPanel, type StarHubWorkbenchPanelInjected, type TerminalFrameTracker, type TerminalReference } from './StarHubWorkbenchPanel.tsx'
+import { StarHubWorkbenchPanel, type StarHubWorkbenchPanelInjected, type TerminalFrameTracker, type TerminalReference, type WorkbenchReference } from './StarHubWorkbenchPanel.tsx'
 import { installSidebarTools } from './sidebar-tools.tsx'
 import { installSidebarWorkbench } from './sidebar-workbench.tsx'
 import { createWorkbenchPanelStore, embeddedWorkbenchUrl, type WorkbenchPage } from './workbench-panel.ts'
@@ -63,6 +63,7 @@ import {
 } from './live/live-panel.ts'
 import { StarHubLivePanel, type StarHubLivePanelInjected } from './live/StarHubLivePanel.tsx'
 import { AndroidSettingsTab } from './settings/android.tsx'
+import { workbenchQuoteTarget } from './workbench-reference.ts'
 import { connectedTerminalInFrame } from './terminal/reference.ts'
 
 /**
@@ -188,9 +189,38 @@ export function apply(ctx: Context): void {
     const messages = interactionMessages()
     if (sessionId === undefined) throw new Error(messages.noReferenceConversation)
     const asset = assets.source.getSnapshot().assets.find(item => item.id === assetId)
-      ?? (await loadStarHubAssets()).find(item => item.id === assetId)
+      ?? await loadStarHubAsset(assetId)
     if (asset?.type !== 'ssh') throw new Error(messages.terminalReferenceUnavailable)
     await insertAssetReference(asset, sessionId, terminalSessionId)
+  }
+  const referenceQuote: WorkbenchReference = async (assetId, quote, sessionId = getCurrentSession()) => {
+    const messages = interactionMessages()
+    const session = sessionId === undefined ? undefined : sessions.binding(sessionId)
+    if (sessionId === undefined || session === undefined) throw new Error(messages.noReferenceConversation)
+
+    const asset = assets.source.getSnapshot().assets.find(item => item.id === assetId) ?? await loadStarHubAsset(assetId)
+    const terminalId = quote.kind === 'ssh' ? quote.terminalSessionId : undefined
+    if (asset === undefined || (quote.kind === 'ssh'
+      ? asset.type !== 'ssh' || !quote.terminalSessionId.startsWith(`${assetId}__`)
+      : asset.type !== 'db')) throw new Error(messages.quoteTargetUnavailable)
+
+    const input = conversation.input.for(session.ctx)
+    if (input.state.getSnapshot().phase !== 'plain') throw new Error(messages.quoteDraftUnavailable)
+    const subcategory = STARHUB_SUBCATEGORIES.find(item => item.matches(asset))?.key ?? null
+    const bound = await bindAssetContext(settingsWriter, {
+      subcategory, routePrefix: routePrefixForAsset(asset) ?? null,
+    }, asset, sessionId, terminalId, quote.kind === 'database' ? { database: quote.database } : {})
+    if (!bound) throw new Error(messages.quoteTargetUnavailable)
+
+    const endpoint = assetSubtitle(asset)
+    const title = endpoint === '' ? asset.name : `${asset.name} (${endpoint})`
+    const target = workbenchQuoteTarget(quote)
+    const detail = [title, target].filter(Boolean).join(' · ')
+    const text = quote.text.trim() === '' ? detail : `${detail}\n\n${quote.text}`
+    if (!input.insertQuote(text, { label: asset.name, title, detail: target, body: quote.text || target })) {
+      throw new Error(messages.quoteDraftUnavailable)
+    }
+    input.notify('info', messages.quoteAdded)
   }
   // Active frames are ordered by their last activation. Keep a hidden frame
   // eligible when the connection list covers the workbench.
@@ -217,7 +247,7 @@ export function apply(ctx: Context): void {
     }
     return insertAssetReference(asset, sessionId)
   }
-  const openSidebarWorkbench = installSidebarWorkbench(ctx, assets, layout, sessions, referenceTerminal, trackTerminalFrame)
+  const openSidebarWorkbench = installSidebarWorkbench(ctx, assets, layout, sessions, referenceTerminal, trackTerminalFrame, referenceQuote)
   /** 壳内工作台页簿 + 面板切换:开/聚焦一页并把主面板切到工作台。 */
   const workbench = createWorkbenchPanelStore()
   let nextWorkbenchTab = 0
@@ -334,6 +364,7 @@ export function apply(ctx: Context): void {
     // 而不是把主区留成白板。
     closeWorkbench: () => { layout.selectPanel(null) },
     referenceTerminal,
+    referenceQuote,
     trackTerminalFrame,
     hooks: { workbench: workbench.source },
   })

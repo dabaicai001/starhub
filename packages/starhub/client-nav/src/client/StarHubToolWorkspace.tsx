@@ -333,6 +333,10 @@ export function StarHubToolWorkspace({
     setSearch('')
     openConnectionManager(undefined, activeCategory?.initialConnectionKind)
   }
+  const clearSearch = (): void => {
+    setSearch('')
+    searchRef.current?.focus()
+  }
   const android = activeSubcategory === 'android'
   const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
   const groups = STARHUB_SUBCATEGORIES.filter(category => category.key !== 'android').map(category => {
@@ -406,7 +410,7 @@ export function StarHubToolWorkspace({
                   onChange={event => { setSearch(event.target.value) }}
                   onKeyDown={event => { if (event.key === 'Escape') setSearch('') }} />
                 {search !== '' && <button type="button" className={css.iconButton} aria-label={messages.clearConnectionSearch}
-                  onClick={() => { setSearch(''); searchRef.current?.focus() }}><IconCloseOutlineMedium size={14} /></button>}
+                  onClick={clearSearch}><IconCloseOutlineMedium size={14} /></button>}
               </div>
               <button type="button" className={css.refreshButton} title={messages.refresh} aria-label={messages.refresh}
                 disabled={loading} onClick={refreshAssets}>
@@ -464,13 +468,13 @@ export function StarHubToolWorkspace({
                       </section>
                     ))}
                     {!loading && (error === null || total > 0) && !hasAssets && (
-                      <div className={css.empty} role="status">
+                      <div className={css.empty}>
                         <IconSearchOutlineMedium size={23} />
-                        <strong>{terms.length > 0 ? messages.noConnectionMatches
+                        <strong role="status">{terms.length > 0 ? messages.noConnectionMatches
                           : activeCategory === undefined ? messages.noConnections : messages.noCategoryConnections(activeCategory.label)}</strong>
-                        {terms.length === 0 && <button type="button" className={css.secondaryButton} onClick={createConnection}>
-                          {messages.createConnection}
-                        </button>}
+                        <button type="button" className={css.secondaryButton} onClick={terms.length > 0 ? clearSearch : createConnection}>
+                          {terms.length > 0 ? messages.clearConnectionSearch : messages.createConnection}
+                        </button>
                       </div>
                     )}
                   </>

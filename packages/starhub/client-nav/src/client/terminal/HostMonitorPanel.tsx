@@ -43,16 +43,14 @@ export function HostMonitorPanel({ sessionId, sshConnected, active = true }: Hos
   const [error, setError] = useState<string | null>(null)
   const [auto, setAuto] = useState(true)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
-  // 组件卸载后不再 setState:轮询 / 慢采集都要靠它收口。
-  const aliveRef = useRef(true)
-  useEffect(() => {
-    aliveRef.current = true
-    return () => { aliveRef.current = false }
-  }, [])
+  const running = useRef<object | null>(null)
+  useEffect(() => () => { running.current = null }, [sessionId, sshConnected])
 
   /** 采集一次主机指标。 */
   const refresh = useCallback(async (): Promise<void> => {
-    if (!sshConnected) return
+    if (!sshConnected || running.current !== null) return
+    const request = {}
+    running.current = request
     setLoading(true)
     try {
       const raw = await tauriInvoke<string>('ssh_exec', {
@@ -60,23 +58,29 @@ export function HostMonitorPanel({ sessionId, sshConnected, active = true }: Hos
         command: HOST_METRICS_COMMAND,
         timeoutSec: COLLECT_TIMEOUT_SEC,
       })
-      if (!aliveRef.current) return
+      if (running.current !== request) return
       setMetrics(parseHostMetrics(raw))
       setError(null)
       setUpdatedAt(Date.now())
     } catch (caught) {
-      if (!aliveRef.current) return
+      if (running.current !== request) return
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
-      if (aliveRef.current) setLoading(false)
+      if (running.current === request) {
+        running.current = null
+        setLoading(false)
+      }
     }
   }, [sessionId, sshConnected])
 
-  // 首次进入 / 换会话 / 从隐藏切回时采集一次;自动刷新按间隔续采(隐藏时暂停)。
+  // 首次进入 / 换会话 / 从隐藏切回时采集一次。
   useEffect(() => {
     if (!sshConnected || !active) return
     void refresh()
-    if (!auto) return
+  }, [active, refresh, sshConnected])
+
+  useEffect(() => {
+    if (!sshConnected || !active || !auto) return
     const timer = window.setInterval(() => { void refresh() }, AUTO_REFRESH_MS)
     return () => { window.clearInterval(timer) }
   }, [active, auto, refresh, sshConnected])

@@ -5,7 +5,7 @@ import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { currentSessionId } from './current-session.ts'
 import { interactionMessages } from './interaction-messages.ts'
-import { StarHubSidebarWorkbench, type TerminalFrameTracker, type TerminalReference } from './StarHubWorkbenchPanel.tsx'
+import { StarHubSidebarWorkbench, type TerminalFrameTracker, type TerminalReference, type WorkbenchReference } from './StarHubWorkbenchPanel.tsx'
 import type { StarHubAssets } from './store.ts'
 
 const WORKBENCH_KIND = 'starhub-workbench'
@@ -22,14 +22,14 @@ function assetIdFromAddress(address: string): string | undefined {
   }
 }
 
-function WorkbenchTab({ useTabInfo, sessionId, referenceTerminal, trackTerminalFrame }:
-  PropsRuntime<'sidebar.right.pane.tab'> & { referenceTerminal: TerminalReference; trackTerminalFrame: TerminalFrameTracker }) {
+function WorkbenchTab({ useTabInfo, sessionId, referenceTerminal, referenceQuote, trackTerminalFrame }:
+  PropsRuntime<'sidebar.right.pane.tab'> & { referenceTerminal: TerminalReference; referenceQuote: WorkbenchReference; trackTerminalFrame: TerminalFrameTracker }) {
   const { tab } = useTabInfo()
   const assetId = assetIdFromAddress(tab.contentId)
   return assetId === undefined
     ? null
     : <StarHubSidebarWorkbench key={tab.id} assetId={assetId} title={tab.title} active={tab.visible}
-      sessionId={sessionId} referenceTerminal={referenceTerminal} trackTerminalFrame={trackTerminalFrame} />
+      sessionId={sessionId} referenceTerminal={referenceTerminal} referenceQuote={referenceQuote} trackTerminalFrame={trackTerminalFrame} />
 }
 
 type OpenMode = 'reveal' | 'new-tab' | 'if-open'
@@ -40,7 +40,7 @@ type OpenMode = 'reveal' | 'new-tab' | 'if-open'
  */
 export function installSidebarWorkbench(
   ctx: Context, assets: StarHubAssets, layout: ILayout, sessions: ISessions, referenceTerminal: TerminalReference,
-  trackTerminalFrame: TerminalFrameTracker,
+  trackTerminalFrame: TerminalFrameTracker, referenceQuote: WorkbenchReference,
 ) {
   let openInSidebar: ((assetId: string, mode: OpenMode) => boolean) | undefined
   ctx.inject(['sidebarRight', 'sidebarRightTabs'], (sidebarCtx) => {
@@ -60,7 +60,7 @@ export function installSidebarWorkbench(
     sidebarCtx.effect(() => sidebarCtx.slots.inject('sidebar.right.pane.tab', () => sidebarCtx.slots.register({
       name: 'sidebar.right.pane.tab',
       key: WORKBENCH_KIND,
-      inject: () => ({ referenceTerminal, trackTerminalFrame }),
+      inject: () => ({ referenceTerminal, referenceQuote, trackTerminalFrame }),
     }, WorkbenchTab)), 'starhub: workbench sidebar tab body')
     sidebarCtx.effect(() => {
       openInSidebar = (assetId, mode) => {

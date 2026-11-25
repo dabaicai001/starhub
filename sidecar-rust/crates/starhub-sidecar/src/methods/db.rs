@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::db_runtime::DbRuntime;
 use crate::jsonrpc::RpcError;
-use crate::runtime::resolve_asset_id;
+use crate::runtime::{resolve_asset_id, turn_target};
 
 use super::ssh::{domain_error, tool_args};
 
@@ -45,10 +45,21 @@ fn resolve_asset(runtime: &DbRuntime, name: &str, params: &Value) -> AssetResolu
     if let Err(message) = assets.get(&asset_id) {
         return AssetResolution::Hard(domain_error(message));
     }
-    let (asset_type, config) = match assets.load_asset_config(&asset_id) {
+    let (asset_type, mut config) = match assets.load_asset_config(&asset_id) {
         Ok(loaded) => loaded,
         Err(message) => return AssetResolution::Hard(domain_error(message)),
     };
+    if name == "db_query" {
+        if let Some(database) = turn_target(params)
+            .filter(|target| target["assetId"].as_str() == Some(asset_id.as_str()))
+            .and_then(|target| target["database"].as_str())
+            .filter(|database| !database.is_empty())
+        {
+            if let Some(config) = config.as_object_mut() {
+                config.insert("database".to_string(), json!(database));
+            }
+        }
+    }
     let kind = if asset_type == "db" {
         config
             .get("dbType")
@@ -356,12 +367,18 @@ mod tests {
     #[tokio::test]
     async fn db_query_roundtrip_against_the_fake_go_sidecar() {
         let (runtime, dir) = runtime_in_temp("dbquery");
-        let result = db_query_method(
-            &runtime,
-            &json!({ "assetId": "mysql-1", "sql": "SELECT * FROM users" }),
-        )
-        .await
-        .expect("roundtrip");
+        let params = json!({
+            "_starhubTurnTarget": { "assetId": "mysql-1", "database": "selected-db" },
+            "sql": "SELECT * FROM users"
+        });
+        let AssetResolution::Ready { config, .. } = resolve_asset(&runtime, "db_query", &params)
+        else {
+            panic!("the referenced database must resolve");
+        };
+        assert_eq!(config["database"], "selected-db");
+        let (_, saved) = runtime.assets().load_asset_config("mysql-1").unwrap();
+        assert_eq!(saved["database"], "app");
+        let result = db_query_method(&runtime, &params).await.expect("roundtrip");
         let text = result["text"].as_str().unwrap();
         assert_eq!(text, "列: id, name\nid=1 | name=alice\nid=2 | name=bob");
         let _ = std::fs::remove_dir_all(&dir);

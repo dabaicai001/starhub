@@ -281,6 +281,9 @@ pub fn resolve_asset_id(
     {
         return Ok(asset_id.to_string());
     }
+    if let Some(asset_id) = turn_target(params).and_then(|target| target["assetId"].as_str()) {
+        return Ok(asset_id.to_string());
+    }
     if let Some(session_id) = params
         .get("sessionId")
         .and_then(serde_json::Value::as_str)
@@ -299,12 +302,25 @@ pub fn resolve_asset_id(
     )
 }
 
+pub(crate) fn turn_target(params: &serde_json::Value) -> Option<&serde_json::Value> {
+    params
+        .get("_starhubTurnTarget")
+        .filter(|target| target["assetId"].as_str().is_some_and(|id| !id.is_empty()))
+}
+
 /// 解析目标资产绑定的终端页会话 id。显式切换资产时使用目标资产自身的连接。
 pub fn resolve_terminal_session(
     bindings: &crate::bindings::SessionBindings,
     params: &serde_json::Value,
     asset_id: &str,
 ) -> Option<String> {
+    if let Some(target) = turn_target(params) {
+        return if target["assetId"].as_str() == Some(asset_id) {
+            target["terminalSessionId"].as_str().map(str::to_string)
+        } else {
+            None
+        };
+    }
     let session_id = params
         .get("sessionId")
         .and_then(serde_json::Value::as_str)
@@ -354,7 +370,12 @@ mod tests {
         let (runtime, dir) = runtime_in_temp("empty");
         // 未知资产:resolve_user_session 在解析资产配置处失败,文案与 Tauri 版一致
         let err = runtime
-            .execute_ssh("ssh_exec", "ghost", None, &serde_json::json!({ "command": "ls" }))
+            .execute_ssh(
+                "ssh_exec",
+                "ghost",
+                None,
+                &serde_json::json!({ "command": "ls" }),
+            )
             .await
             .unwrap_err();
         assert_eq!(err, "资产不存在: ghost");
@@ -399,7 +420,12 @@ mod tests {
         let status = runtime.execute_ssh_status("a1", None).await.unwrap();
         assert!(status.contains("SSH 终端尚未连接(资产 a1)"), "{status}");
         let sftp = runtime
-            .execute_sftp("sftp_list", "a1", None, &serde_json::json!({ "path": "/tmp" }))
+            .execute_sftp(
+                "sftp_list",
+                "a1",
+                None,
+                &serde_json::json!({ "path": "/tmp" }),
+            )
             .await
             .expect("未连接是软引导,不是错误");
         assert!(sftp.contains("尚未连接"), "{sftp}");
@@ -423,6 +449,27 @@ mod tests {
         bindings.record_subagent_parent("child", "root");
         let params = serde_json::json!({ "sessionId": "child" });
         assert_eq!(resolve_asset_id(&bindings, &params).unwrap(), "root-asset");
+    }
+
+    #[test]
+    fn explicit_turn_target_survives_a_later_session_rebind() {
+        let bindings = crate::bindings::SessionBindings::new();
+        bindings.bind("conversation", "ssh", "another", Some("another__tab"));
+        let mut params = serde_json::json!({
+            "sessionId": "conversation",
+            "_starhubTurnTarget": { "assetId": "server", "terminalSessionId": "server__first" }
+        });
+        assert_eq!(resolve_asset_id(&bindings, &params).unwrap(), "server");
+        assert_eq!(
+            resolve_terminal_session(&bindings, &params, "server").as_deref(),
+            Some("server__first")
+        );
+        params["assetId"] = serde_json::json!("another");
+        assert_eq!(resolve_asset_id(&bindings, &params).unwrap(), "another");
+        assert_eq!(
+            resolve_terminal_session(&bindings, &params, "another"),
+            None
+        );
     }
 
     #[test]

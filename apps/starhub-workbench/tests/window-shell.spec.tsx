@@ -29,6 +29,7 @@ it('shows loading, reports a bridge failure and loads the same asset on retry', 
   fireEvent.click(screen.getByRole('button', { name: '重试' }))
   expect(screen.getByRole('status').textContent).toBe('正在加载工作台…')
   expect(fetch).toHaveBeenCalledTimes(2)
+  expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toEqual({ cmd: 'get_assets', args: { assetId: 'a1' } })
   response.resolve(Response.json({ ok: true, result: [{ id: 'a1', name: 'Kafka 测试连接', type: 'db', config: { dbType: 'kafka' } }] }))
   expect(await screen.findByText('Kafka 测试连接')).toBeTruthy()
 })

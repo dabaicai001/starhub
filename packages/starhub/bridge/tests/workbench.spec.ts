@@ -54,6 +54,10 @@ function fakeResponse() {
       emitter.on(event, handler)
       return this
     },
+    off(event: string, handler: () => void) {
+      emitter.off(event, handler)
+      return this
+    },
     emit(event: string) {
       emitter.emit(event)
       return this
@@ -220,20 +224,24 @@ describe('POST /starhub/api/invoke', () => {
     expect(notifications).toEqual([{ method: 'starhub/exec.abort', params: { execId: 'e1' } }])
   })
 
-  it('does not write a response after the client disconnects', async () => {
-    let settle: (value: unknown) => void = () => {}
+  it('cancels the pending RPC and its execution as soon as the client disconnects', async () => {
+    const started = Promise.withResolvers<AbortSignal | undefined>()
+    const notifications: Array<{ method: string; params: object }> = []
     const sidecar: JsonRpcTransportPeer = {
-      request: (): Promise<unknown> => new Promise((resolve) => { settle = resolve }),
-      notify: () => {},
+      request: (_method, _args, signal) => {
+        started.resolve(signal)
+        return new Promise(() => {})
+      },
+      notify: (method, params = {}) => { notifications.push({ method, params }) },
     }
     const { res, body } = fakeResponse()
-    const request = fakeRequest('POST', JSON.stringify({ cmd: 'get_assets', args: {} }))
+    const request = fakeRequest('POST', JSON.stringify({ cmd: 'ssh_exec', args: { execId: 'disconnect-test' } }))
     const pending = invokeHandler(sidecar)(request, res)
-    // 等 handler 真正发出 sidecar 请求后再模拟客户端断开。
-    await new Promise(resolve => setTimeout(resolve, 0))
-    request.emit('close')
-    settle([{ id: 'a1' }])
+    const signal = await started.promise
+    res.emit('close')
     await pending
+    expect(signal?.aborted).toBe(true)
+    expect(notifications).toEqual([{ method: 'starhub/exec.abort', params: { execId: 'disconnect-test' } }])
     expect(res.status).toBe(0)
     expect(body()).toBe('')
   })

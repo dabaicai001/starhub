@@ -27,6 +27,8 @@ import type { SessionId, SnapshotStore } from '@deepseek-ai/dsh-client-runtime/c
 import { IconCloseOutlineMedium, IconLoadingOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { interactionMessages } from './interaction-messages.ts'
 import { embeddedWorkbenchUrl, workbenchPageAssetId, type WorkbenchPanelState } from './workbench-panel.ts'
+import { listenForWorkbenchQuote, type WorkbenchQuote } from './workbench-reference.ts'
+import { notifyWorkbenchActivity } from './workbench-activity.ts'
 import { listenForTerminalReference } from './terminal/reference.ts'
 import css from './StarHubWorkbenchPanel.module.css'
 
@@ -39,6 +41,7 @@ export interface StarHubWorkbenchPanelInjected {
   /** 无页时的兜底出口:把主面板让回会话视图。 */
   closeWorkbench: () => void
   referenceTerminal?: TerminalReference | undefined
+  referenceQuote?: WorkbenchReference | undefined
   trackTerminalFrame?: TerminalFrameTracker | undefined
   hooks: {
     /** 页簿(裸 source,渲染器绑定为 useWorkbench)。 */
@@ -54,23 +57,38 @@ export type StarHubWorkbenchPanelProps =
 /** Bind a specific terminal instance to the conversation that owns its page. */
 export type TerminalReference = (assetId: string, terminalSessionId: string, sessionId?: SessionId) => Promise<void>
 
+/** Insert reviewed workbench context into the owning session. */
+export type WorkbenchReference = (assetId: string, quote: WorkbenchQuote, sessionId?: SessionId) => Promise<void>
+
 /** Track the most recently shown terminal frame for each asset and conversation. */
 export type TerminalFrameTracker = (frame: HTMLIFrameElement, assetId: string, sessionId?: SessionId) => {
   activate: () => void
   dispose: () => void
 }
 
-function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTerminal, trackTerminalFrame, sessionId }: {
+function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTerminal, referenceQuote, trackTerminalFrame, sessionId }: {
   assetId: string
   title: string
   url: string
   index?: number
   active?: boolean
   referenceTerminal?: TerminalReference | undefined
+  referenceQuote?: WorkbenchReference | undefined
   trackTerminalFrame?: TerminalFrameTracker | undefined
   sessionId?: SessionId | undefined
 }) {
-  const [loaded, setLoaded] = useState(false)
+  const [frameState, setFrameState] = useState<'loading' | 'ready' | 'failed'>('loading')
+  useEffect(() => {
+    if (frameState !== 'loading') return
+    const timer = window.setTimeout(() => { setFrameState('failed') }, 20_000)
+    return () => { window.clearTimeout(timer) }
+  }, [frameState, url])
+  const retry = (): void => {
+    if (frame.current === null) return
+    setFrameState('loading')
+    frame.current.removeAttribute('data-starhub-ready')
+    frame.current.src = url
+  }
   const frame = useRef<HTMLIFrameElement>(null)
   const tracking = useRef<ReturnType<TerminalFrameTracker>>()
   useEffect(() => {
@@ -78,12 +96,17 @@ function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTe
     return listenForTerminalReference(frame.current, assetId, (id, terminal) => referenceTerminal(id, terminal, sessionId))
   }, [assetId, referenceTerminal, sessionId])
   useEffect(() => {
+    if (frame.current === null || referenceQuote === undefined) return
+    return listenForWorkbenchQuote(frame.current, quote => referenceQuote(assetId, quote, sessionId))
+  }, [assetId, referenceQuote, sessionId])
+  useEffect(() => {
     if (frame.current === null) return
     const record = trackTerminalFrame?.(frame.current, assetId, sessionId)
     tracking.current = record
     return () => { record?.dispose() }
   }, [assetId, sessionId, trackTerminalFrame])
   useEffect(() => {
+    if (frame.current !== null) notifyWorkbenchActivity(frame.current)
     if (active) tracking.current?.activate()
   }, [active, assetId, sessionId, trackTerminalFrame])
   return (
@@ -97,14 +120,21 @@ function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTe
         title={title}
         src={url}
         allow="clipboard-read; clipboard-write; fullscreen"
+        data-starhub-active={active}
         aria-hidden={active ? undefined : true}
         tabIndex={active ? 0 : -1}
-        onLoad={() => { setLoaded(true) }}
+        onLoad={event => { setFrameState(event.currentTarget.hasAttribute('data-starhub-ready') ? 'ready' : 'failed') }}
       />
-      {active && !loaded && (
+      {active && frameState === 'loading' && (
         <div className={css.frameLoading} role="status">
           <IconLoadingOutlineMedium size={16} className={css.spin} />
           {interactionMessages().loadingWorkbench}
+        </div>
+      )}
+      {active && frameState === 'failed' && (
+        <div className={clsx(css.frameLoading, css.frameFailed)}>
+          <span role="alert">{interactionMessages().workbenchLoadFailed}</span>
+          <button type="button" className={css.emptyAction} onClick={retry}>{interactionMessages().retry}</button>
         </div>
       )}
     </>
@@ -112,12 +142,13 @@ function WorkbenchFrame({ assetId, title, url, index, active = true, referenceTe
 }
 
 /** Render one asset inside a native DSH right-sidebar tab. */
-export function StarHubSidebarWorkbench({ assetId, title, active, sessionId, referenceTerminal, trackTerminalFrame }: {
+export function StarHubSidebarWorkbench({ assetId, title, active, sessionId, referenceTerminal, referenceQuote, trackTerminalFrame }: {
   assetId: string
   title: string
   active: boolean
   sessionId: SessionId
   referenceTerminal: TerminalReference
+  referenceQuote: WorkbenchReference
   trackTerminalFrame: TerminalFrameTracker
 }) {
   // Keep the iframe URL stable when the host theme changes. Open pages update
@@ -127,7 +158,7 @@ export function StarHubSidebarWorkbench({ assetId, title, active, sessionId, ref
     <div className={css.panel}>
       <div className={css.frameStack}>
         <WorkbenchFrame assetId={assetId} title={title} url={url} active={active} sessionId={sessionId}
-          referenceTerminal={referenceTerminal} trackTerminalFrame={trackTerminalFrame} />
+          referenceTerminal={referenceTerminal} referenceQuote={referenceQuote} trackTerminalFrame={trackTerminalFrame} />
       </div>
     </div>
   )
@@ -144,6 +175,7 @@ export function StarHubWorkbenchPanel({
   closePage,
   closeWorkbench,
   referenceTerminal,
+  referenceQuote,
   trackTerminalFrame,
 }: StarHubWorkbenchPanelProps): JSX.Element {
   const state = useWorkbench((snapshot) => snapshot)
@@ -184,7 +216,7 @@ export function StarHubWorkbenchPanel({
         <div className={css.empty} role="status">
           <span className={css.emptyTitle}>没有打开的工作台页面</span>
           <span className={css.emptyHint}>从「StarHub 工具」里打开一个资产,或返回会话。</span>
-          <button type="button" className={css.emptyAction} onClick={closeWorkbench}>返回会话</button>
+          <button type="button" className={css.emptyAction} onClick={closeWorkbench}>{interactionMessages().returnToConversation}</button>
         </div>
       </div>
     )
@@ -244,7 +276,7 @@ export function StarHubWorkbenchPanel({
           <WorkbenchFrame key={`${page.key}:${page.url}`}
             assetId={workbenchPageAssetId(page)}
             title={page.title} url={page.url} index={index} active={page.key === active.key}
-            referenceTerminal={referenceTerminal} trackTerminalFrame={trackTerminalFrame} />
+            referenceTerminal={referenceTerminal} referenceQuote={referenceQuote} trackTerminalFrame={trackTerminalFrame} />
         ))}
       </div>
     </div>

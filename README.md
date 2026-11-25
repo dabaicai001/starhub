@@ -9,7 +9,7 @@
 *数据库 · 终端 · 文件 · 容器 · 真机 · AI —— 收进同一个窗口*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.147.0-cyan)]()
+[![Version](https://img.shields.io/badge/version-v0.148.0-cyan)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20首发%20%7C%20macOS%20%2F%20Linux%20规划中-blue)]()
 [![Downloads](https://img.shields.io/badge/downloads-GitHub%20Releases-blue)](https://github.com/dabaicai001/starhub/releases)
 [![官网](https://img.shields.io/badge/官网-starthub.waouzzz.cc-cyan)](https://starthub.waouzzz.cc/)
@@ -59,10 +59,12 @@
 
 ## 当前版本
 
-### v0.147.0 (2026-11-24)
-- ✨ 连接右键菜单新增「在新标签页打开」，可为同一连接打开独立工作台。SSH 引用绑定所选终端标签的连接。
-- 🐛 连接右键菜单和行尾更多菜单跟随触发位置，并支持键盘选择。
-- 🔧 移除全局设置里的 SSH 分区，终端外观与编码可在 SSH 终端工具栏调整。
+### v0.148.0 (2026-11-25)
+- ✨ SSH 和 SQL 工作台支持预览当前上下文并添加到对话草稿。可选择附带终端选区或 SQL，AI 回合固定所引用的连接、终端和数据库。
+- 🐛 修复宿主事件重新订阅后重复回调，以及连接重建后遗漏旧订阅的问题。工作台断开 HTTP 请求时立即取消 RPC 等待，并中断支持取消的执行。
+- 🐛 工作台加载失败时可原地重试，连接搜索无结果时可一键清空搜索。
+- 🔧 按资产类型加载工作台，打开连接时按 ID 获取配置。资产列表和密钥文件按请求批量读取，减少多连接下的读取开销。
+- 🔧 隐藏 SSH 主机监控和消息队列标签时暂停自动刷新，切回时补刷并保留连接和页面状态。
 
 > 历史版本见 [CHANGELOG.md](./CHANGELOG.md)。
 

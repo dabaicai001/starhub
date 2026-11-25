@@ -1,0 +1,41 @@
+.dialog {
+  box-sizing: border-box;
+  width: min(29rem, calc(100% - 24px));
+  max-height: min(75vh, 33rem);
+  padding: clamp(14px, 4vw, 22px);
+  overflow: auto;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--dsw-shadow-lv3);
+}
+.dialog::backdrop { background: rgb(0 0 0 / 37%); }
+.dialog h2 { margin: 0 0 14px; font-size: 1rem; }
+.target { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.target span, .dialog small { color: var(--dsw-alias-label-secondary); }
+.selection { margin-top: 14px; }
+.selection label { display: flex; align-items: center; gap: 6px; }
+.selection pre {
+  max-height: 30vh;
+  margin: 8px 0 0;
+  padding: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+}
+.error { color: var(--dsw-alias-state-error); overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.actions button {
+  padding: 5px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.actions button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.actions button:disabled { cursor: wait; opacity: .65; }
+.actions .primary { border-color: var(--dsw-alias-state-business-primary); }

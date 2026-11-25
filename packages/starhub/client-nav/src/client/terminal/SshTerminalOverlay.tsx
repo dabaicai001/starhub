@@ -37,6 +37,8 @@ import type { RustAsset } from '../store.ts'
 import { SftpPanel } from './SftpPanel.tsx'
 import { ContextMenu, useContextMenu } from '../ContextMenu.tsx'
 import { interactionMessages } from '../interaction-messages.ts'
+import { WorkbenchQuoteDialog } from '../WorkbenchQuoteDialog.tsx'
+import type { WorkbenchQuote } from '../workbench-reference.ts'
 import { exposeConnectedTerminal, requestTerminalReference } from './reference.ts'
 import { TransferDialog } from './TransferDialog.tsx'
 import { useTransferTasks } from './use-transfer-tasks.ts'
@@ -110,6 +112,8 @@ export interface SshTerminalOverlayProps {
   page?: boolean
   /** 壳内 iframe 形态:页头收窄并隐藏重复的资产名/头像,由主壳标签条承担 chrome。 */
   embedded?: boolean
+  /** Whether the containing workbench tab is visible. */
+  active?: boolean
 }
 
 /** `ssh:kb-interactive:<sessionId>` 负载:服务器 keyboard-interactive 请求 + 预填。 */
@@ -236,7 +240,7 @@ function clampFontSize(value: number): number {
  * @param props - selected SSH asset, workspace close callback, and page/embedded layout flags.
  * @returns the native SSH/SFTP terminal workspace.
  */
-export function SshTerminalOverlay({ asset, onClose, page = false, embedded = false }: SshTerminalOverlayProps) {
+export function SshTerminalOverlay({ asset, onClose, page = false, embedded = false, active = true }: SshTerminalOverlayProps) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
@@ -1021,6 +1025,12 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
   const terminalMenu = useContextMenu()
   const messages = interactionMessages()
   const [referencingTerminal, setReferencingTerminal] = useState(false)
+  const [workbenchQuote, setWorkbenchQuote] = useState<WorkbenchQuote | null>(null)
+  const previewWorkbenchQuote = (): void => {
+    if (!connected) return
+    setWorkbenchQuote({ kind: 'ssh', terminalSessionId: sessionId, directory: cwdRef.current,
+      text: termRef.current?.getSelection() ?? '' })
+  }
   const referenceTerminal = async (): Promise<void> => {
     if (!connected || referencingTerminal) return
     setReferencingTerminal(true)
@@ -1118,6 +1128,12 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
                 disabled={!connected || referencingTerminal} onClick={() => void referenceTerminal()}>
                 <IconLinkOutlineMedium size={14} />
                 <span role="status">{referencingTerminal ? messages.referencingTerminal : messages.referenceTerminalAction}</span>
+              </button>
+            )}
+            {embedded && connected && (
+              <button type="button" className={css.headerAction} title={messages.quoteWorkbenchContext}
+                aria-label={messages.quoteWorkbenchContext} onClick={previewWorkbenchQuote}>
+                <IconLinkOutlineMedium size={14} />
               </button>
             )}
             {!connected && closed && (
@@ -1269,11 +1285,13 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
               {embedded && (
                 <ContextMenu menu={terminalMenu} items={[
                   { id: 'reference', label: messages.referenceConversation, icon: <IconLinkOutlineMedium />, disabled: !connected || referencingTerminal },
+                  { id: 'quote', label: messages.quoteWorkbenchContext, disabled: !connected },
                   { type: 'separator', id: 'terminal-menu-separator' },
                   { id: 'copy', label: messages.copyTerminalSelection, icon: <IconCopyOutlineMedium /> },
                   { id: 'paste', label: messages.pasteToTerminal, disabled: !connected },
                 ]} onSelect={id => {
                   if (id === 'reference') void referenceTerminal()
+                  if (id === 'quote') previewWorkbenchQuote()
                   else if (id === 'copy') void copySelection()
                   else if (id === 'paste') void pasteClipboard()
                 }} />
@@ -1319,7 +1337,7 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
                     <HostMonitorPanel
                       sessionId={sessionId}
                       sshConnected={connected}
-                      active={sidePanel === 'monitor'}
+                      active={active && sidePanel === 'monitor'}
                     />
                   </TabPane>
                 )}
@@ -1374,6 +1392,10 @@ export function SshTerminalOverlay({ asset, onClose, page = false, embedded = fa
           )}
         </footer>
       </section>
+      {workbenchQuote !== null && (
+        <WorkbenchQuoteDialog assetName={asset.name} quote={workbenchQuote}
+          onClose={() => { setWorkbenchQuote(null) }} onAdded={() => { notify(messages.quoteAdded) }} />
+      )}
       {paletteOpen && <CommandPalette actions={paletteActions} onClose={() =>{  setPaletteOpen(false) }} />}
       {quickEditorOpen && (
         <QuickCommandEditor

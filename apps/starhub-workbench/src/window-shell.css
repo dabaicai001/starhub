@@ -41,15 +41,34 @@ button, input, textarea, select {
 
 .window-status {
   box-sizing: border-box;
+  display: flex;
+  flex: 1;
+  min-height: 100%;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 24px;
+  padding: clamp(12px, 5vw, 28px);
   text-align: center;
 }
 
 .window-status p {
   margin: 0;
+}
+
+.window-error-card {
+  box-sizing: border-box;
+  width: min(100%, 30rem);
+  padding: clamp(16px, 5vw, 28px);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-2);
+  text-align: start;
+}
+
+.window-error-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .window-status .window-error-detail {
@@ -60,6 +79,7 @@ button, input, textarea, select {
 }
 
 .window-status button {
+  margin-top: 16px;
   padding: 6px 14px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: var(--dsw-radius-sm);

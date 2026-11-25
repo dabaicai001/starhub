@@ -5,20 +5,22 @@
  * lifecycle, Docker and Redis panels all behave identically to the in-shell
  * versions.
  */
-import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Component, lazy, Suspense, useEffect, useState, type ErrorInfo, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { interactionMessages } from '@deepseek-ai/dsh-starhub-client-nav/src/client/interaction-messages.ts'
-import { loadStarHubAssets, type RustAsset } from '@deepseek-ai/dsh-starhub-client-nav/src/client/store.ts'
-import { DbWorkbench } from '@deepseek-ai/dsh-starhub-client-nav/src/client/DbWorkbench.tsx'
-import { DockerWorkbench } from '@deepseek-ai/dsh-starhub-client-nav/src/client/docker/DockerWorkbench.tsx'
-import { RedisWorkbench } from '@deepseek-ai/dsh-starhub-client-nav/src/client/redis/RedisWorkbench.tsx'
-import { ElasticsearchWorkbench } from '@deepseek-ai/dsh-starhub-client-nav/src/client/es/ElasticsearchWorkbench.tsx'
-import { BrokerView } from '@deepseek-ai/dsh-starhub-client-nav/src/client/broker/BrokerView.tsx'
-import { SshTerminalOverlay } from '@deepseek-ai/dsh-starhub-client-nav/src/client/terminal/SshTerminalOverlay.tsx'
+import { loadStarHubAsset, type RustAsset } from '@deepseek-ai/dsh-starhub-client-nav/src/client/store.ts'
+import { reportWorkbenchLoaded, useWorkbenchActivity } from '@deepseek-ai/dsh-starhub-client-nav/src/client/workbench-activity.ts'
 import {
   parseWindowParams, workbenchForAsset, workbenchForRouteName, type WindowWorkbench,
 } from './route.ts'
+
+const DbWorkbench = lazy(() => import('@deepseek-ai/dsh-starhub-client-nav/src/client/DbWorkbench.tsx').then(m => ({ default: m.DbWorkbench })))
+const DockerWorkbench = lazy(() => import('@deepseek-ai/dsh-starhub-client-nav/src/client/docker/DockerWorkbench.tsx').then(m => ({ default: m.DockerWorkbench })))
+const RedisWorkbench = lazy(() => import('@deepseek-ai/dsh-starhub-client-nav/src/client/redis/RedisWorkbench.tsx').then(m => ({ default: m.RedisWorkbench })))
+const ElasticsearchWorkbench = lazy(() => import('@deepseek-ai/dsh-starhub-client-nav/src/client/es/ElasticsearchWorkbench.tsx').then(m => ({ default: m.ElasticsearchWorkbench })))
+const BrokerView = lazy(() => import('@deepseek-ai/dsh-starhub-client-nav/src/client/broker/BrokerView.tsx').then(m => ({ default: m.BrokerView })))
+const SshTerminalOverlay = lazy(() => import('@deepseek-ai/dsh-starhub-client-nav/src/client/terminal/SshTerminalOverlay.tsx').then(m => ({ default: m.SshTerminalOverlay })))
 
 /** Shell states: loading, resolved to a workbench, or failed. */
 type ShellState =
@@ -49,14 +51,25 @@ class WorkbenchErrorBoundary extends Component<{ children: ReactNode; onRetry: (
   }
 }
 
+function WorkbenchLoading({ title }: { title: string }) {
+  return (
+    <div className="window-status" role="status">
+      <span className="window-spinner" aria-hidden="true" />
+      <p>{title}</p>
+    </div>
+  )
+}
+
 function WorkbenchFailure({ title, detail, onRetry }: { title: string; detail?: string; onRetry?: () => void }) {
   return (
-    <div className="window-frame window-status">
-      <div role="alert">
-        <p>{title}</p>
-        {detail !== undefined && <p className="window-error-detail">{detail}</p>}
+    <div className="window-status">
+      <div className="window-error-card">
+        <div role="alert">
+          <p className="window-error-title">{title}</p>
+          {detail !== undefined && <p className="window-error-detail">{detail}</p>}
+        </div>
+        {onRetry !== undefined && <button type="button" onClick={onRetry}>{interactionMessages().retry}</button>}
       </div>
-      {onRetry !== undefined && <button type="button" onClick={onRetry}>{interactionMessages().retry}</button>}
     </div>
   )
 }
@@ -70,6 +83,7 @@ function requestWindowClose(): void {
 export function WindowShell() {
   const [state, setState] = useState<ShellState>({ kind: 'loading' })
   const [attempt, setAttempt] = useState(0)
+  const active = useWorkbenchActivity()
   const messages = interactionMessages()
   const retry = () => {
     setState({ kind: 'loading' })
@@ -86,10 +100,9 @@ export function WindowShell() {
       return
     }
     const request = new AbortController()
-    loadStarHubAssets(request.signal)
-      .then((assets) => {
+    loadStarHubAsset(params.assetId, request.signal)
+      .then((asset) => {
         if (request.signal.aborted) return
-        const asset = assets.find(a => a.id === params.assetId)
         if (asset === undefined) {
           setState({ kind: 'asset-missing', assetId: params.assetId })
           return
@@ -112,19 +125,19 @@ export function WindowShell() {
   const renderWorkbench = (asset: RustAsset, workbench: WindowWorkbench) => {
     switch (workbench) {
       case 'ssh':
-        return <SshTerminalOverlay asset={asset} onClose={requestWindowClose} page embedded={embedded} />
+        return <SshTerminalOverlay asset={asset} onClose={requestWindowClose} page embedded={embedded} active={active} />
       case 'db-mysql':
       case 'db-postgresql':
       case 'db-clickhouse':
       case 'db-sqlite':
       case 'db-mssql':
-        return <DbWorkbench asset={asset} {...(embedded ? {} : { onClose: requestWindowClose })} />
+        return <DbWorkbench asset={asset} embedded={embedded} {...(embedded ? {} : { onClose: requestWindowClose })} />
       case 'db-redis':
         return <RedisWorkbench asset={asset} />
       case 'db-elasticsearch':
         return <ElasticsearchWorkbench asset={asset} />
       case 'broker':
-        return <BrokerView asset={asset} />
+        return <BrokerView asset={asset} active={active} />
       case 'docker':
         return <DockerWorkbench asset={asset} />
     }
@@ -133,19 +146,18 @@ export function WindowShell() {
   if (state.kind === 'ready') {
     return (
       <div className={`window-frame standalone-workbench${embedded ? ' embedded-workbench' : ''}`}>
-        <WorkbenchErrorBoundary onRetry={retry}>{renderWorkbench(state.asset, state.workbench)}</WorkbenchErrorBoundary>
+        <WorkbenchErrorBoundary onRetry={() => { window.location.reload() }}>
+          <Suspense fallback={<WorkbenchLoading title={messages.preparingWorkbench(state.asset.name)} />}>
+            {renderWorkbench(state.asset, state.workbench)}
+          </Suspense>
+        </WorkbenchErrorBoundary>
       </div>
     )
   }
 
   switch (state.kind) {
     case 'loading':
-      return (
-        <div className="window-frame window-status" role="status">
-          <span className="window-spinner" aria-hidden="true" />
-          <p>{messages.loadingWorkbench}</p>
-        </div>
-      )
+      return <WorkbenchLoading title={messages.loadingWorkbench} />
     case 'load-failed':
       return <WorkbenchFailure title={messages.workbenchLoadFailed} detail={state.message} onRetry={retry} />
     case 'no-params':
@@ -205,7 +217,10 @@ export function mount(): void {
     })
   }
   const el = document.getElementById('root')
-  if (el !== null) render(el)
+  if (el !== null) {
+    render(el)
+    reportWorkbenchLoaded()
+  }
 }
 
 // Expose workbenchForRouteName for external/route reuse without an asset.

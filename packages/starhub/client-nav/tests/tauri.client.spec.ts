@@ -11,7 +11,7 @@ import {
   focusWindowByKey, installWorkbenchPageHost, isTauriRuntime, openNewPage, starhubPageLabelPrefix, tauriInvoke, tauriListen,
 } from '../src/client/tauri.ts'
 import {
-  emitHostEvent, hostBridgeCalls, hostEventListeners, restoreHostBridge, restoreHostEvents, stubHostBridge, stubHostEvents,
+  disconnectHostEvents, emitHostEvent, hostBridgeCalls, hostEventListeners, restoreHostBridge, restoreHostEvents, stubHostBridge, stubHostEvents,
 } from './host-bridge.ts'
 
 afterEach(() => {
@@ -100,6 +100,28 @@ describe('tauriListen', () => {
     expect(seenA).toEqual(['code?'])
     expect(seenB).toEqual(['code?', 'again'])
     await offB()
+    expect(hostEventListeners('ssh:kb-interactive:t1')).toBe(0)
+    const offC = await tauriListen<string>('ssh:kb-interactive:t1', payload => { seenA.push(payload) })
+    emitHostEvent('ssh:kb-interactive:t1', 'resubscribed')
+    expect(seenA).toEqual(['code?', 'resubscribed'])
+    await offC()
+  })
+
+  it('restores every live subscription after a terminal EventSource error', async () => {
+    vi.useFakeTimers()
+    stubHostEvents()
+    const seen: unknown[] = []
+    const off = await tauriListen('ssh:data:reopened', value => { seen.push(value) })
+    try {
+      disconnectHostEvents()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(hostEventListeners('ssh:data:reopened')).toBe(1)
+      emitHostEvent('ssh:data:reopened', 'recovered')
+      expect(seen).toEqual(['recovered'])
+    } finally {
+      await off()
+      vi.useRealTimers()
+    }
   })
 
   it('stops delivering after dispose even before the connection is established', async () => {
@@ -114,10 +136,11 @@ describe('tauriListen', () => {
   it('ignores frames whose data is not JSON', async () => {
     stubHostEvents()
     const seen: unknown[] = []
-    await tauriListen('e', payload => { seen.push(payload) })
+    const off = await tauriListen('e', payload => { seen.push(payload) })
     // JSON.stringify(undefined) 不产出字符串,data 非 JSON(心跳/注释帧形态)
     emitHostEvent('e', undefined)
     expect(seen).toEqual([])
+    await off()
   })
 })
 

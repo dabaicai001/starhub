@@ -41,6 +41,8 @@ export interface SqlEditorProps {
   /** 执行回调(Mod-Enter);返回 Promise 以便编辑器知道执行中。 */
   onExecute?: (sql: string, explain: boolean) => void
   placeholder?: string
+  /** Register a reader for the live selection in this editor. */
+  selectionReader?: (read: (() => string) | null) => void
 }
 
 /** 方言 key → lang-sql 方言对象(补全/高亮共用)。 */
@@ -261,7 +263,7 @@ function viewValue(ref: { current: EditorView | null }): string {
  * @param props - controlled value, schema, dialect, execute callback.
  * @returns the editor mounting div.
  */
-export function SqlEditor({ value, onChange, schema, dialect = 'mysql', onExecute, placeholder }: SqlEditorProps) {
+export function SqlEditor({ value, onChange, schema, dialect = 'mysql', onExecute, placeholder, selectionReader }: SqlEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   // 补全 schema 走 ref:extensions 只建一次,树展开后新表/列也要能补全。
@@ -273,6 +275,8 @@ export function SqlEditor({ value, onChange, schema, dialect = 'mysql', onExecut
   onChangeRef.current = onChange
   const onExecuteRef = useRef(onExecute)
   onExecuteRef.current = onExecute
+  const selectionReaderRef = useRef(selectionReader)
+  selectionReaderRef.current = selectionReader
 
   // 建一次 view(严格模式双跑由 dispose 抵消)。
   useEffect(() => {
@@ -291,17 +295,23 @@ export function SqlEditor({ value, onChange, schema, dialect = 'mysql', onExecut
       }),
     })
     viewRef.current = view
+    selectionReaderRef.current?.(() => {
+      const { from, to } = view.state.selection.main
+      return view.state.sliceDoc(from, to)
+    })
     const host = hostRef.current
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() =>{  view.requestMeasure() })
       ro.observe(host)
       return () => {
         ro.disconnect()
+        selectionReaderRef.current?.(null)
         view.destroy()
         viewRef.current = null
       }
     }
     return () => {
+      selectionReaderRef.current?.(null)
       view.destroy()
       viewRef.current = null
     }

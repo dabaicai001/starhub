@@ -380,12 +380,13 @@ describe('client-nav apply (rc.2)', () => {
     key_id: null, tags: [], favorite: false, last_used_at: null, created_at: 0, updated_at: 0,
   }
 
-  function referenceContext(inputStub: { insertReference: ReturnType<typeof vi.fn>; setDraft: ReturnType<typeof vi.fn> }) {
+  function referenceContext(inputStub: { insertReference: ReturnType<typeof vi.fn>; setDraft: ReturnType<typeof vi.fn>; insertQuote?: ReturnType<typeof vi.fn> }) {
     const { writer, update: settingsUpdate, mutate: settingsMutate } = createSettingsWriter()
     const input = {
       ...inputStub,
       addImages: vi.fn(() => true),
-      state: { getSnapshot: () => ({ draft: '查一下 ', draftRev: 3 }) },
+      notify: vi.fn(),
+      state: { getSnapshot: () => ({ draft: '查一下 ', draftRev: 3, phase: 'plain' }) },
     }
     const harness = fakeContext({
       remote: { settings: writer },
@@ -480,6 +481,25 @@ describe('client-nav apply (rc.2)', () => {
     expect(() => panel.insertAssetReference(refAsset)).toThrow('请先打开一个对话。')
     expect(settingsUpdate).not.toHaveBeenCalled()
     expect(settingsMutate).not.toHaveBeenCalled()
+  })
+
+  it('adds reviewed database context as a removable draft quote', async () => {
+    const insertQuote = vi.fn(() => true)
+    const { ctx, register, settingsMutate } = referenceContext({
+      insertReference: vi.fn(), setDraft: vi.fn(), insertQuote,
+    })
+    stubHostBridge((cmd) => cmd === 'get_assets'
+      ? [{ id: 'db1', name: 'DB', type: 'db', config: { dbType: 'mysql' } }]
+      : { ok: true })
+    applyPlugin(ctx)
+    const panel = mainByKey(register, 'starhub-workbench').inject() as {
+      referenceQuote: (id: string, quote: { kind: 'database'; database: string; table: string; text: string }) => Promise<void>
+    }
+    await panel.referenceQuote('db1', { kind: 'database', database: 'sales', table: 'orders', text: 'SELECT 1' })
+    expect(insertQuote).toHaveBeenCalledWith('DB · 数据库 sales · 表 orders\n\nSELECT 1', {
+      label: 'DB', title: 'DB', detail: '数据库 sales · 表 orders', body: 'SELECT 1',
+    })
+    expect(settingsMutate).toHaveBeenCalled()
   })
 
   it('references the second workbench tab and never falls back to the first while the second is disconnected', async () => {

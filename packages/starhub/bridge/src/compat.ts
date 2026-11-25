@@ -123,6 +123,7 @@ export function createBridgePeer(sidecar: JsonRpcTransportPeer): JsonRpcTranspor
               : {}),
             // Host-owned cancellation identity; never accept it from model args.
             _starhubExecId: typeof record.execId === 'string' ? record.execId : undefined,
+            _starhubTurnTarget: record.target,
           } as object
           return toolResultText(await sidecar.request(name, args))
         }

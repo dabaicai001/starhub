@@ -23,6 +23,9 @@ export interface ToolContextBinding {
   dbType: string
   /** The selected asset is bound to a specific open SSH terminal. */
   terminalReferenced?: true
+  terminalSessionId?: string
+  pinTarget?: true
+  database?: string
   /** 写入时间(毫秒);裁剪过期条目时按它排序。 */
   updatedAt: number
 }
@@ -151,6 +154,7 @@ export function bindAssetContext(
   asset: { id: string; name: string; type?: string; config?: Record<string, unknown> },
   sessionId: string,
   terminalSessionId?: string,
+  confirmedQuote?: { database?: string },
 ): Promise<boolean> {
   const config = asset.config ?? {}
   const meta: ToolContextAssetMeta = {
@@ -166,30 +170,32 @@ export function bindAssetContext(
     routePrefix: selection.routePrefix ?? '',
     assetType: meta.assetType,
     dbType: meta.dbType ?? '',
-    ...(terminalSessionId === undefined ? {} : { terminalReferenced: true as const }),
+    ...(terminalSessionId === undefined ? {} : { terminalReferenced: true as const, terminalSessionId }),
+    ...(confirmedQuote !== undefined || terminalSessionId !== undefined ? { pinTarget: true as const } : {}),
+    ...(confirmedQuote?.database ? { database: confirmedQuote.database } : {}),
     updatedAt: Date.now(),
   }
-  const writeSettings = (): void => {
-    void writer.mutate(
+  const writeSettings = (): Promise<boolean> =>
+    writer.mutate(
       TOOL_CONTEXT_NAMESPACE,
       [{ op: 'set', path: ['bindings', sessionId], value: JSON.stringify(binding) }],
       undefined,
-    ).then((view) => { pruneBindings(writer, view) }).catch(() => {})
-  }
-  if (terminalSessionId === undefined) writeSettings()
+    ).then(view => { pruneBindings(writer, view); return true }, () => false)
+  if (terminalSessionId === undefined && confirmedQuote === undefined) void writeSettings()
   if (sessionId === '') return Promise.resolve(false)
 
   // Serialize updates for each conversation. A later asset reference must
   // replace any previously selected terminal even when its HTTP call is faster.
   const bind = (): Promise<boolean> => tauriInvoke<{ ok: boolean }>('bind_asset_context', {
     assetId: asset.id, sessionId, terminalSessionId,
-  }).then(result => result?.ok === true, () => false)
+  }, AbortSignal.timeout(15_000)).then(result => result?.ok === true, () => false)
   const previous = pendingBindings.get(sessionId)
-  const request = (previous === undefined ? bind() : previous.then(bind)).then(ok => {
+  const request = (previous === undefined ? bind() : previous.then(bind)).then(async ok => {
+    if (pendingBindings.get(sessionId) !== request) return false
+    const saved = ok && (terminalSessionId !== undefined || confirmedQuote !== undefined) ? await writeSettings() : ok
     if (pendingBindings.get(sessionId) !== request) return false
     pendingBindings.delete(sessionId)
-    if (ok && terminalSessionId !== undefined) writeSettings()
-    return ok
+    return confirmedQuote === undefined ? ok : saved
   })
   pendingBindings.set(sessionId, request)
   return request

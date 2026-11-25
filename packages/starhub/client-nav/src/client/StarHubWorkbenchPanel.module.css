@@ -176,6 +176,15 @@
   pointer-events: none;
 }
 
+.frameFailed {
+  flex-direction: column;
+  padding: 12px;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.frameFailed .emptyAction { margin-top: 0; }
+
 .spin {
   animation: starhub-workbench-spin 800ms linear infinite;
 }

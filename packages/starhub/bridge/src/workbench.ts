@@ -124,32 +124,12 @@ export function resolveInvokeBudget(
   return Math.min(Math.max(budget, 1_000), max)
 }
 
-/**
- * Race one sidecar request against the invocation budget.
- * @param pending - the in-flight sidecar request.
- * @param timeoutMs - wall-clock budget.
- * @param label - command name used in the failure message.
- * @returns the sidecar result.
- * @throws Error naming the command and budget when the budget expires.
- */
-async function withBudget<T>(pending: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
+function invokeTimeoutError(timeoutMs: number, command: string): Error {
   const budget = timeoutMs < 1_000 ? `${String(Math.round(timeoutMs))}ms` : `${String(Math.round(timeoutMs / 1000))}s`
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(
-            `${label} 超过 ${budget} 未返回:sidecar 仍在执行或已失联。`
-            + '长耗时命令请显式传 timeoutSec(秒)或 timeoutMs(毫秒)。',
-          ))
-        }, timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
+  return new Error(
+    `${command} 超过 ${budget} 未返回:sidecar 仍在执行或已失联。`
+    + '长耗时命令请显式传 timeoutSec(秒)或 timeoutMs(毫秒)。',
+  )
 }
 
 /** Read and JSON-parse a bounded request body; rejects on oversize or bad JSON. */
@@ -204,9 +184,10 @@ export function invokeHandler(
     try {
       body = await readJsonBody(req)
     } catch (error) {
-      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      if (!res.destroyed) sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
       return
     }
+    if (res.destroyed) return
     const cmd = typeof body.cmd === 'string' ? body.cmd.trim() : ''
     if (cmd === '') {
       sendJson(res, 400, { ok: false, error: 'cmd is required' })
@@ -222,25 +203,36 @@ export function invokeHandler(
       sendJson(res, 200, { ok: true, result: { origin } })
       return
     }
-    // 客户端先断(关页签 / 切资产):请求已经发出,不在超时或失败时再写响应。
-    // 用对象承载标记,避免 TS 把这个只由回调赋值的 let 窄化成字面量 false。
-    const connection = { gone: false }
-    const onGone = (): void => { connection.gone = true }
-    req.on('close', onGone)
     const record = args as Record<string, unknown>
     const execId = typeof record.execId === 'string' ? record.execId : ''
     const budget = resolveInvokeBudget(body, record, options)
+    const controller = new AbortController()
+    let disconnected = false
+    const onGone = (): void => {
+      if (res.writableEnded) return
+      disconnected = true
+      controller.abort(new Error('Workbench client disconnected'))
+    }
+    const timer = setTimeout(() => { controller.abort(invokeTimeoutError(budget, cmd)) }, budget)
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener('abort', () => { reject(controller.signal.reason) }, { once: true })
+    })
+    res.on('close', onGone)
     try {
-      const result = await withBudget(sidecar.request(uiMethod(cmd), args), budget, cmd)
-      if (!connection.gone) sendJson(res, 200, { ok: true, result })
+      const result = await Promise.race([sidecar.request(uiMethod(cmd), args, controller.signal), interrupted])
+      if (!res.destroyed && !controller.signal.aborted) sendJson(res, 200, { ok: true, result })
     } catch (error) {
-      // 超时/断连:若这条调用带执行身份,顺手让 sidecar 停掉它,别让"界面以为失败、
-      // 服务器还在跑"成为常态。
-      if (execId !== '') sidecar.notify('starhub/exec.abort', { execId })
-      // 未实现的命令 / sidecar 报错:软错误给工作台(与 Tauri IPC 缺失同款降级)。
-      if (!connection.gone) sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      if (controller.signal.aborted && execId !== '') {
+        try {
+          sidecar.notify('starhub/exec.abort', { execId })
+        } catch {
+          // A closed transport already abandoned the execution.
+        }
+      }
+      if (!disconnected && !res.destroyed) sendJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
     } finally {
-      req.off('close', onGone)
+      clearTimeout(timer)
+      res.off('close', onGone)
     }
   }
 }

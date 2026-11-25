@@ -15,7 +15,7 @@
 
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
@@ -36,6 +36,12 @@ export const inject = ['agents']
 /** Settings namespace holding the current StarHub tool selection (profile entry id). */
 export const TOOL_CONTEXT_NAMESPACE = 'starhub-tool-context'
 
+interface TurnTarget {
+  assetId: string
+  terminalSessionId?: string
+  database?: string
+}
+
 /** Schema-validated shape written by client-nav. */
 export interface StarHubToolContextValue {
   /** 触发本次绑定的会话 id;仅该会话在 pre-step 时注入(会话级作用域)。 */
@@ -54,6 +60,9 @@ export interface StarHubToolContextValue {
   dbType?: string
   /** Whether the user referenced a specific SSH terminal. */
   terminalReferenced?: boolean
+  terminalSessionId?: string
+  pinTarget?: boolean
+  database?: string
 }
 
 /** Schemastery validation for the namespace value. */
@@ -66,6 +75,9 @@ export const ToolContextSchema: z<StarHubToolContextValue> = z.object({
   assetType: z.string(),
   dbType: z.string(),
   terminalReferenced: z.boolean(),
+  terminalSessionId: z.string(),
+  pinTarget: z.boolean(),
+  database: z.string(),
 })
 
 /**
@@ -122,6 +134,9 @@ export interface ToolContextBinding {
   /** 数据库子类型(redis / mysql / clickhouse / …)。 */
   dbType?: string | undefined
   terminalReferenced?: boolean
+  terminalSessionId?: string | undefined
+  pinTarget?: boolean
+  database?: string | undefined
   /** 写入时间(毫秒);client-nav 据此裁剪过期条目。 */
   updatedAt?: number | undefined
 }
@@ -158,6 +173,9 @@ export function parseBindings(raw: Record<string, string> | undefined): Record<s
       assetType: field('assetType'),
       dbType: field('dbType'),
       ...(record.terminalReferenced === true ? { terminalReferenced: true } : {}),
+      terminalSessionId: field('terminalSessionId'),
+      database: field('database'),
+      ...(record.pinTarget === true ? { pinTarget: true } : {}),
       updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : undefined,
     }
   }
@@ -186,6 +204,9 @@ export function readToolContextFor(config: Config, sessionId: string): StarHubTo
       assetType: bound.assetType ?? '',
       dbType: bound.dbType ?? '',
       ...(bound.terminalReferenced === true ? { terminalReferenced: true } : {}),
+      ...(bound.terminalSessionId ? { terminalSessionId: bound.terminalSessionId } : {}),
+      ...(bound.pinTarget === true ? { pinTarget: true } : {}),
+      ...(bound.database ? { database: bound.database } : {}),
     }
   }
   const legacy = readToolContext(config)
@@ -228,6 +249,7 @@ export function renderToolContext(value: StarHubToolContextValue): string | null
     const dbType = value.dbType ?? ''
     lines.push(`- Asset type: ${dbType !== '' ? `database (${dbType})` : assetType}`)
   }
+  if (value.database) lines.push(`- Database: ${value.database}`)
   const toolHint = toolHintFor(value)
   if (toolHint !== null) {
     lines.push(toolHint)
@@ -268,15 +290,32 @@ function toolHintFor(value: StarHubToolContextValue): string | null {
  * @param config - live tool-context references (Loader 热提交)。
  */
 export function apply(ctx: Context, config: Config): void {
+  const turnContexts = new WeakMap<Agent, { turn: number; signal: AbortSignal; value: StarHubToolContextValue }>()
+  ctx.provide('starhub-turn-target', (agent: Agent): TurnTarget | undefined => {
+    const active = turnContexts.get(agent)
+    if (active === undefined || active.signal.aborted) return undefined
+    const { assetId, pinTarget, terminalSessionId, database } = active.value
+    if (!pinTarget || !assetId) return undefined
+    return {
+      assetId,
+      ...(terminalSessionId === undefined ? {} : { terminalSessionId }),
+      ...(database === undefined ? {} : { database }),
+    }
+  })
+
   ctx.on('agent/pre-step', async (
-    { agent, signal },
+    { agent, signal, turn },
     next,
   ): Promise<PreStepDecision> => {
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted) return decision
     // 会话级作用域:只读本会话自己的绑定(按会话保存,两个终端页/助手互不覆盖);
     // 没有绑定的会话不注入,避免全局粘性让每条对话都带上工具上下文。
-    const value = readToolContextFor(config, agent.session.id)
+    const snapshot = turnContexts.get(agent)
+    const value = snapshot !== undefined && snapshot.turn === turn && snapshot.signal === signal
+      ? snapshot.value
+      : readToolContextFor(config, agent.session.id)
+    turnContexts.set(agent, { turn, signal, value })
     const text = renderToolContext(value)
     if (text === null) return decision
     return {

@@ -49,73 +49,72 @@ export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>
   return body.result as T
 }
 
-/** 事件名 → 该事件名的全部 handler(共享一条 SSE 连接的扇出表)。 */
-const hostEventHandlers = new Map<string, Set<(payload: unknown) => void>>()
-
-/** 已在该共享连接上 addEventListener 的事件名(重建连接时清空重绑)。 */
-const hostEventBound = new Set<string>()
-
-/** 共享 SSE 连接(首个订阅时惰性建立;连接关闭后由下次订阅重建)。 */
-let hostEventSource: EventSource | null = null
-
-/** 取得共享 SSE 连接;无 EventSource(裸浏览器预览)返回 null。 */
-function ensureHostEventSource(): EventSource | null {
-  if (typeof EventSource === 'undefined') return null
-  if (hostEventSource !== null && hostEventSource.readyState !== EventSource.CLOSED) return hostEventSource
-  hostEventSource = new EventSource(EVENTS_URL, { withCredentials: true })
-  hostEventBound.clear()
-  return hostEventSource
+interface HostEventSubscription {
+  handlers: Set<(payload: unknown) => void>
+  listener: EventListener
 }
 
-/** 把一条 SSE 通知的 JSON data 解析后扇出给该事件名的全部 handler。 */
-function dispatchHostEvent(event: string, raw: MessageEvent<string>): void {
-  let payload: unknown
-  try {
-    payload = JSON.parse(raw.data)
-  } catch {
-    return // 非 JSON 数据帧(心跳/注释帧)忽略
-  }
-  for (const handler of hostEventHandlers.get(event) ?? []) handler(payload)
+const hostEventSubscriptions = new Map<string, HostEventSubscription>()
+let hostEventSource: EventSource | null = null
+let hostEventRetry: ReturnType<typeof setTimeout> | undefined
+
+/** Reopen a closed stream with all live subscriptions. EventSource handles transient errors. */
+function ensureHostEventSource(): void {
+  if (typeof EventSource === 'undefined' || hostEventSubscriptions.size === 0) return
+  if (hostEventSource !== null && hostEventSource.readyState !== EventSource.CLOSED) return
+  clearTimeout(hostEventRetry)
+  hostEventRetry = undefined
+  for (const [event, { listener }] of hostEventSubscriptions) hostEventSource?.removeEventListener(event, listener)
+  const source = new EventSource(EVENTS_URL, { withCredentials: true })
+  hostEventSource = source
+  for (const [event, { listener }] of hostEventSubscriptions) source.addEventListener(event, listener)
+  source.addEventListener('error', () => {
+    if (source !== hostEventSource || source.readyState !== EventSource.CLOSED || hostEventRetry !== undefined) return
+    hostEventRetry = setTimeout(ensureHostEventSource, 1_000)
+  })
 }
 
 /** Async disposer returned by an event subscription. */
 export type TauriUnlisten = () => Promise<void>
 
-/**
- * 订阅一条宿主事件(旧 Tauri event 插件 listen 的替换,签名不变):经共享
- * SSE 连接按事件名监听,解析 data 的 JSON 后扇出给该事件名的全部 handler。
- * @param event - 事件名(SSE `event:` 字段,如 `starhub://open-asset`)。
- * @param handler - 每条通知的 payload 回调,直到 dispose。
- * @returns disposer:把 handler 从扇出表移除(连接建立前调用同样生效);
- *   无 EventSource(裸浏览器预览)时为 no-op。
- */
-// T is the subscription payload type, used exactly once in the handler
-// signature — inherent to a listen API, so the single-use heuristic of
-// no-unnecessary-type-parameters is a false positive here.
+/** Subscribe to a sidecar event on this document's shared SSE connection. */
 // eslint-disable-next-line typescript/no-unnecessary-type-parameters
 export async function tauriListen<T>(
   event: string,
   handler: (payload: T) => void,
 ): Promise<TauriUnlisten> {
-  const source = ensureHostEventSource()
-  if (source === null) return () => Promise.resolve()
-  let handlers = hostEventHandlers.get(event)
-  if (handlers === undefined) {
-    handlers = new Set()
-    hostEventHandlers.set(event, handlers)
+  if (typeof EventSource === 'undefined') return () => Promise.resolve()
+  let subscription = hostEventSubscriptions.get(event)
+  if (subscription === undefined) {
+    const handlers = new Set<(payload: unknown) => void>()
+    const listener: EventListener = (raw): void => {
+      let payload: unknown
+      try {
+        payload = JSON.parse((raw as MessageEvent<string>).data)
+      } catch {
+        return
+      }
+      for (const current of handlers) current(payload)
+    }
+    subscription = { handlers, listener }
+    hostEventSubscriptions.set(event, subscription)
+    hostEventSource?.addEventListener(event, listener)
   }
+  const { handlers, listener } = subscription
   const wrapped = (payload: unknown): void => { handler(payload as T) }
   handlers.add(wrapped)
-  const listener = (raw: MessageEvent): void => { dispatchHostEvent(event, raw as MessageEvent<string>) }
-  if (!hostEventBound.has(event)) {
-    hostEventBound.add(event)
-    source.addEventListener(event, listener)
-  }
+  ensureHostEventSource()
+
   return async () => {
-    handlers.delete(wrapped)
-    // 该事件名最后一个 handler 退订:同步摘掉共享连接上的监听,订阅计数归零。
-    if (handlers.size === 0 && hostEventBound.delete(event)) {
-      source.removeEventListener(event, listener)
+    if (!handlers.delete(wrapped) || handlers.size !== 0) return
+    hostEventSubscriptions.delete(event)
+    hostEventSource?.removeEventListener(event, listener)
+    if (hostEventSubscriptions.size === 0) {
+      clearTimeout(hostEventRetry)
+      hostEventRetry = undefined
+      const source = hostEventSource
+      hostEventSource = null
+      source?.close()
     }
   }
 }

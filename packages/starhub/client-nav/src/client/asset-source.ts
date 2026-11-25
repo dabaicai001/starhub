@@ -12,7 +12,7 @@ import type {
   ClientSessionContext, InputTriggerCandidate, InputTriggerSource,
 } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { STARHUB_SUBCATEGORIES, assetSubtitle, routeNameForAsset, routePrefixForAsset, type StarHubAsset } from './sections.ts'
-import { loadStarHubAssets, type RustAsset, type StarHubAssets, type ToolSelectionBridge } from './store.ts'
+import { loadStarHubAsset, type RustAsset, type StarHubAssets, type ToolSelectionBridge } from './store.ts'
 import { bindAssetContext, type SettingsUpdateWriter } from './tool-context.ts'
 
 /** source 名(菜单分组与 codec 路由键,契约 §6.1)。 */
@@ -171,7 +171,7 @@ export function createStarHubAssetSource(deps: StarHubAssetSourceDeps): InputTri
         // 模型表示必须在提交时解析;资产已删除 = 序列化失败,阻止发送
         // (流水线契约:绝不静默降级为剪贴板文本)。
         const asset = deps.assets.source.getSnapshot().assets.find(a => a.id === ref)
-          ?? await loadStarHubAssets().then(list => list.find(a => a.id === ref), () => undefined)
+          ?? await loadStarHubAsset(ref).catch(() => undefined)
         if (asset === undefined) {
           throw new Error(`starhub-asset: 引用资产 "${ref}" 已不存在`)
         }

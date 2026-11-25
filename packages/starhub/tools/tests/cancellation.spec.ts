@@ -21,6 +21,8 @@ describe('StarHub tool cancellation', () => {
     onTestFinished(async () => { await runtime.dispose(); await prompt.dispose() })
     const started = deferred<undefined>()
     const finished = deferred<unknown>()
+    const target = { assetId: 'test-server', terminalSessionId: 'test-server__selected' }
+    ctx.provide('starhub-turn-target', () => target)
     const requests: Record<string, unknown>[] = []
     const cancellations: object[] = []
     ctx.provide('sdk-transport', createBridgePeer({
@@ -43,6 +45,7 @@ describe('StarHub tool cancellation', () => {
     controller.abort()
     expect(cancellations).toEqual([{ execId: requests[0]?._starhubExecId }])
     expect(typeof requests[0]?._starhubExecId).toBe('string')
+    expect(requests[0]?._starhubTurnTarget).toEqual(target)
     let done = false
     void settled.then(() => { done = true })
     await Promise.resolve()
